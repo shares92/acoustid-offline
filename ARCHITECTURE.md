@@ -330,10 +330,29 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
   werden in CI bit-genau gegen die Original-C-Extension geprüft
   (pg_acoustid nur als Test-Container; die offizielle Python-Referenz
   von `extract_query` ist nachweislich defekt — nicht kopieren).
-- **Query-Extraktion:** Offset 80, max. `index.query_hashes` Hashes
-  (konfigurierbar, Default 120), 28-Bit-Maske `& 0xFFFFFFF0`,
-  Silence-Hash 627964279 gefiltert, dedupliziert, unsigned.
-  Änderung der Hash-Anzahl erfordert Index-Neuaufbau.
+  Umgesetzt in Phase 9: `tests/pg_acoustid/` (PG 18 + Extension,
+  Commit-gepinnt, Quelltext zur Bauzeit geholt), eigener CI-Job,
+  pytest-Marker `extension` (`ACOUSTID_EXTENSION_DSN`). Die
+  Verifikation deckte einen Fehler im Phase-5-`extract_query` auf
+  (Startoffset in bereinigter Kopie statt Rohvektor) — behoben, bevor
+  je ein Fingerprint indexiert wurde.
+- **Umsetzung Matching (Phase 9):** `compare2`-Nachbau in
+  `shared/shared/fingerprint/compare.py` (Vorlage
+  `match_fingerprints2` aus `acoustid_compare.c`, inkl. dreier
+  Bug-für-Bug-Eigenheiten — 14-Bit-Präfix in der Vielfaltszählung,
+  Ausrichtungsschleife bis MATCH_MASK exklusiv, teilgelöschter
+  `seen`-Puffer); Chromaprint-Codec in
+  `shared/shared/fingerprint/chromaprint.py`; Pipeline in
+  `api/app/matching.py` (limit 40, timeout 2000 ms, Cutoff >0,4,
+  Kappung auf 10 vor der Track-Deduplizierung, Merge-Verkettung über
+  `track.new_id`). Gemessen: ~0,39 ms Rescoring je Kandidat.
+- **Query-Extraktion (präzisiert Phase 9):** `clean_size` = Anzahl
+  Nicht-Silence-Hashes bestimmt den Startoffset
+  `max(0, min(clean_size − max_hashes, 80))`; der Offset zeigt in den
+  **Rohvektor** (Stille wird gezählt, nicht entfernt). Ab dort:
+  Silence-Hash 627964279 überspringen, 28-Bit-Maske `& 0xFFFFFFF0`,
+  dedupliziert, max. `index.query_hashes` Hashes (Default 120),
+  unsigned. Änderung der Hash-Anzahl erfordert Index-Neuaufbau.
 - **Index-Feed:** aufsteigend nach `fingerprint.id` (~15 % kleinerer
   Index), Batches à 1000 via `_update` (atomar; `expected_version`
   für Idempotenz), msgpack.
@@ -502,6 +521,14 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
   letzter Update-Lauf, Version.
 - **`GET /metrics`** — Prometheus-Format, nur wenn `metrics.enabled`.
 - **`/admin/...`** — Admin-UI (server-rendered), Passwort-geschützt.
+
+### Umsetzungsstand
+
+`GET/POST /v2/lookup` ohne `meta` steht seit Phase 9 (`api/app/`,
+Parameter/Formate/Fehlercodes und bewusste Abweichungen vom Original:
+[docs/api-lookup.md](docs/api-lookup.md)). `meta`/MB-Resolver folgt in
+Phase 10, Submit in 11/12, Batch-Endpoint + `/v2/submission_status`
+in 13.
 
 ### Durchsetzungsort Auth & Rate-Limit
 API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**

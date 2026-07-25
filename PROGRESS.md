@@ -3,13 +3,19 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–8 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (707 Tests).
-Warten auf Go für Phase 9. Offener DoD-Rest aus Phase 8: der Probelauf
-am echten Datenbestand (auf der Unraid-Hardware des Betreibers) steht
-aus — der Probelauf-Modus selbst ist gebaut und getestet; Referenz
-lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h reine DB-Zeit für
-414 GB. Exit-Codes und Report-Format: docs/importer-job.md.
+**Status: Phasen 0–9 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (894 Tests, drei
+Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation pg_acoustid).
+Warten auf Go für Phase 10. Wichtigster Phase-9-Befund: `extract_query`
+aus Phase 5 war fehlerhaft (Startoffset zeigte in eine
+Stille-bereinigte Kopie statt in den Rohvektor) — von der neuen
+CI-Bit-Verifikation aufgedeckt und behoben, BEVOR je etwas indexiert
+wurde; kein Index-Neuaufbau nötig. Offener DoD-Rest aus Phase 8: der
+Probelauf am echten Datenbestand (auf der Unraid-Hardware des
+Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
+getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
+reine DB-Zeit für 414 GB. Exit-Codes und Report-Format:
+docs/importer-job.md; Lookup-API: docs/api-lookup.md.
 Admin-UI (Phasen 23–27): Designpaket vollständig und abgenommen —
 `support.js` wurde am 2026-07-25 nachgeliefert (Paket „Admin-UI-2"),
 Prototyp verifiziert (initialisiert sauber, Zustände per
@@ -268,23 +274,36 @@ Ziel: Kompatibler Lookup ohne `meta` gegen lokale Daten
 (Vertrag: ARCHITECTURE §7 + docs/research/phase1-api-formate.md).
 
 Aufgaben:
-- [ ] FastAPI-App api/: `GET/POST /v2/lookup` (`client`, `fingerprint`,
-      `duration`, `maxdurationdiff`, Original-Batchprotokoll
-      `fingerprint.N`+`batch`) inkl. gzip-Bodys,
-      Chromaprint-Base64-Decoder, Limits (20/100, 1 MiB→413)
-- [ ] Match-Pipeline zweistufig: Index-Kandidaten → Python-Rescoring
-      (`compare2`-Nachbau, Längenfilter ±7, Cutoff >0,4, max 10,
-      dedupliziert) → `track`/`track_mbid`
-- [ ] CI-Bit-Verifikation: `extract_query` + `compare2` gegen
-      Original-Extension im Test-Container (DECISIONS 2026-07-25)
-- [ ] Antwort- und Fehlerformat AcoustID-kompatibel (19 Codes,
-      HTTP-Mapping, CORS)
-- [ ] compose: api-Service; Integrationstest gegen db + index mit
-      Fixtures
+- [x] FastAPI-App api/ (`acoustid_api`): `GET/POST /v2/lookup`,
+      Query+Form-Merge, gzip-Bodys mit 1-MiB-Grenze vor UND nach dem
+      Entpacken → 19/413, Chromaprint-Decoder in
+      `shared.fingerprint.chromaprint` (inkl. Encoder fürs Testen),
+      Original-Batchprotokoll, Limits 20/100, `format=json|jsonp|xml`
+      zeichengenau, CORS `*`
+- [x] Match-Pipeline: `extract_query` → Index `_search` (limit 40,
+      timeout 2000 ms) → `compare2`-Nachbau
+      (`shared.fingerprint.compare`, max_offset 80, inkl. dreier
+      Bug-für-Bug-Eigenheiten des C-Originals), Längenfenster
+      ±`maxdurationdiff` (Default 7), Cutoff >0,4, Kappung auf 10 VOR
+      der Track-Deduplizierung (Original-Verhalten),
+      Merge-Verkettung über `track.new_id` (Tiefe ≤10)
+- [x] CI-Bit-Verifikation: tests/pg_acoustid/ (PG 18 + Original-
+      Extension, Commit-gepinnt, nur Test), eigener CI-Job, Marker
+      `extension`; deckte den Phase-5-Fehler in `extract_query` auf
+      (Startoffset gehört in den Rohvektor — behoben, §5.3 präzisiert)
+- [x] Antwort-/Fehlerformat: 19 Codes + HTTP-Mapping, geprüft gegen
+      wörtliche Original-Beispielantworten
+      (api/tests/original_examples.py)
+- [x] compose: api-Service (db+index `service_healthy`, kein ports:) +
+      api/Dockerfile; 13 Integrationstests gegen echtes PG 18 + Index
+      mit echten Delta-Vektoren
 
-Definition of Done: Fixture-Lookup liefert format-kompatible Antwort
-(gegen Original-Beispielantworten verglichen); Fehlerfälle im
-AcoustID-Fehlerformat; Tests grün.
+Definition of Done: erfüllt 2026-07-25 — 894 Tests grün (lokal + CI,
+inkl. Bit-Verifikation auf zweiter Plattform); bewusste Abweichungen
+vom Original in docs/api-lookup.md tabelliert (u. a. Indexfehler ⇒
+13/503 statt leerer Liste). Rescoring gemessen: ~0,39 ms je Kandidat
+(40 Kandidaten in 15,7 ms). Detailentscheide in DECISIONS
+(„Phase-9-Lookup-Details"). Commit 027597c.
 
 ## Phase 10: API — MB-Resolver & meta
 

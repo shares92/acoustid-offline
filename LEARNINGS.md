@@ -312,3 +312,48 @@ auf einen Index angewiesen sind, und bezahlt mit stundenlangen Scans.
 Anwenden: Vor dem Verschieben von Indizes ans Ende prüfen, welche
 Folgeschritte welchen Index als Arbeitsvorrat brauchen, und die
 Reihenfolge daran ausrichten.
+
+## [Prozess] Bit-Verifikation gegen das Original findet, was Reviews nicht finden
+
+Was: Die in Phase 9 aufgebaute Bit-Verifikation (Python-Nachbau gegen
+die Original-C-Extension im Test-Container, echte + seeded
+Zufallsvektoren) deckte sofort einen Fehler im Phase-5-Bestand auf:
+`extract_query` wandte den Startoffset auf eine Stille-bereinigte
+Kopie an statt auf den Rohvektor. Zwei Reviews und 145 Tests der
+Phase 5 hatten das nicht gesehen — die Tests prüften die falsche
+Semantik konsistent mit.
+Warum: Wäre der Fehler in den Bootstrap gegangen, hätten Index-Inhalt
+und Suchanfragen systematisch auseinandergelegen; die Korrektur hätte
+einen Neuaufbau über ~100 Mio. Fingerprints gekostet.
+Anwenden: Bei jedem Nachbau eines Fremdalgorithmus die Verifikation
+gegen das lauffähige Original als eigenen, frühen Meilenstein
+einplanen — vor dem ersten produktiven Datenlauf, nicht als späte
+Kür. Eigene Tests, die aus derselben (Fehl-)Lektüre der Quelle
+stammen, sind keine Verifikation.
+
+## [Technik] Bug-für-Bug-Kompatibilität: das C-Original ist die Spezifikation
+
+Was: `match_fingerprints2` hat drei Eigenheiten, die kein sauberer
+Neubau hätte: die Vielfaltszählung nutzt das 14-Bit-MATCH_BITS-Präfix
+(nicht 16), die Ausrichtungsschleife läuft nur bis MATCH_MASK
+(exklusiv, Position 0 gilt als „nicht gesetzt"), und der `seen`-Puffer
+teilt sich Speicher mit der Positionstabelle und wird nur über
+UNIQ_MASK Bytes gelöscht. In 4 von 120 konstruierten Fällen liefert
+eine „korrekte" Implementierung einen anderen float32-Score.
+Warum: Wer beim Nachbau „offensichtliche Bugs" stillschweigend
+repariert, verliert die Score-Parität — und merkt es ohne
+Bit-Verifikation nie.
+Anwenden: Beim Nachbau ist das Verhalten des Originals die Spezifikation,
+nicht seine mutmaßliche Absicht; Abweichungen nur bewusst, dokumentiert
+und mit eigenem Test.
+
+## [Technik] psycopg liefert `real` als gerundeten Text — für Bit-Vergleiche casten
+
+Was: PostgreSQL gibt `real`-Werte (float32) über den Textmodus gekürzt
+aus; wer Scores der pg_acoustid-Extension bit-genau vergleichen will,
+muss `::float8` casten (oder binär lesen), sonst vergleicht man gegen
+eine gerundete Darstellung.
+Warum: Scheinbare „Bit-Abweichungen" in Toleranz-losen Vergleichen
+entpuppen sich sonst als Artefakt der Textausgabe.
+Anwenden: Bei Paritäts-/Bit-Tests gegen DB-Funktionen Rückgabetypen
+prüfen und float-Spalten explizit auf float8 heben.

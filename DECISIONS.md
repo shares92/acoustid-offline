@@ -555,3 +555,33 @@ maschinenlesbar berichten".
 Alternativen: `fsync=off` für mehr Durchsatz — verworfen (korruptes
 Cluster statt verlorener Schwanz-Transaktionen); persistente
 PG-Schalter — verworfen; Dumps behalten als Default — verworfen.
+
+## 2026-07-25: Phase-9-Lookup-Details (Pipeline- und Formatentscheide)
+
+Entscheidung: (1) Ergebnisliste wird auf 10 gekappt, DANACH je Track
+dedupliziert — Original-Verhalten, auch wenn dadurch weniger als 10
+Treffer übrig bleiben können. (2) Die Track-Auflösung folgt der
+Merge-Verkettung über `track.new_id` (Tiefe ≤ 10), anders als das
+Original — unser Bestand kommt aus den Deltas, dort bleibt
+`fingerprint.track_id` am zurückgezogenen Track stehen. (3) Antwortet
+der acoustid-index nicht, gibt es Fehler 13/HTTP 503 statt der stillen
+leeren Trefferliste des Originals (kein erfundenes „kein Treffer").
+(4) `compare2` und der Chromaprint-Codec liegen als pure
+stdlib-Algorithmen in `shared/shared/fingerprint/`; `extract_query`
+bleibt bei `shared.fpindex` (es definiert den Indexinhalt).
+(5) gzip-Sonderfälle: kaputter gzip-Rumpf gilt als leerer Rumpf +
+WARNING (die 19er-Tabelle kennt keinen Code dafür; das Original wirft
+einen nackten 400); zu großes Content-Length bei gzip ⇒ 19/413.
+`multipart/form-data` wird nicht gelesen (kein Lookup-Client nutzt es).
+(6) Kandidatenlimit 40 (ARCHITECTURE erlaubt 20–40), `client` bleibt
+Pflichtparameter wie im Original (nur Anwesenheit geprüft — Auth macht
+der Wächter). (7) Testschalter `ACOUSTID_EXTENSION_DSN` ohne
+`AOFF_`-Präfix (wie `ACOUSTID_INTEGRATION_TESTS`).
+Begründung: Kompatibilität dort, wo Clients sie messen können
+(Format, Reihenfolge, Limits); laute Fehler dort, wo das Original
+Information verschluckt; Delta-Realität schlägt Original-Codepfad bei
+der Merge-Verkettung.
+Alternativen: Deduplizieren vor dem Kappen (verworfen — messbar anderes
+Antwortverhalten als das Original); leere Liste bei Index-Ausfall
+(verworfen — maskiert Betriebsfehler); compare2 im api-Paket
+(verworfen — Domänenalgorithmus, nicht API-spezifisch).
