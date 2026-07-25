@@ -60,12 +60,14 @@ source = { editable = "importer" }
 dependencies = [
     { name = "acoustid-offline-shared" },
     { name = "httpx" },
+    { name = "psycopg", extra = ["binary"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "acoustid-offline-shared", editable = "shared" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
 ]
 
 [[package]]

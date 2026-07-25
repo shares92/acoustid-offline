@@ -17,6 +17,10 @@ dependencies = [
     # Delta-Download (Phase 6): Streaming-GET mit Range-Resume und sauberen
     # Timeouts. Dieselbe Bibliothek wie im Index-Client des shared-Pakets.
     "httpx>=0.28.1",
+    # DB-Import (Phase 7): Upserts, Transaktionen, `import_state`. Kommt
+    # ohnehin ueber shared mit; hier ausdruecklich, weil der Importer den
+    # Treiber direkt benutzt (Binary-Extra: Wheels inkl. libpq).
+    "psycopg[binary]>=3.3.4",
 ]
 
 [tool.setuptools]

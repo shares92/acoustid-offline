@@ -14,15 +14,25 @@ Importer pauschal absichern kann. Darunter trennen sich drei Welten:
   ein Pflichtfeld fehlt oder ein Wert hat den falschen Typ. Der Fehler
   nennt immer Datei und Zeilennummer, weil ein Parse-Fehler laut
   Import-Regel 4 die ganze Datei-Transaktion abbricht.
+* **DB-Import** (:class:`DbImportError`) — die Tagesdatei liess sich nicht
+  einspielen, weil eine Zusicherung des Datenmodells verletzt ist oder die
+  Verbindung nicht in dem Zustand ist, den „eine Datei = eine Transaktion"
+  verlangt. Reine Datenbankfehler bleiben ``psycopg.Error``; sie rollen die
+  Datei-Transaktion genauso zurueck.
+* **Index-Feed** (:class:`IndexFeedError`) — die Uebergabe neuer
+  Fingerprints an den acoustid-index ist gescheitert. Transport- und
+  Protokollfehler des Index bleiben ``FpIndexError`` aus dem shared-Paket.
 """
 
 from __future__ import annotations
 
 __all__ = [
+    "DbImportError",
     "DeltaNotFoundError",
     "DownloadError",
     "GapError",
     "ImporterError",
+    "IndexFeedError",
     "ParseError",
     "SizeMismatchError",
 ]
@@ -56,6 +66,20 @@ class DeltaNotFoundError(DownloadError):
 
 class SizeMismatchError(DownloadError):
     """Die geladene Datei hat nicht die im ``index.json`` genannte Groesse."""
+
+
+class DbImportError(ImporterError):
+    """Eine Tagesdatei liess sich nicht in die Postgres einspielen.
+
+    Gemeint sind die Faelle, die der Importer selbst erkennt — eine
+    verletzte Zusicherung des Datenmodells (``track_fingerprint.id`` weicht
+    von ``fingerprint_id`` ab) oder eine Verbindung mit bereits offener
+    Transaktion. Fehler der Datenbank selbst bleiben ``psycopg.Error``.
+    """
+
+
+class IndexFeedError(ImporterError):
+    """Der Index-Feed konnte nicht sauber durchlaufen (ARCHITECTURE §5.3)."""
 
 
 class ParseError(ImporterError):

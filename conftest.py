@@ -1,14 +1,18 @@
 """Zentrale pytest-Konfiguration: Steuerung der Integrationstests.
 
 Tests mit dem Marker ``integration`` brauchen einen echten Dienst aus dem
-Compose-Stack. Welchen, sagt ein zweiter Marker:
+Compose-Stack. Welchen, sagen weitere Marker:
 
-===========================  =============================================
-nur ``integration``          Postgres (Compose-Service `db`) — der
-                             Vorgabefall seit Phase 4.
-``integration`` + ``index``  acoustid-index (Compose-Service `index`,
-                             ``AOFF_INDEX_URL``) — seit Phase 5.
-===========================  =============================================
+=================================  =======================================
+nur ``integration``                Postgres (Compose-Service `db`) — der
+                                   Vorgabefall seit Phase 4.
+``integration`` + ``index``        acoustid-index (Compose-Service `index`,
+                                   ``AOFF_INDEX_URL``) — seit Phase 5.
+``integration`` + ``db`` +         beide zugleich — der Index-Feed liest aus
+``index``                          der Postgres und schreibt in den Index
+                                   (Phase 7). Der Marker ``db`` ist nur
+                                   noetig, wenn ``index`` mit dabei ist.
+=================================  =======================================
 
 Ob sie laufen, entscheidet fuer jeden Dienst einzeln derselbe Schalter:
 
@@ -55,6 +59,7 @@ if getattr(sys.modules.get("shared"), "__file__", "") is None:
 import pytest  # noqa: E402  (erst nach der sys.path-Korrektur importieren)
 
 MARKER = "integration"
+DB_MARKER = "db"
 INDEX_MARKER = "index"
 NETWORK_MARKER = "network"
 ENV_SWITCH = "ACOUSTID_INTEGRATION_TESTS"
@@ -62,7 +67,7 @@ NETWORK_SWITCH = "ACOUSTID_NETWORK_TESTS"
 MODES = ("auto", "require", "off")
 
 #: Menschenlesbare Namen der Dienste (fuer Meldungen im Report).
-SERVICES = {"db": "Postgres", INDEX_MARKER: "acoustid-index"}
+SERVICES = {DB_MARKER: "Postgres", INDEX_MARKER: "acoustid-index"}
 
 _STATUS_KEY = pytest.StashKey[str]()
 _NETWORK_KEY = pytest.StashKey[str]()
@@ -130,12 +135,21 @@ def _probe_index() -> tuple[bool, str]:
     return True, f"acoustid-index erreichbar unter {url}"
 
 
-_PROBES = {"db": _probe_db, INDEX_MARKER: _probe_index}
+_PROBES = {DB_MARKER: _probe_db, INDEX_MARKER: _probe_index}
 
 
-def _required_service(item: pytest.Item) -> str:
-    """Welcher Dienst wird gebraucht? Ohne weiteren Marker: Postgres."""
-    return INDEX_MARKER if item.get_closest_marker(INDEX_MARKER) else "db"
+def _required_services(item: pytest.Item) -> tuple[str, ...]:
+    """Welche Dienste braucht dieser Test?
+
+    Ohne weiteren Marker: Postgres (Vorgabefall seit Phase 4). Der Marker
+    ``index`` schaltet auf den acoustid-index um; wer beides braucht, setzt
+    ``db`` ausdruecklich dazu.
+    """
+    if not item.get_closest_marker(INDEX_MARKER):
+        return (DB_MARKER,)
+    if item.get_closest_marker(DB_MARKER):
+        return (DB_MARKER, INDEX_MARKER)
+    return (INDEX_MARKER,)
 
 
 @pytest.hookimpl(trylast=True)
@@ -153,16 +167,19 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
     by_service: dict[str, list[pytest.Item]] = {}
     for item in marked:
-        by_service.setdefault(_required_service(item), []).append(item)
+        for service in _required_services(item):
+            by_service.setdefault(service, []).append(item)
 
     notes: list[str] = []
-    deselected: list[pytest.Item] = []
+    # Dienst -> Begruendung. Ein Test faellt raus, sobald einer der Dienste
+    # fehlt, die er braucht — deshalb erst alle proben, dann auswaehlen.
+    unavailable: dict[str, str] = {}
     for service in sorted(by_service):
         group = by_service[service]
         label = SERVICES[service]
         if mode == "off":
             notes.append(f"{len(group)}x {label} abgewaehlt (--integration=off)")
-            deselected.extend(group)
+            unavailable[service] = "--integration=off"
             continue
         reachable, detail = _PROBES[service]()
         if reachable:
@@ -175,10 +192,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 f"AOFF_-Variablen eines erreichbaren Dienstes ({label})."
             )
         notes.append(f"{len(group)}x {label} abgewaehlt — {detail}")
-        deselected.extend(group)
+        unavailable[service] = detail
 
     config.stash[_STATUS_KEY] = "; ".join(notes)
-    if deselected:
+    if unavailable:
+        deselected = [
+            item
+            for item in marked
+            if any(service in unavailable for service in _required_services(item))
+        ]
         config.hook.pytest_deselected(items=deselected)
         items[:] = [item for item in items if item not in deselected]
 
