@@ -31,6 +31,7 @@ REQUIRED_FILES = [
     "LICENSE",
     "README.md",
     "pyproject.toml",
+    "docker-compose.yml",
     ".github/workflows/ci.yml",
     "tests/fixtures/fetch_fixtures.py",
     "tests/fixtures/acoustid-dumps/README.md",

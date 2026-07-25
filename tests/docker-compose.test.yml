@@ -1,0 +1,17 @@
+# Override NUR fuer lokale Integrationstests — nie im Betrieb verwenden.
+#
+# Der Stack veroeffentlicht bewusst keinen Datenbank-Port (ARCHITECTURE §3).
+# Tests laufen aber auf dem Host, brauchen also einen Weg hinein. Dieses
+# Overlay veroeffentlicht 5432 ausschliesslich auf dem Loopback-Interface:
+#
+#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db
+#   AOFF_DB_HOST=127.0.0.1 uv run pytest --integration=require
+#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml down
+#
+# In der CI ist das Overlay unnoetig: dort stellt GitHub den Postgres-Service
+# selbst auf localhost bereit (.github/workflows/ci.yml).
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:${AOFF_DB_PORT:-5432}:${AOFF_DB_PORT:-5432}"

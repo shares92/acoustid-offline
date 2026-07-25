@@ -1,0 +1,67 @@
+# docker-compose.yml — Stack von acoustid-offline (ARCHITECTURE §10).
+#
+# Enthaelt die Dienste, die der Waechter bei Bedarf startet und stoppt:
+# api, importer (One-Shot-Job), db und index. Der Waechter selbst laeuft
+# dauerhaft aus docker-compose.watchdog.yml — bewusst getrennt, damit ein
+# `down` dieses Stacks die Steuerung nicht mit abraeumt.
+#
+# Werte kommen aus der .env im selben Verzeichnis (Vorlage: .env.example,
+# verbindliches Schema: shared/shared/env.py). Die .env wird nie committet.
+#
+# Stand Phase 4: nur `db`. Die uebrigen Dienste kommen in ihren Phasen dazu
+# (Platzhalter unten), damit hier keine ungetesteten Definitionen liegen.
+
+name: acoustid-offline
+
+services:
+
+  db:
+    # AcoustID-Postgres (Stack, Array). Offizielles Image, aktuelle stabile
+    # Major-Version; Minor-Updates kommen ueber ein `pull` des Major-Tags.
+    image: postgres:18
+    container_name: acoustid-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${AOFF_DB_NAME:-acoustid}
+      POSTGRES_USER: ${AOFF_DB_USER:-acoustid}
+      # Pflichtwert: ohne Passwort bricht `up` mit dieser Meldung ab.
+      POSTGRES_PASSWORD: ${AOFF_DB_PASSWORD:?AOFF_DB_PASSWORD fehlt - bitte in der .env setzen}
+      # Kein POSTGRES_HOST_AUTH_METHOD=trust: auch im internen Netz mit Passwort.
+    command: ["postgres", "-c", "port=${AOFF_DB_PORT:-5432}"]
+    # Nur im Compose-Netz erreichbar, kein Host-Publish (ARCHITECTURE §3):
+    # die Datenbank spricht ausschliesslich mit api und importer.
+    expose:
+      - "${AOFF_DB_PORT:-5432}"
+    volumes:
+      # Achtung, Aenderung ab Postgres 18: das Image deklariert
+      # /var/lib/postgresql als Volume und legt die Daten darunter in
+      # /var/lib/postgresql/18/docker ab (frueher /var/lib/postgresql/data).
+      # Der Mountpunkt ist deshalb das Elternverzeichnis.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${AOFF_DB_USER:-acoustid} -d ${AOFF_DB_NAME:-acoustid} -p ${AOFF_DB_PORT:-5432}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # Erststart legt das Cluster an; danach greift der Intervall-Check.
+      start_period: 60s
+
+  # --- Platzhalter, kommen in ihren Phasen dazu ----------------------------
+  #
+  # api:       Phase 9  — eigenes Image, container_name acoustid-api,
+  #            depends_on db+index (condition: service_healthy), kein ports:
+  #            (der Waechter proxyt), Env aus .env.
+  # importer:  Phase 7  — One-Shot-Job, container_name acoustid-importer,
+  #            profiles: ["job"] (laeuft nicht bei `up`, sondern per
+  #            `compose run`), restart: "no", Dump-Volume AOFF_DUMP_DIR.
+  # index:     Phase 5  — ghcr.io/acoustid/acoustid-index per Digest gepinnt,
+  #            container_name acoustid-index, UID 6081, kein ports:,
+  #            Healthcheck mit langer start_period (~15 min), Volume auf dem
+  #            SSD-Cache-Pool ("Prefer/Only: Cache").
+
+volumes:
+  db-data:

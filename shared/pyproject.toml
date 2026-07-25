@@ -14,9 +14,17 @@ license = "MIT"
 dependencies = [
     "pydantic>=2.13.4",
     "pyyaml>=6.0.3",
+    # Postgres-Treiber (Phase 4). Binary-Extra: fertige Wheels inkl. libpq,
+    # damit weder Build-Tools noch libpq-dev in die Service-Images muessen.
+    "psycopg[binary]>=3.3.4",
 ]
 
 [tool.setuptools]
 # Neue Unterpakete hier ergaenzen (kein Auto-Discovery, damit die Wheels
 # der Service-Images reproduzierbar bleiben).
-packages = ["shared"]
+packages = ["shared", "shared.db"]
+
+[tool.setuptools.package-data]
+# Die Migrations-SQL wird mit ausgeliefert; ohne sie findet der Runner
+# keine Migrationen und bricht mit einer klaren Meldung ab.
+"shared.db" = ["sql/*/*.sql"]

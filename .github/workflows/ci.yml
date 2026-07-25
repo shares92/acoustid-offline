@@ -35,4 +35,52 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Tests (pytest, alle Pakete)
-        run: uv run pytest
+        # Integrationstests sind hier ohne Datenbank abgewaehlt (mit Meldung
+        # im Report); sie laufen im Job `integration-tests`.
+        run: uv run pytest --integration=off
+
+  integration-tests:
+    name: Integrationstests (Postgres 18)
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        # Gleiche Major-Version wie im docker-compose.yml des Projekts.
+        image: postgres:18
+        env:
+          POSTGRES_DB: acoustid
+          POSTGRES_USER: acoustid
+          # Nur fuer diesen Lauf; kein Secret, die DB ist nach dem Job weg.
+          POSTGRES_PASSWORD: ci-wegwerf-passwort
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U acoustid -d acoustid"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      AOFF_DB_HOST: 127.0.0.1
+      AOFF_DB_PORT: "5432"
+      AOFF_DB_NAME: acoustid
+      AOFF_DB_USER: acoustid
+      AOFF_DB_PASSWORD: ci-wegwerf-passwort
+
+    steps:
+      - name: Repo auschecken
+        uses: actions/checkout@v7
+
+      - name: uv einrichten
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Abhaengigkeiten installieren
+        run: uv sync --all-packages
+
+      - name: Integrationstests (Migrationen gegen echte Postgres)
+        # --integration=require: keine erreichbare DB ist ein Fehler,
+        # kein stilles Ueberspringen.
+        run: uv run pytest -m integration --integration=require

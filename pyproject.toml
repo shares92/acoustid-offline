@@ -86,3 +86,6 @@ testpaths = [
     "watchdog/tests",
 ]
 addopts = "-q --strict-markers --strict-config"
+markers = [
+    "integration: braucht eine erreichbare Postgres (Compose-Service db) — Steuerung ueber --integration, siehe conftest.py",
+]

@@ -10,6 +10,13 @@ Inhalt ab Phase 3:
 * `shared.models` — gemeinsame Enums (Auth-/Submit-Modus, Submission-Status,
   Stack-Zustaende).
 
+Ab Phase 4 zusaetzlich:
+
+* `shared.db` — Schema-Migrationen der AcoustID-Postgres (ARCHITECTURE §5.2):
+  `shared.db.apply` bzw. `shared.db.apply_from_env`, Gruppen `core` und
+  `indexes`. Bewusst NICHT hier re-exportiert, damit der Waechter (der keine
+  Postgres braucht) den Treiber nicht mitladen muss.
+
 Die haeufig gebrauchten Namen sind hier re-exportiert, sodass
 `from shared import Config, load_config, setup_logging` genuegt.
 """
