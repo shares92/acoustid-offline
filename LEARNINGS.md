@@ -262,3 +262,27 @@ Anwenden: Gleiches Muster für künftige Projekte; Handoff nach docs/
 kopieren, Steuerungsdateien in den Projekt-Root, Unklarheiten nie durch
 Annahmen füllen, sondern als Klärungspunkte mit Optionen + Empfehlung
 stellen.
+
+## [Technik] psycopg3 schickt Python-Strings als *unknown* — Casts nur bei Arrays nötig
+
+Was: Beim Phase-7-Import bleiben Zeitstempel und UUIDs als Strings,
+Vektoren als `list[int]` — PostgreSQL castet sie aus dem Spaltenkontext
+korrekt (auch mit Prepared Statements, empirisch verifiziert). Nur
+Array-Vergleiche wie `id = ANY(%s)` brauchen einen expliziten Cast
+(`%s::integer[]`), weil dort kein Spaltenkontext existiert.
+Warum: Wer überall vorsorglich castet, verrauscht die Statements; wer
+den Array-Fall vergisst, bekommt treiberabhängige Typfehler.
+Anwenden: Parameter unkonvertiert lassen, Casts gezielt nur an Stellen
+ohne Spaltenkontext setzen; bei Treiberwechsel den Array-Fall testen.
+
+## [Technik] Batchgröße erst messen, dann tunen — hier zählt sie nur für den Speicher
+
+Was: Beim Fingerprint-Import ist der Durchsatz (~9,2 MB gz/s lokal)
+über Blockgrößen 250–4000 praktisch konstant; der RSS-Peak steigt aber
+von 97 auf 164 MB. Engpass ist das Parsen/Schreiben je Zeile, nicht der
+Overhead je `executemany`-Block.
+Warum: Blindes Hochdrehen der Batchgröße hätte nur Speicher gekostet,
+keinen Durchsatz gebracht.
+Anwenden: Vor jedem Batch-Tuning eine kleine Messreihe (Durchsatz UND
+Speicher je Blockgröße); die Stellschraube dokumentieren (`batch_rows`,
+Default 1000) statt einen „optimierten" Magic Value einzubauen.

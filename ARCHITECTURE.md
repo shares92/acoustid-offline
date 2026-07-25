@@ -288,6 +288,18 @@ Checksummen-Drift-Erkennung, Advisory-Lock. Compose-Service `db` =
 `/var/lib/postgresql`). Ein Test hält das DDL in diesem Abschnitt und
 die Migrations-SQL anweisungsgleich.
 
+**Umsetzung (Phase 7):** `importer/app/upserts.py` (je Strom ein
+Statement + Record-Übersetzung, pure; Disjunktheits-Selbsttest beim
+Modul-Import), `state.py` (`import_state`-Buchführung, bindet die
+Phase-6-Arbeitsliste an) und `dbimport.py` (`import_file`: eine
+Tagesdatei = genau eine Transaktion; lehnt Verbindungen mit offener
+Transaktion ab). Semantik-Details: `created` bei `fingerprint` per
+`COALESCE(bestehend, neu)`; `src_day`/`imported_at` schreiben beide
+Fingerprint-Ströme (Buchführung gehört keinem Strom);
+`track_fingerprint.fingerprint_id != id` ist ein harter Fehler;
+`import_state.finished_at` per `clock_timestamp()` (Dauer messbar).
+Begründungen: DECISIONS „Phase-7-Import-Details".
+
 **Weitere Tabellen (Spalten werden in ihren Phasen festgelegt):**
 | Tabelle | Inhalt |
 |---|---|
@@ -328,6 +340,14 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
   importer hängt mit `service_started` ab, api mit `service_healthy`.
   Empirische API-Befunde: Addendum in
   docs/research/phase1-acoustid-index.md.
+- **Umsetzung Index-Feed (Phase 7):** `importer/app/indexfeed.py`
+  (`feed_index`): Arbeitsvorrat = Partialindex
+  `fingerprint_idx_unindexed`, Paging per `id > zuletzt gesehen`;
+  Reihenfolge **erst** Index-`_update`, **dann** `indexed_at` (umgekehrt
+  wäre stiller Datenverlust; doppeltes Senden ist idempotent). Zeilen
+  ohne Vektor bleiben im Vorrat; Vektoren ohne indexierbare Hashes
+  gelten als erledigt (gezählt + geloggt). Jeder Batch mit
+  `expected_version` abgesichert (zweiter Schreiber ⇒ lauter Abbruch).
 
 ### 5.4 MusicBrainz-Query-Schicht (verifiziert in Phase 1)
 

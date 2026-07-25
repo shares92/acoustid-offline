@@ -502,3 +502,29 @@ Begründung: Reine Fingerprint-Auflösung als Kernauftrag; alles Weitere
 ist anderweitig vorhanden oder Lizenz-/Betreiberthema.
 Alternativen: Jeweils Aufnahme in den Scope — verworfen (Handoff §5,
 „Bewusst ausgeschlossen").
+
+## 2026-07-25: Phase-7-Import-Details (Upsert-, Zeit- und Feed-Semantik)
+
+Entscheidung: (1) `imported_at` wird auch bei Konflikt auf `now()`
+gesetzt — es protokolliert wie `src_day` die *letzte* Anwendung.
+(2) `src_day`/`imported_at` schreiben beide Fingerprint-Ströme; die
+Disjunktheitsregel gilt nur für Dump-Spalten. (3) `created` bei
+`fingerprint` per `COALESCE(bestehend, neu)` — keiner der beiden Ströme
+überschreibt es. (4) `track_fingerprint.fingerprint_id != id` bricht
+die Datei-Transaktion hart ab (Zusicherung aus §5.1; ein Bruch hieße:
+Zuordnung an falscher Zeile). (5) `import_state.started_at` = `now()`,
+`finished_at` = `clock_timestamp()`, sonst wäre die Importdauer
+konstant null. (6) Index-Feed: erst `_update`, dann `indexed_at`;
+Vektoren ohne indexierbare Hashes gelten als erledigt (sonst ewig im
+Arbeitsvorrat), Zeilen ohne Vektor bleiben offen. (7) Feed-Batches per
+Vorgabe mit `expected_version` abgesichert; ein zweiter Schreiber führt
+zu lautem Abbruch. (8) `feed_index` ruft per Vorgabe `ensure_index()`
+(der Importer legt den Index an, Compose-Healthcheck wird danach grün).
+(9) Testinfrastruktur: conftest-Marker `db` zusätzlich zu `index`,
+damit ein Test beide Dienste anfordern kann (rückwärtskompatibel).
+Begründung: Konsistente Buchführungs-Semantik, laute statt stiller
+Fehler bei Zusicherungsbrüchen, kein stiller Datenverlust im Feed.
+Alternativen: Teil-Patches nur vorhandener Felder (verworfen —
+Reaktivierungs-Falle §5.1); `indexed_at` vor dem `_update` (verworfen —
+stiller Datenverlust); Erst-Import-Zeit in `imported_at` behalten
+(verworfen — widerspräche `src_day`-Semantik „letzte Anwendung").

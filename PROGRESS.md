@@ -3,13 +3,20 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–6 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (453 Tests).
-Warten auf Go für Phase 7. Wichtigster Phase-6-Befund: COPY-Escaping
-in Dateien bis 2024-12-04 (§5.1-Korrektur — Epochen-Lesart im Parser).
-Phasen 23–27 (Admin-UI) sind blockiert, bis das Ergebnis der
-Claude-Design-Session vorliegt; Design-Entscheidungen werden nicht
-vorweggenommen.**
+**Status: Phasen 0–7 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (607 Tests).
+Warten auf Go für Phase 8. Phase-7-Nebenbefund für die
+Bootstrap-Planung: Fingerprint-Import lokal ~9,2 MB gz/s gemessen
+(Hochrechnung 414 GB ⇒ grob 12–13 h reine DB-Zeit; belastbar wird das
+erst im Probelauf Phase 8).
+Admin-UI (Phasen 23–27): Das Designpaket der Claude-Design-Session
+liegt seit 2026-07-25 vor und ist geprüft — README (Tokens, alle
+7 Views, Dialoge, Verhalten; alle §6-Entscheide beantwortet) und
+24 Screenshots vollständig, Handoff-Kopie identisch mit
+docs/DESIGN_HANDOFF.md. Defekt: Der HTML-Prototyp referenziert
+`prototype/support.js`, die Datei fehlt im Zip — der Prototyp rendert
+ohne sie nur uninitialisiertes Markup. Nachlieferung/weiteres Vorgehen:
+Entscheid des Betreibers steht aus.**
 
 ## Arbeitsregeln
 
@@ -24,10 +31,12 @@ vorweggenommen.**
   und die Diffs zeigen, bevor es weitergeht.
 - Jede UI-Phase endet mit Sicht-Check am gerenderten Ergebnis
   (Screenshot vs. Design, Desktop + schmale Breite).
-- Phasen 23–27 sind BLOCKIERT, bis das Ergebnis der separaten
-  Claude-Design-Session (auf Basis docs/DESIGN_HANDOFF.md) vorliegt;
-  alles Designbezogene wird bis dahin zurückgestellt, nicht
-  vorentschieden (Betreiber-Vorgabe 2026-07-25).
+- Phasen 23–27 waren blockiert, bis das Ergebnis der separaten
+  Claude-Design-Session (auf Basis docs/DESIGN_HANDOFF.md) vorliegt
+  (Betreiber-Vorgabe 2026-07-25). Das Designpaket liegt seit 2026-07-25
+  vor; Reststand (fehlende Prototyp-Runtime `support.js`) siehe
+  Statuskopf. Designentscheidungen werden weiterhin nicht
+  vorweggenommen — das Paket ist die Referenz.
 
 ---
 
@@ -195,16 +204,29 @@ Ziel: Deltas landen transaktional in Postgres und im Index; Import ist
 resumierbar (Invarianten §8.3/§8.4).
 
 Aufgaben:
-- [ ] Import: eine Delta-Datei = eine Transaktion inkl.
-      `import_state`-Fortschreibung
-- [ ] Resume nach Abbruch/Fehler (nächster Lauf setzt korrekt fort)
-- [ ] Index-Feed für neue Fingerprints über den Index-Client
-      (aufsteigend nach `fingerprint.id` — ~15 % kleinerer Index;
-      Batches à 1000)
-- [ ] Integrationstests: Deltas → DB + Index; Abbruch mitten im Lauf →
-      Resume korrekt
+- [x] Import: eine Delta-Datei = eine Transaktion inkl.
+      `import_state`-Fortschreibung (`dbimport.import_file`; Verbindung
+      mit offener Transaktion wird abgelehnt, sonst wäre es nur ein
+      Savepoint; Upsert-Statements pure in `upserts.py` mit
+      Disjunktheits-Selbsttest beim Modul-Import)
+- [x] Resume nach Abbruch/Fehler: `import_state`-Zeile entsteht und
+      schließt in derselben Transaktion; erledigt heißt
+      `finished_at IS NOT NULL` (`state.py`, bindet die
+      Phase-6-Arbeitsliste an)
+- [x] Index-Feed über den Index-Client: Arbeitsvorrat
+      `fingerprint_idx_unindexed`, aufsteigend nach `id`, Batches à
+      1000, erst Index-`_update`, dann `indexed_at`
+      (`indexfeed.feed_index`)
+- [x] Integrationstests: 24 gegen echtes PG 18 (voller Fixture-Tag,
+      Alt-Epoche 2011, Reaktivierung, beide Strom-Reihenfolgen,
+      Rollback, Abbruch mitten im Lauf → Resume ohne
+      Duplikate/Lücken), 14 gegen PG + echtes Index-Image
+      (Feed, Wiederfinden per Suche, Teil-Läufe)
 
-Definition of Done: Integrationstests inkl. Resume-Fall grün.
+Definition of Done: erfüllt 2026-07-25 — 607 Tests grün (lokal + CI);
+154 neue Tests. Detailentscheide in DECISIONS („Phase-7-Import-Details");
+conftest-Marker `db` für Tests, die beide Dienste brauchen.
+Commit 85d7d40.
 
 ## Phase 8: Importer — Bootstrap, Platz-Guard & One-Shot-Job
 
