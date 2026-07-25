@@ -15,8 +15,9 @@ liegt seit 2026-07-25 vor und ist geprüft — README (Tokens, alle
 24 Screenshots vollständig, Handoff-Kopie identisch mit
 docs/DESIGN_HANDOFF.md. Defekt: Der HTML-Prototyp referenziert
 `prototype/support.js`, die Datei fehlt im Zip — der Prototyp rendert
-ohne sie nur uninitialisiertes Markup. Nachlieferung/weiteres Vorgehen:
-Entscheid des Betreibers steht aus.**
+ohne sie nur uninitialisiertes Markup. Entscheid 2026-07-25: Der
+Betreiber lässt `support.js` aus der Design-Session nachliefern; bis
+dahin gelten README + Screenshots als Referenz.**
 
 ## Arbeitsregeln
 
