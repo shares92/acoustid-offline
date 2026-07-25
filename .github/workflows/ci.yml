@@ -40,7 +40,7 @@ jobs:
         run: uv run pytest --integration=off
 
   integration-tests:
-    name: Integrationstests (Postgres 18)
+    name: Integrationstests (Postgres 18 + acoustid-index)
     runs-on: ubuntu-latest
 
     services:
@@ -60,12 +60,30 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      index:
+        # Derselbe Digest wie im docker-compose.yml (GHCR ist oeffentlich,
+        # kein Login noetig). Nur linux/amd64 — passt zu ubuntu-latest.
+        image: ghcr.io/acoustid/acoustid-index@sha256:c27a992649785dfd5385f2c7702a1b3942dbe609635aa79229a8ae520abdf578
+        ports:
+          - 6081:6081
+        # Anders als im Compose-Stack wird hier gegen das globale /_health
+        # geprueft (reine Lebendpruefung): die Tests legen ihre Indizes selbst
+        # an, es gibt also keinen festen Indexnamen, auf den zu warten waere.
+        # curl gibt es im Image nicht, wget schon (GNU wget 1.21.4).
+        options: >-
+          --health-cmd "wget --quiet --tries=1 --timeout=5 --spider http://127.0.0.1:6081/_health"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
       AOFF_DB_HOST: 127.0.0.1
       AOFF_DB_PORT: "5432"
       AOFF_DB_NAME: acoustid
       AOFF_DB_USER: acoustid
       AOFF_DB_PASSWORD: ci-wegwerf-passwort
+      AOFF_INDEX_URL: http://127.0.0.1:6081
+      AOFF_INDEX_NAME: main
 
     steps:
       - name: Repo auschecken
@@ -80,7 +98,20 @@ jobs:
       - name: Abhaengigkeiten installieren
         run: uv sync --all-packages
 
-      - name: Integrationstests (Migrationen gegen echte Postgres)
-        # --integration=require: keine erreichbare DB ist ein Fehler,
+      - name: Dump-Fixtures aus dem Cache holen
+        # Die Tagesdeltas liegen nicht im Repo (Lizenz, Groesse). Der Cache
+        # sorgt dafuer, dass data.acoustid.org nicht bei jedem Lauf angefragt
+        # wird — die Dateien sind upstream unveraenderlich, der Schluessel
+        # haengt deshalb nur an der Dateiliste im Skript.
+        uses: actions/cache@v6
+        with:
+          path: tests/fixtures/acoustid-dumps
+          key: acoustid-dumps-${{ hashFiles('tests/fixtures/fetch_fixtures.py') }}
+
+      - name: Fehlende Dump-Fixtures nachladen
+        run: uv run python tests/fixtures/fetch_fixtures.py
+
+      - name: Integrationstests (Postgres und acoustid-index)
+        # --integration=require: ein nicht erreichbarer Dienst ist ein Fehler,
         # kein stilles Ueberspringen.
         run: uv run pytest -m integration --integration=require

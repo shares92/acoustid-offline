@@ -1,14 +1,24 @@
 """Zentrale pytest-Konfiguration: Steuerung der Integrationstests.
 
-Tests mit dem Marker ``integration`` brauchen eine echte Postgres (den
-Compose-Service `db`). Ob sie laufen, entscheidet dieser Schalter:
+Tests mit dem Marker ``integration`` brauchen einen echten Dienst aus dem
+Compose-Stack. Welchen, sagt ein zweiter Marker:
 
 ===========================  =============================================
-``--integration=auto``       Default: Verbindung wird einmal geprobt; ist
-                             sie da, laufen die Tests, sonst werden sie
-                             **mit Begruendung im Report** abgewaehlt.
-``--integration=require``    Erzwingt sie — ist keine DB erreichbar,
-                             scheitert der Lauf (so laeuft die CI).
+nur ``integration``          Postgres (Compose-Service `db`) — der
+                             Vorgabefall seit Phase 4.
+``integration`` + ``index``  acoustid-index (Compose-Service `index`,
+                             ``AOFF_INDEX_URL``) — seit Phase 5.
+===========================  =============================================
+
+Ob sie laufen, entscheidet fuer jeden Dienst einzeln derselbe Schalter:
+
+===========================  =============================================
+``--integration=auto``       Default: die Verbindung wird einmal je Dienst
+                             geprobt; ist sie da, laufen die Tests, sonst
+                             werden sie **mit Begruendung im Report**
+                             abgewaehlt.
+``--integration=require``    Erzwingt sie — ist ein gebrauchter Dienst nicht
+                             erreichbar, scheitert der Lauf (so laeuft die CI).
 ``--integration=off``        Immer abwaehlen, ebenfalls mit Begruendung.
 ===========================  =============================================
 
@@ -16,9 +26,9 @@ Alternativ ueber die Umgebungsvariable ``ACOUSTID_INTEGRATION_TESTS``
 (gleiche Werte). Bewusst ohne `AOFF_`-Praefix: das sind Bootstrap-Variablen
 der Anwendung, deren Satz gegen `.env.example` geprueft wird.
 
-Der Zugang kommt aus denselben `AOFF_DB_*`-Variablen wie im Betrieb
-(`shared.env.EnvSettings.db_dsn`); fuer den lokalen Lauf gegen Compose
-siehe `tests/docker-compose.test.yml`.
+Die Zugaenge kommen aus denselben `AOFF_`-Variablen wie im Betrieb
+(`shared.env.EnvSettings`); fuer den lokalen Lauf gegen Compose siehe
+`tests/docker-compose.test.yml`.
 """
 
 from __future__ import annotations
@@ -40,8 +50,12 @@ if getattr(sys.modules.get("shared"), "__file__", "") is None:
 import pytest  # noqa: E402  (erst nach der sys.path-Korrektur importieren)
 
 MARKER = "integration"
+INDEX_MARKER = "index"
 ENV_SWITCH = "ACOUSTID_INTEGRATION_TESTS"
 MODES = ("auto", "require", "off")
+
+#: Menschenlesbare Namen der Dienste (fuer Meldungen im Report).
+SERVICES = {"db": "Postgres", INDEX_MARKER: "acoustid-index"}
 
 _STATUS_KEY = pytest.StashKey[str]()
 
@@ -52,13 +66,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         choices=MODES,
         default=os.environ.get(ENV_SWITCH, "auto"),
         help=(
-            "Integrationstests: auto (Default, laufen wenn Postgres erreichbar), "
-            f"require (erzwingen) oder off. Auch ueber {ENV_SWITCH} setzbar."
+            "Integrationstests: auto (Default, laufen wenn der jeweilige Dienst "
+            f"erreichbar ist), require (erzwingen) oder off. Auch ueber {ENV_SWITCH} setzbar."
         ),
     )
 
 
-def _probe() -> tuple[bool, str]:
+def _probe_db() -> tuple[bool, str]:
     """Prueft einmalig, ob die konfigurierte Postgres erreichbar ist."""
     import psycopg
 
@@ -76,31 +90,78 @@ def _probe() -> tuple[bool, str]:
     return True, "Postgres erreichbar"
 
 
+def _probe_index() -> tuple[bool, str]:
+    """Prueft einmalig, ob der acoustid-index antwortet.
+
+    Bewusst gegen ``/_health`` (Lebendpruefung): ob der *Index* schon
+    existiert, ist Sache der Tests — sie legen ihn selbst an.
+    """
+    import httpx
+
+    from shared.env import EnvError, EnvSettings
+
+    try:
+        url = EnvSettings.from_env().index_url.rstrip("/")
+    except EnvError as error:
+        return False, str(error)
+    try:
+        response = httpx.get(f"{url}/_health", timeout=5)
+    except httpx.HTTPError as error:
+        return False, f"acoustid-index nicht erreichbar unter {url}: {error}"
+    if response.status_code != 200:
+        return False, f"acoustid-index unter {url} antwortet mit HTTP {response.status_code}"
+    return True, f"acoustid-index erreichbar unter {url}"
+
+
+_PROBES = {"db": _probe_db, INDEX_MARKER: _probe_index}
+
+
+def _required_service(item: pytest.Item) -> str:
+    """Welcher Dienst wird gebraucht? Ohne weiteren Marker: Postgres."""
+    return INDEX_MARKER if item.get_closest_marker(INDEX_MARKER) else "db"
+
+
+@pytest.hookimpl(trylast=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    # trylast: erst greift pytests eigene `-m`-Auswahl, dann diese. Sonst
+    # wuerden wir Dienste anproben, die durch `-m` ohnehin schon draussen
+    # sind (z. B. `-m "integration and index"` ohne Postgres).
     mode = config.getoption("--integration")
     marked = [item for item in items if item.get_closest_marker(MARKER)]
     if not marked:
         config.stash[_STATUS_KEY] = f"Modus {mode}, keine Integrationstests gesammelt"
         return
 
-    if mode == "off":
-        reason = "abgewaehlt (--integration=off)"
-    else:
-        reachable, detail = _probe()
+    by_service: dict[str, list[pytest.Item]] = {}
+    for item in marked:
+        by_service.setdefault(_required_service(item), []).append(item)
+
+    notes: list[str] = []
+    deselected: list[pytest.Item] = []
+    for service in sorted(by_service):
+        group = by_service[service]
+        label = SERVICES[service]
+        if mode == "off":
+            notes.append(f"{len(group)}x {label} abgewaehlt (--integration=off)")
+            deselected.extend(group)
+            continue
+        reachable, detail = _PROBES[service]()
         if reachable:
-            config.stash[_STATUS_KEY] = f"{len(marked)} Test(s) laufen — {detail}"
-            return
+            notes.append(f"{len(group)}x {label} laufen — {detail}")
+            continue
         if mode == "require":
             # Kein stilles Ueberspringen: mit require ist das ein Fehler.
             raise pytest.UsageError(
                 f"--integration=require, aber {detail}. Erwartet werden die "
-                "AOFF_DB_*-Variablen einer erreichbaren Postgres."
+                f"AOFF_-Variablen eines erreichbaren Dienstes ({label})."
             )
-        reason = f"abgewaehlt — {detail}"
+        notes.append(f"{len(group)}x {label} abgewaehlt — {detail}")
+        deselected.extend(group)
 
-    config.stash[_STATUS_KEY] = f"{len(marked)} Test(s) {reason}"
-    config.hook.pytest_deselected(items=marked)
-    items[:] = [item for item in items if item not in marked]
+    config.stash[_STATUS_KEY] = "; ".join(notes)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = [item for item in items if item not in deselected]
 
 
 def pytest_report_header(config: pytest.Config) -> str:

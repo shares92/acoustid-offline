@@ -100,6 +100,11 @@ class EnvSettings(BaseModel):
 
     #: AOFF_INDEX_URL — acoustid-index, nur Compose-intern erreichbar.
     index_url: str = "http://acoustid-index:6081"
+    #: AOFF_INDEX_NAME — Name des Suchindex im acoustid-index. Ein Server kann
+    #: mehrere halten; wir fahren genau einen. Bootstrap-Wert, weil auch der
+    #: Healthcheck des Containers (`/<name>/_health`) ihn braucht — dort gibt
+    #: es keine config.yaml.
+    index_name: str = Field(default="main", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
     #: AOFF_LOG_LEVEL — Level fuer `shared.setup_logging`, noetig bevor die
     #: config.yaml gelesen ist (die kennt bewusst keinen Log-Level).

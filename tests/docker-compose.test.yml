@@ -1,17 +1,26 @@
 # Override NUR fuer lokale Integrationstests — nie im Betrieb verwenden.
 #
-# Der Stack veroeffentlicht bewusst keinen Datenbank-Port (ARCHITECTURE §3).
-# Tests laufen aber auf dem Host, brauchen also einen Weg hinein. Dieses
-# Overlay veroeffentlicht 5432 ausschliesslich auf dem Loopback-Interface:
+# Der Stack veroeffentlicht bewusst weder den Datenbank- noch den Index-Port
+# (ARCHITECTURE §3). Tests laufen aber auf dem Host, brauchen also einen Weg
+# hinein. Dieses Overlay veroeffentlicht beide ausschliesslich auf dem
+# Loopback-Interface:
 #
-#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db
-#   AOFF_DB_HOST=127.0.0.1 uv run pytest --integration=require
-#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml down
+#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
+#   AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
+#     uv run pytest --integration=require
+#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml down -v
 #
-# In der CI ist das Overlay unnoetig: dort stellt GitHub den Postgres-Service
-# selbst auf localhost bereit (.github/workflows/ci.yml).
+# Bewusst OHNE `--wait`: der Healthcheck des Index prueft /<name>/_health und
+# wird erst gruen, wenn der Index angelegt ist — das tun die Tests selbst.
+#
+# In der CI ist das Overlay unnoetig: dort stellt GitHub Postgres und Index
+# als Service-Container auf localhost bereit (.github/workflows/ci.yml).
 
 services:
   db:
     ports:
       - "127.0.0.1:${AOFF_DB_PORT:-5432}:${AOFF_DB_PORT:-5432}"
+
+  index:
+    ports:
+      - "127.0.0.1:6081:6081"

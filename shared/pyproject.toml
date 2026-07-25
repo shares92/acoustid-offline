@@ -17,12 +17,20 @@ dependencies = [
     # Postgres-Treiber (Phase 4). Binary-Extra: fertige Wheels inkl. libpq,
     # damit weder Build-Tools noch libpq-dev in die Service-Images muessen.
     "psycopg[binary]>=3.3.4",
+    # Index-Client (Phase 5): HTTP gegen den acoustid-index. httpx bringt
+    # Connection-Pooling, saubere Timeouts und eine Async-Variante mit
+    # derselben API — der spaetere Async-Wrapper braucht keine neue Bibliothek.
+    "httpx>=0.28.1",
+    # Wire-Format des Index. Der Server nimmt ohne Content-Type msgpack an;
+    # wir setzen den Header immer explizit und sprechen msgpack (kompakter
+    # und der vom Server bevorzugte Pfad).
+    "msgpack>=1.2.1",
 ]
 
 [tool.setuptools]
 # Neue Unterpakete hier ergaenzen (kein Auto-Discovery, damit die Wheels
 # der Service-Images reproduzierbar bleiben).
-packages = ["shared", "shared.db"]
+packages = ["shared", "shared.db", "shared.fpindex"]
 
 [tool.setuptools.package-data]
 # Die Migrations-SQL wird mit ausgeliefert; ohne sie findet der Runner

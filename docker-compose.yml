@@ -8,8 +8,8 @@
 # Werte kommen aus der .env im selben Verzeichnis (Vorlage: .env.example,
 # verbindliches Schema: shared/shared/env.py). Die .env wird nie committet.
 #
-# Stand Phase 4: nur `db`. Die uebrigen Dienste kommen in ihren Phasen dazu
-# (Platzhalter unten), damit hier keine ungetesteten Definitionen liegen.
+# Stand Phase 5: `db` und `index`. Die uebrigen Dienste kommen in ihren Phasen
+# dazu (Platzhalter unten), damit hier keine ungetesteten Definitionen liegen.
 
 name: acoustid-offline
 
@@ -50,6 +50,60 @@ services:
       # Erststart legt das Cluster an; danach greift der Intervall-Check.
       start_period: 60s
 
+  index:
+    # Fingerprint-Suchindex (ARCHITECTURE §5.3). Das Projekt hat keinen
+    # Release-Prozess und nur das bewegliche Tag `main`, deshalb per Digest
+    # gepinnt (DECISIONS 2026-07-25 "Index-Image per Digest gepinnt").
+    # Tag zum Digest: main (Stand 2025-10-27, Commit 6bc929a).
+    # Aktualisieren:  docker manifest inspect --verbose \
+    #                   ghcr.io/acoustid/acoustid-index:main | grep -m1 digest
+    # Nur linux/amd64 — es gibt keine Manifest-Liste und keinen arm64-Build.
+    image: ghcr.io/acoustid/acoustid-index@sha256:c27a992649785dfd5385f2c7702a1b3942dbe609635aa79229a8ae520abdf578
+    container_name: acoustid-index
+    restart: unless-stopped
+    # Das Image setzt USER acoustid (UID/GID 6081); hier noch einmal
+    # ausdruecklich, damit die Rechte des Volumes nachvollziehbar bleiben.
+    # Auf Unraid den Share entsprechend chownen — NICHT 99:100 (nobody/users).
+    user: "6081:6081"
+    # Kein Host-Publish: der Index hat weder Auth noch TLS und darf das Netz
+    # nie sehen (ARCHITECTURE §3, §5.3). Zugriff nur aus dem Compose-Netz;
+    # fuer lokale Tests siehe tests/docker-compose.test.yml.
+    expose:
+      - "6081"
+    volumes:
+      # VOLUME-Pfad des Images. Erwartete Groesse 40–55 GB, Volume ~70 GB.
+      # Unraid: auf SSD-Cache-Pool, Share Prefer/Only: Cache (DECISIONS 2026-07-25)
+      - index-data:/var/lib/acoustid-index
+    healthcheck:
+      # Im Image gibt es weder curl noch nc noch python — aber GNU wget 1.21.4
+      # (empirisch im gepinnten Image geprueft). `--spider` schickt ein HEAD
+      # und liefert Exitcode 0 bei 200, 8 bei 404.
+      #
+      # Geprueft wird bewusst /<index>/_health und nicht /_health: das globale
+      # /_health prueft inhaltlich nichts (auch ein Server ohne jeden Index
+      # antwortet 200). Folge: der Dienst wird erst gesund, wenn der Index
+      # angelegt ist (`ensure_index` beim Bootstrap/Import). Dienste, die den
+      # Index erst anlegen (importer), duerfen daher nur mit
+      # `condition: service_started` von ihm abhaengen — `service_healthy`
+      # nur fuer Leser wie die api.
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--timeout=5",
+          "--spider",
+          "http://127.0.0.1:6081/${AOFF_INDEX_NAME:-main}/_health",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Der Start liest den kompletten Index in den Page-Cache (MAP_POPULATE):
+      # produktiv ~15 min bei 40–55 GB (Forschungsbericht §"mmap-Verhalten").
+      # Solange zaehlen Fehlversuche nicht; ein Treffer macht sofort gesund.
+      start_period: 900s
+
   # --- Platzhalter, kommen in ihren Phasen dazu ----------------------------
   #
   # api:       Phase 9  — eigenes Image, container_name acoustid-api,
@@ -57,11 +111,10 @@ services:
   #            (der Waechter proxyt), Env aus .env.
   # importer:  Phase 7  — One-Shot-Job, container_name acoustid-importer,
   #            profiles: ["job"] (laeuft nicht bei `up`, sondern per
-  #            `compose run`), restart: "no", Dump-Volume AOFF_DUMP_DIR.
-  # index:     Phase 5  — ghcr.io/acoustid/acoustid-index per Digest gepinnt,
-  #            container_name acoustid-index, UID 6081, kein ports:,
-  #            Healthcheck mit langer start_period (~15 min), Volume auf dem
-  #            SSD-Cache-Pool ("Prefer/Only: Cache").
+  #            `compose run`), restart: "no", Dump-Volume AOFF_DUMP_DIR,
+  #            depends_on index mit condition: service_started (siehe oben).
 
 volumes:
   db-data:
+  # Unraid: auf SSD-Cache-Pool, Share Prefer/Only: Cache (DECISIONS 2026-07-25)
+  index-data:

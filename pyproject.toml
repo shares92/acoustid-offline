@@ -87,5 +87,6 @@ testpaths = [
 ]
 addopts = "-q --strict-markers --strict-config"
 markers = [
-    "integration: braucht eine erreichbare Postgres (Compose-Service db) — Steuerung ueber --integration, siehe conftest.py",
+    "integration: braucht einen erreichbaren Compose-Dienst — Steuerung ueber --integration, siehe conftest.py",
+    "index: (zusammen mit integration) braucht den acoustid-index statt der Postgres",
 ]
