@@ -5,6 +5,37 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-07-25: Shared-Config — Designregeln (Phase 3)
+
+Entscheidung (Paket zusammengehöriger Regeln):
+- **Enum-Werte englisch** (`sleeping`, `forward_failed` …), da sie in
+  YAML/JSON/SQLite/Postgres landen; die deutschen §9-Begriffe hängen
+  als `display_name` an den Membern.
+- **Leere Strings = „aus"** wird zentral über Properties abgebildet
+  (`notify.enabled`, `backup.enabled`, `mb.configured`,
+  `submit.upstream_enabled`); SMTP-Hauptschalter ist `host`
+  (Port-Default 587, da ein Integer nicht „leer" sein kann); gesetzter
+  Host verlangt from/to.
+- **Fail fast:** `submit.mode: local+upstream` ohne
+  `upstream_app_key` ist ein Validierungsfehler.
+- **`mb.dsn` ohne Formatprüfung** (libpq akzeptiert URL- und
+  Key-Value-Form); `notify.ntfy.url` muss http(s) sein.
+- **Unbekannte Schlüssel:** Warnung mit vollem Pfad, dann ignorieren
+  (upgrade-/downgrade-freundlich).
+- **Secrets** als SecretStr, maskiert in repr/Dict; nur `save_config`
+  schreibt Klartext — Datei mit Modus 0600.
+- **`AOFF_LOG_LEVEL`** als zusätzliche Bootstrap-Env-Variable (das Log
+  steht vor dem config.yaml-Read); kein pydantic-settings (11
+  Variablen, eigene testbare from_env-Klasse).
+Begründung: Konsistente, testbare Semantik an einer Stelle statt
+verstreuter Konventionen; §6/§7-Anforderungen (Secrets nie im
+Klartext, Modi-Schalter) direkt im Schema durchgesetzt.
+Alternativen: deutsche Enum-Werte (bricht API-/DB-Konsistenz),
+strikte Ablehnung unbekannter Schlüssel (bricht Upgrades),
+pydantic-settings (unnötige Abhängigkeit) — verworfen.
+Hinweis: config.yaml-Kommentare überleben ein Schreiben durch die
+Admin-UI nicht (safe_dump); falls später nötig → ruamel.yaml.
+
 ## 2026-07-25: Python-Paketierung — Verzeichnisse nach §10, eigene Import-Namen
 
 Entscheidung: Die Verzeichnisse bleiben exakt wie ARCHITECTURE §10

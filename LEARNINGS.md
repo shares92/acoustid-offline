@@ -63,6 +63,31 @@ Stellhebel konfigurierbar machen, Default + Empfehlungstabelle
 dokumentieren — und dazuschreiben, was eine Änderung kostet (hier:
 Index-Neuaufbau).
 
+## [Bug] YAML 1.1 liest unquotierte Uhrzeiten als Sexagesimal-Zahl
+
+Was: PyYAML (YAML 1.1) parst `time: 14:30` ohne Anführungszeichen als
+Integer **870** (Minuten-Interpretation der Sexagesimal-Notation) —
+handgeschriebene Configs mit Uhrzeiten kippen still auf Zahlen. Eigene
+Writes sind sicher (der Emitter quotet). Abgefangen per BeforeValidator
+(Integer < 1440 → zurück nach HH:MM) + Test.
+Warum: Der Fehler ist lautlos und produziert scheinbar valide, aber
+falsche Werte — klassische Konfigurations-Zeitbombe.
+Anwenden: Bei YAML-Configs jede „HH:MM"-, Versions- oder
+Oktal-anfällige Eingabe (on/off/yes/no ebenso) mit explizitem
+Validator härten und mit unquotierten Eingaben testen.
+
+## [Bug] stdlib-logging: reservierte LogRecord-Feldnamen in extra
+
+Was: `logger.info(msg, extra={"created": …})` wirft KeyError — aber
+erst, wenn der Log-Level das Ereignis wirklich durchlässt; bei
+gedrosseltem Level bleibt der Bug unsichtbar. Konvention jetzt:
+Anwendungsfelder gebündelt unter einem eigenen `extra`-Objekt bzw. mit
+sprechendem Präfix; Regressionstest vorhanden.
+Warum: Level-abhängige Crashes überleben Tests, die mit anderem Level
+laufen, und schlagen erst in Produktion zu.
+Anwenden: Logging-Wrapper bauen, der Anwendungsfelder namespaced;
+Log-Aufrufe in Tests mit durchlässigem Level ausführen.
+
 ## [Bug] CI-Action-Versionen gegen echte Tags prüfen — auch „verifizierte"
 
 Was: Der Bau-Agent gab `astral-sh/setup-uv@v9` als „zum Stichtag
@@ -93,6 +118,10 @@ der Fehler zeigt sich erst beim zweiten installierten Paket.
 Anwenden: Bei Multi-Service-Python-Repos Import-Namen von Anfang an
 eindeutig wählen (Verzeichnisnamen dürfen Spezifikation bleiben);
 Editable-Install-Verhalten des Build-Backends früh testen.
+Folgefund (Phase 3): `import shared` schlägt fehl, wenn das CWD das
+Repo-Root ist (Workspace-Member-Verzeichnis gewinnt als Namespace-Paket
+gegen den Editable-Finder) — in Skripten/Docker-WORKDIR nie das
+Repo-Root als Arbeitsverzeichnis verwenden.
 
 ## [Prozess] Mechanisch hergeleitete Befunde empirisch gegenprüfen
 

@@ -3,11 +3,12 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–2 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün. Warten auf Go
-für Phase 3. Phasen 23–27 (Admin-UI) sind blockiert, bis das Ergebnis
-der Claude-Design-Session vorliegt; Design-Entscheidungen werden nicht
-vorweggenommen.**
+**Status: Phasen 0–3 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (153 Tests).
+Warten auf Go für Phase 4 — nach deren Abschluss ist turnusgemäß der
+5-Phasen-Doku-Sweep mit Diff-Anzeige fällig. Phasen 23–27 (Admin-UI)
+sind blockiert, bis das Ergebnis der Claude-Design-Session vorliegt;
+Design-Entscheidungen werden nicht vorweggenommen.**
 
 ## Arbeitsregeln
 
@@ -108,14 +109,19 @@ Struktur entspricht §10 (dokumentierte Abweichung: Import-Namen).
 Ziel: Gemeinsames Fundament für alle drei Services.
 
 Aufgaben:
-- [ ] Config-Schema mit allen Schlüsseln/Defaults aus ARCHITECTURE.md §6
-      inkl. Validierung; YAML laden/schreiben
-- [ ] AOFF_-Env-Bootstrap (Pfade, Ports, DB-Zugänge)
-- [ ] Strukturiertes Logging-Setup; gemeinsame Modelle/Typen
-- [ ] Unit-Tests: Defaults, Validierungsfehler, Env-Override
+- [x] Config-Schema mit allen §6-Schlüsseln inkl. Projekt-Ergänzungen
+      (pydantic v2, Enums, HH:MM-Validierung, Secrets maskiert,
+      unbekannte Schlüssel Warnung+ignorieren, atomares Schreiben 0600)
+- [x] AOFF_-Env-Bootstrap (`EnvSettings.from_env`, testbar ohne
+      Prozessumgebung; neu: AOFF_LOG_LEVEL; Test hält .env.example und
+      Schema deckungsgleich)
+- [x] Strukturiertes JSON-Logging (`setup_logging`, idempotent) +
+      Modelle (AuthMode, SubmitMode, SubmissionStatus, StackState mit
+      deutschen display_names)
+- [x] 123 neue Unit-Tests (Schema, IO, Env, Logging, Modelle)
 
-Definition of Done: Testsuite des shared-Pakets grün; alle §6-Schlüssel
-abgedeckt.
+Definition of Done: erfüllt 2026-07-25 — 153 Tests grün (lokal + CI);
+alle §6-Schlüssel abgedeckt. Commit 481315c.
 
 ## Phase 4: DB-Schema & Migrationen
 

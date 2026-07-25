@@ -596,6 +596,9 @@ Offene Punkte:
 14. Score-Parität mit acoustid.org (fpstore-Formel nicht öffentlich):
     optionaler empirischer Abgleich mit Test-Fingerprints gegen die
     öffentliche API.
+15. Config-Flag für MBID-Redirect-Durchreichung (§5.4) hat noch keinen
+    §6-Schlüssel — wird bei Bedarf in Phase 10 als Projekt-Ergänzung
+    definiert (dann §6 + DECISIONS + Schema nachziehen).
 
 Risiken (Priorität aus dem Handoff):
 1. **Dump-Format/Bootstrap (hoch)** — größtes Projektrisiko, zuerst
