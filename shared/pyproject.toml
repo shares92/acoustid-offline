@@ -30,7 +30,7 @@ dependencies = [
 [tool.setuptools]
 # Neue Unterpakete hier ergaenzen (kein Auto-Discovery, damit die Wheels
 # der Service-Images reproduzierbar bleiben).
-packages = ["shared", "shared.db", "shared.fpindex"]
+packages = ["shared", "shared.db", "shared.fingerprint", "shared.fpindex"]
 
 [tool.setuptools.package-data]
 # Die Migrations-SQL wird mit ausgeliefert; ohne sie findet der Runner

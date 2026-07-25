@@ -90,5 +90,6 @@ markers = [
     "integration: braucht einen erreichbaren Compose-Dienst — Steuerung ueber --integration, siehe conftest.py",
     "index: (zusammen mit integration) braucht den acoustid-index statt der Postgres",
     "db: (nur zusammen mit index noetig) braucht die Postgres zusaetzlich zum Index",
+    "extension: braucht die Original-Extension pg_acoustid im Test-Container (ACOUSTID_EXTENSION_DSN), siehe tests/pg_acoustid/",
     "network: greift auf das echte Internet zu (data.acoustid.org) — laeuft nur mit --network, nie in der CI",
 ]

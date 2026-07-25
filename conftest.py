@@ -12,6 +12,12 @@ nur ``integration``                Postgres (Compose-Service `db`) — der
 ``index``                          der Postgres und schreibt in den Index
                                    (Phase 7). Der Marker ``db`` ist nur
                                    noetig, wenn ``index`` mit dabei ist.
+``integration`` + ``extension``    Postgres MIT der Original-Extension
+                                   pg_acoustid, Adresse in
+                                   ``ACOUSTID_EXTENSION_DSN`` (Phase 9).
+                                   Dieser Dienst bringt seine eigene
+                                   Datenbank mit; die anderen Marker gelten
+                                   dann nicht.
 =================================  =======================================
 
 Ob sie laufen, entscheidet fuer jeden Dienst einzeln derselbe Schalter:
@@ -61,13 +67,19 @@ import pytest  # noqa: E402  (erst nach der sys.path-Korrektur importieren)
 MARKER = "integration"
 DB_MARKER = "db"
 INDEX_MARKER = "index"
+EXTENSION_MARKER = "extension"
 NETWORK_MARKER = "network"
 ENV_SWITCH = "ACOUSTID_INTEGRATION_TESTS"
 NETWORK_SWITCH = "ACOUSTID_NETWORK_TESTS"
+EXTENSION_DSN = "ACOUSTID_EXTENSION_DSN"
 MODES = ("auto", "require", "off")
 
 #: Menschenlesbare Namen der Dienste (fuer Meldungen im Report).
-SERVICES = {DB_MARKER: "Postgres", INDEX_MARKER: "acoustid-index"}
+SERVICES = {
+    DB_MARKER: "Postgres",
+    INDEX_MARKER: "acoustid-index",
+    EXTENSION_MARKER: "pg_acoustid (Test-Container)",
+}
 
 _STATUS_KEY = pytest.StashKey[str]()
 _NETWORK_KEY = pytest.StashKey[str]()
@@ -135,7 +147,35 @@ def _probe_index() -> tuple[bool, str]:
     return True, f"acoustid-index erreichbar unter {url}"
 
 
-_PROBES = {DB_MARKER: _probe_db, INDEX_MARKER: _probe_index}
+def _probe_extension() -> tuple[bool, str]:
+    """Prueft, ob die Original-Extension pg_acoustid ansprechbar ist.
+
+    Der Container dazu wird aus `tests/pg_acoustid/Dockerfile` gebaut und
+    laeuft ausschliesslich fuer die Bit-Verifikation des Rescorings; er hat
+    mit dem Compose-Stack nichts zu tun und bekommt deshalb eine eigene
+    Variable statt der `AOFF_DB_*`.
+    """
+    import psycopg
+
+    dsn = os.environ.get(EXTENSION_DSN, "").strip()
+    if not dsn:
+        return False, (
+            f"{EXTENSION_DSN} ist nicht gesetzt — Test-Container aus "
+            "tests/pg_acoustid/Dockerfile bauen und starten"
+        )
+    try:
+        with psycopg.connect(dsn, connect_timeout=5) as connection:
+            connection.execute("SELECT acoustid_compare2(ARRAY[1]::int4[], ARRAY[1]::int4[], 0)")
+    except psycopg.Error as error:
+        return False, f"pg_acoustid nicht nutzbar: {str(error).strip()}"
+    return True, "pg_acoustid erreichbar"
+
+
+_PROBES = {
+    DB_MARKER: _probe_db,
+    INDEX_MARKER: _probe_index,
+    EXTENSION_MARKER: _probe_extension,
+}
 
 
 def _required_services(item: pytest.Item) -> tuple[str, ...]:
@@ -143,8 +183,11 @@ def _required_services(item: pytest.Item) -> tuple[str, ...]:
 
     Ohne weiteren Marker: Postgres (Vorgabefall seit Phase 4). Der Marker
     ``index`` schaltet auf den acoustid-index um; wer beides braucht, setzt
-    ``db`` ausdruecklich dazu.
+    ``db`` ausdruecklich dazu. ``extension`` steht fuer sich — dieser
+    Container bringt seine eigene Postgres mit.
     """
+    if item.get_closest_marker(EXTENSION_MARKER):
+        return (EXTENSION_MARKER,)
     if not item.get_closest_marker(INDEX_MARKER):
         return (DB_MARKER,)
     if item.get_closest_marker(DB_MARKER):

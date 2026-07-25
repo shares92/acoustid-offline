@@ -11,7 +11,17 @@ version = "0.0.1"
 description = "AcoustID-kompatibler API-Service von acoustid-offline"
 requires-python = ">=3.14"
 license = "MIT"
-dependencies = ["acoustid-offline-shared"]
+dependencies = [
+    "acoustid-offline-shared",
+    # Web-Framework laut ARCHITECTURE §4. Die Routen sind async, die Arbeit
+    # dahinter (psycopg, Index-Client, Rescoring) laeuft im Threadpool.
+    "fastapi>=0.121.2",
+    # ASGI-Server des Containers (`python -m acoustid_api`).
+    "uvicorn>=0.40.0",
+    # Verbindungs-Pool fuer die kurzen, rein lesenden Lookups. psycopg
+    # selbst kommt ueber shared mit.
+    "psycopg-pool>=3.2.7",
+]
 
 [tool.setuptools]
 # Neue Unterpakete unterhalb von app/ hier ergaenzen.

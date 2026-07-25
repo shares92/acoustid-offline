@@ -119,14 +119,24 @@ def test_offset_boundary_is_exactly_at_max_hashes_plus_eighty() -> None:
     assert extract_query(vector[:199], max_hashes=120)[0] == vector[79]
 
 
-def test_offset_is_computed_after_removing_silence() -> None:
-    """Stille zaehlt beim Offset nicht mit — sonst verschiebt sie das Fenster."""
+def test_silence_shortens_the_window_but_not_the_index() -> None:
+    """Stille zaehlt beim Offset nicht mit — das Fenster liegt trotzdem im Rohvektor.
+
+    Das ist die Eigenheit des C-Originals: ``cleansize`` zaehlt die Hashes
+    ohne Stille, der daraus errechnete Offset zeigt aber in den
+    **unbereinigten** Vektor. Wer die Stille erst entfernt und dann zaehlt,
+    landet an einer anderen Stelle — hier bei ``payload[80]`` statt
+    ``payload[40]``. Die bit-genaue Gegenprobe steht in
+    `test_fingerprint_extension.py`.
+    """
     step = 16
     payload = [0x3000 + i * step for i in range(200)]
     with_silence = []
     for value in payload:
         with_silence.extend([SILENCE_HASH, value])
-    assert extract_query(with_silence, max_hashes=120)[0] == payload[80]
+    # 400 Positionen, davon 200 Stille: cleansize 200 -> Offset min(200-120, 80) = 80.
+    # with_silence[80] ist Stille, with_silence[81] ist payload[40].
+    assert extract_query(with_silence, max_hashes=120)[0] == payload[40]
 
 
 # --- signed -> unsigned ----------------------------------------------------

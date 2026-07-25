@@ -114,4 +114,72 @@ jobs:
       - name: Integrationstests (Postgres und acoustid-index)
         # --integration=require: ein nicht erreichbarer Dienst ist ein Fehler,
         # kein stilles Ueberspringen.
-        run: uv run pytest -m integration --integration=require
+        # `not extension`: die Bit-Verifikation braucht einen anderen
+        # Container (Postgres MIT pg_acoustid) und laeuft im Job darunter.
+        run: uv run pytest -m "integration and not extension" --integration=require
+
+  bit-verification:
+    name: Bit-Verifikation des Rescorings (pg_acoustid)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repo auschecken
+        uses: actions/checkout@v7
+
+      - name: uv einrichten
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Abhaengigkeiten installieren
+        run: uv sync --all-packages
+
+      - name: Docker-Buildx einrichten
+        # Nur wegen des Layer-Caches unten: das Image kompiliert die Extension
+        # aus dem Quelltext, das soll nicht bei jedem Lauf passieren.
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test-Image mit der Original-Extension bauen
+        # Das Image wird NIE veroeffentlicht (pg_acoustid hat keine Lizenz,
+        # DECISIONS 2026-07-25) — es bleibt im Runner und dient nur als
+        # Referenz fuer den Python-Nachbau.
+        uses: docker/build-push-action@v6
+        with:
+          context: tests/pg_acoustid
+          load: true
+          tags: acoustid-offline-pg-acoustid:test
+          cache-from: type=gha,scope=pg-acoustid
+          cache-to: type=gha,mode=max,scope=pg-acoustid
+
+      - name: Referenz-Postgres starten
+        run: |
+          docker run -d --name pg-acoustid \
+            -p 127.0.0.1:5443:5432 \
+            -e POSTGRES_PASSWORD=ci-wegwerf-passwort \
+            acoustid-offline-pg-acoustid:test
+          for i in $(seq 1 60); do
+            if docker exec pg-acoustid pg_isready -U postgres >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "pg_acoustid ist nicht hochgekommen" >&2
+          docker logs pg-acoustid
+          exit 1
+
+      - name: Dump-Fixtures aus dem Cache holen
+        # Dieselben Fixtures wie im Integrationsjob: die Bit-Verifikation
+        # laeuft zusaetzlich gegen echte Vollvektoren.
+        uses: actions/cache@v6
+        with:
+          path: tests/fixtures/acoustid-dumps
+          key: acoustid-dumps-${{ hashFiles('tests/fixtures/fetch_fixtures.py') }}
+
+      - name: Fehlende Dump-Fixtures nachladen
+        run: uv run python tests/fixtures/fetch_fixtures.py
+
+      - name: extract_query und compare2 gegen die Extension pruefen
+        env:
+          ACOUSTID_EXTENSION_DSN: postgresql://postgres:ci-wegwerf-passwort@127.0.0.1:5443/postgres
+        run: uv run pytest -m extension --integration=require
