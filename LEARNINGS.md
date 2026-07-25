@@ -63,6 +63,37 @@ Stellhebel konfigurierbar machen, Default + Empfehlungstabelle
 dokumentieren — und dazuschreiben, was eine Änderung kostet (hier:
 Index-Neuaufbau).
 
+## [Bug] CI-Action-Versionen gegen echte Tags prüfen — auch „verifizierte"
+
+Was: Der Bau-Agent gab `astral-sh/setup-uv@v9` als „zum Stichtag
+aktuell verifiziert" an; der erste CI-Lauf brach mit „unable to find
+version v9" ab. Es existiert `v9.0.0` als exakter Tag, aber kein
+beweglicher Major-Tag `v9` (anders als bei actions/checkout, wo `v7`
+existiert). Fix: exakten Tag pinnen.
+Warum: Ob ein Projekt bewegliche Major-Tags pflegt, ist je Repo
+verschieden; „die Version existiert" heißt nicht „dieser Tag
+existiert". Agenten-Verifikationsbehauptungen sind Prüf-Kandidaten,
+keine Fakten.
+Anwenden: Action-Referenzen vor dem Commit gegen
+`gh api repos/<owner>/<repo>/tags` prüfen; nach jedem Push den ersten
+CI-Lauf tatsächlich beobachten statt Grün anzunehmen (Orchestrator-
+Verifikation hat den Fehler hier in Minuten gefangen).
+
+## [Technik] Mehrere gleichnamige Python-Pakete kollidieren im venv
+
+Was: Drei Services mit Verzeichnis `app/` (Handoff-Struktur) lassen
+sich nicht als drei Pakete namens `app` in ein gemeinsames venv
+installieren — sie überschreiben einander. Lösung: package-dir-Mapping
+auf eindeutige Import-Namen (`acoustid_api` …) bei unveränderten
+Verzeichnissen. Zusatzbefund: Hatchlings sources-Remapping mit
+Präfix-Änderung wirft bei Editable-Installs einen harten ValueError —
+setuptools kann es.
+Warum: Monorepos mit mehreren Services tappen genau hier hinein, und
+der Fehler zeigt sich erst beim zweiten installierten Paket.
+Anwenden: Bei Multi-Service-Python-Repos Import-Namen von Anfang an
+eindeutig wählen (Verzeichnisnamen dürfen Spezifikation bleiben);
+Editable-Install-Verhalten des Build-Backends früh testen.
+
 ## [Prozess] Mechanisch hergeleitete Befunde empirisch gegenprüfen
 
 Was: Die Code-Analyse leitete zwingend her, dass `meta-update`-Dateien

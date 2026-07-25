@@ -3,11 +3,11 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0 und 1 abgeschlossen (2026-07-25) — alle
-Recherchepunkte aus Handoff §11 sind geschlossen, Berichte unter
-docs/research/. Warten auf Go für Phase 2. Phasen 23–27 (Admin-UI)
-sind blockiert, bis das Ergebnis der Claude-Design-Session vorliegt;
-Design-Entscheidungen werden nicht vorweggenommen.**
+**Status: Phasen 0–2 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün. Warten auf Go
+für Phase 3. Phasen 23–27 (Admin-UI) sind blockiert, bis das Ergebnis
+der Claude-Design-Session vorliegt; Design-Entscheidungen werden nicht
+vorweggenommen.**
 
 ## Arbeitsregeln
 
@@ -86,18 +86,22 @@ DECISIONS-Einträge).
 Ziel: Baubare, leere Projektstruktur mit grüner CI.
 
 Aufgaben:
-- [ ] git init; .gitignore; Filestruktur gemäß ARCHITECTURE.md §10
-- [ ] Python-Paketstruktur (shared/, watchdog/app, api/app, importer/app)
-      mit Tooling: Lint + Formatter + pytest
-- [ ] .env.example (alle AOFF_-Bootstrap-Variablen) und README-Stub
-      mit Lizenzhinweis (CC BY-SA 3.0)
-- [ ] .github/workflows/ci.yml: Lint + Tests
-- [ ] GitHub-Repo anlegen/verbinden (öffentlich; mit Betreiber)
-- [ ] Steuerungsdateien (ARCHITECTURE, PROGRESS, DECISIONS, LEARNINGS)
-      mit ins Repo aufnehmen (Betreiber-Entscheid 2026-07-25)
+- [x] git init; .gitignore (inkl. Fixtures — Lizenzentscheid — und
+      .env/config.yaml); Filestruktur gemäß ARCHITECTURE.md §10
+- [x] Python-Paketstruktur als uv-Workspace (Python 3.14, ruff,
+      pytest; Import-Namen `shared`/`acoustid_api`/`acoustid_importer`/
+      `acoustid_watchdog`, siehe DECISIONS)
+- [x] .env.example (AOFF_-Bootstrap-Startsatz) und README-Stub mit
+      Lizenzhinweisen (Code MIT, Daten CC BY-SA 3.0)
+- [x] .github/workflows/ci.yml: Lint + Format-Check + Tests (uv)
+- [x] GitHub-Repo angelegt und verbunden:
+      https://github.com/shares92/acoustid-offline (öffentlich)
+- [x] Steuerungsdateien + docs/ im Repo
+- [x] fetch_fixtures.py für reproduzierbare Fixture-Beschaffung
 
-Definition of Done: CI läuft grün (Lint + leere Testsuite); Struktur
-entspricht ARCHITECTURE.md §10.
+Definition of Done: erfüllt 2026-07-25 — CI auf GitHub grün
+(Lint + Format + 31 Tests; Fix nötig: setup-uv-Tag v9 → v9.0.0);
+Struktur entspricht §10 (dokumentierte Abweichung: Import-Namen).
 
 ## Phase 3: Shared-Paket — Config, Modelle, Logging
 

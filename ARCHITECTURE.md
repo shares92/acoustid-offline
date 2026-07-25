@@ -542,6 +542,13 @@ Der Dateischnitt unterhalb der `app/`-Verzeichnisse ist im Handoff nicht
 festgelegt und wird in den jeweiligen Phasen konkretisiert (dann hier
 nachtragen).
 
+**Paketierung (Phase 2):** uv-Workspace, Python 3.14, ruff + pytest.
+Verzeichnisse wie oben; installierte Import-Namen weichen ab:
+`acoustid_api`, `acoustid_importer`, `acoustid_watchdog`, `shared`
+(Details/Begründung in DECISIONS 2026-07-25). Echte Dump-Fixtures sind
+nicht committet — `tests/fixtures/fetch_fixtures.py` beschafft sie
+reproduzierbar. Repo: https://github.com/shares92/acoustid-offline
+
 ## 11. Bewusst ausgeschlossen
 
 - Kein eigener MusicBrainz-Spiegel (extern vorausgesetzt; bei

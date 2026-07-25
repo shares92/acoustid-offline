@@ -5,6 +5,25 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-07-25: Python-Paketierung — Verzeichnisse nach §10, eigene Import-Namen
+
+Entscheidung: Die Verzeichnisse bleiben exakt wie ARCHITECTURE §10
+(`api/app`, `importer/app`, `watchdog/app`, `shared/`), installiert
+werden die Pakete aber als `acoustid_api`, `acoustid_importer`,
+`acoustid_watchdog` und `shared` (uv-Workspace, setuptools-Backend,
+package-dir-Mapping; `shared/` mit einer Verschachtelungsebene
+`shared/shared/`).
+Begründung: Drei Pakete namens `app` würden sich in einem gemeinsamen
+venv gegenseitig überschreiben; Workspace-Member-Wurzel und
+Paketverzeichnis können nicht dieselbe Ebene sein. Hatchling scheidet
+aus: Präfix-änderndes sources-Remapping bricht bei Editable-Installs
+(empirisch verifiziert).
+Alternativen: Verzeichnisse umbenennen (Abweichung von §10 sichtbar
+statt intern), Hatchling (Editable-Bruch) — verworfen.
+Folge: Neue Unterpakete müssen in `packages = [...]` der jeweiligen
+pyproject.toml eingetragen werden (kein Auto-Discovery); Docker-Images
+starten später z. B. `acoustid_api.main:app`.
+
 ## 2026-07-25: Code-Lizenz MIT
 
 Entscheidung: Der eigene Code des öffentlichen Repos steht unter MIT
