@@ -94,15 +94,26 @@ Live-Daten von data.acoustid.org und lokale Fixtures
   gzip-JSONL, ein Objekt pro Zeile. Historie lückenlos seit **2011-08-19**
   (Stand 25.07.2026: 5.454 Tage, 38.178 Dateien, **414 GB gz**, davon
   ~94 % `fingerprint`); laufend ~58 MB/Tag. Frei zugänglich, Range-Requests
-  möglich. Discovery über `index.json` je Verzeichnis (exakte Bytegrößen —
-  die HTML-Listings labeln Binärpräfixe falsch als SI).
+  möglich. Discovery über `index.json` je Verzeichnis (Array aus
+  `{"name","size"}`; Verzeichniseinträge kommen ohne `size`; Listings
+  existieren auch auf Jahres-/Wurzelebene; exakte Bytegrößen — die
+  HTML-Listings labeln Binärpräfixe falsch als SI).
 - **Kein Voll-Snapshot** (`ExportTableFull` unimplementiert; Alt-Dumps 404).
   Bootstrap = vollständiger Replay aller Tagesdateien, zur Laufzeit als
   resumierbarer Importer-Job — Daten stecken nie in den Images (DECISIONS).
 - Export ist `COPY (… row_to_json … json_strip_nulls …) TO STDOUT`:
   **fehlender JSON-Schlüssel bedeutet NULL bzw. false**, nie „unverändert".
-  Die Dateien sind valides JSONL (COPY-Escaping-Hypothese empirisch
-  widerlegt; 52 Quote-Werte in der meta-Fixture parsen sauber).
+- **COPY-Text-Escaping ist epochenabhängig (Korrektur Phase 6):**
+  Dateien **bis einschließlich 2024-12-04** tragen zusätzlich das
+  COPY-Escaping (Backslashes verdoppelt) — praktisch relevant nur im
+  Freitext-Strom `meta` (0,5–2,5 % der Zeilen je Tag sind roh kein
+  gültiges JSON; Tag 1 der Historie bricht sonst in Zeile 128). **Ab
+  2024-12-05** sauberes JSONL. Achtung: Alt-Zeilen können auch
+  *zufällig* parsen und dann falsche Werte liefern — die Lesart muss
+  nach Datei-Epoche gewählt werden (`COPY_TEXT_LAST_DAY = 2024-12-04`,
+  zeilenweiser Fallback mit Zähler). Beleg: Stichproben 2011–2026 +
+  Fixture `2011-08-19-meta-update` (85/85 Zeilen per Unescape
+  wiederhergestellt, unabhängig doppelt verifiziert).
 - **Upsert-Strom ohne Operations-Marker:** jede Zeile ist ein Upsert auf
   PK `id`. DELETEs werden nie übertragen — Track-Merges kommen als
   `track.new_id` (ggf. verkettet), deaktivierte MBID-Zuordnungen als
@@ -116,8 +127,9 @@ Live-Daten von data.acoustid.org und lokale Fixtures
   `track_id`/`submission_count`/`updated`.
 - Keine Checksummen, Sequenznummern oder Manifeste: **Lückenprüfung
   (Kalendertage je Strom) ist Importer-Pflicht.** Leere Dateien
-  (23-Byte-gz) sind legitim (z. B. `track_puid` seit Jahren, Daten-Flaute
-  seit 2026-07-22).
+  (23-Byte-gz) sind legitim (`track_puid` meist — aber nicht immer:
+  2011 Massendaten, Juli 2026 wieder 9 gefüllte Tage; Daten-Flaute
+  seit 2026-07-22). Neuester verfügbarer Tag ist der Vortag.
 - **Akzeptierte Lücke:** Zeilen von vor 2011-08-19, die seither nie
   geändert wurden, fehlen prinzipbedingt (Obergrenze ~10 % des Bestands).
 - **Fingerprint-Kodierung:** JSON-Array vorzeichenbehafteter int32
@@ -136,7 +148,7 @@ Live-Daten von data.acoustid.org und lokale Fixtures
 | `track_mbid-update` | `track_mbid` | `id`, `track_id`, `mbid` uuid, `submission_count`, (`disabled`), `created`, (`updated`) | 1,1 GB |
 | `meta-update` | `meta` | `id`, (`track`, `artist`, `album`, `album_artist`, `track_no`, `disc_no`, `year`, `created`) | 11,6 GB |
 | `track_meta-update` | `track_meta` | `id`, `track_id`, `meta_id`, `submission_count`, `created`, (`updated`) | 7,2 GB |
-| `track_puid-update` | `track_puid` | `id`, `track_id`, `puid` uuid, `submission_count`, `created`, (`updated`) — seit Jahren leer | 0,3 GB |
+| `track_puid-update` | `track_puid` | `id`, `track_id`, `puid` uuid, `submission_count`, `created`, (`updated`) — meist leer, wird regulär geparst | 0,3 GB |
 
 Alle 7 Ströme werden geladen und importiert (Betreiber-Entscheid
 2026-07-25). Upstream existierende, aber **nicht exportierte** Spalten:

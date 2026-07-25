@@ -3,12 +3,13 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–5 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (347 Tests, davon
-51 Integration gegen echtes Postgres 18 + echtes acoustid-index-Image).
-Warten auf Go für Phase 6. Phasen 23–27 (Admin-UI) sind blockiert, bis
-das Ergebnis der Claude-Design-Session vorliegt; Design-Entscheidungen
-werden nicht vorweggenommen.**
+**Status: Phasen 0–6 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (453 Tests).
+Warten auf Go für Phase 7. Wichtigster Phase-6-Befund: COPY-Escaping
+in Dateien bis 2024-12-04 (§5.1-Korrektur — Epochen-Lesart im Parser).
+Phasen 23–27 (Admin-UI) sind blockiert, bis das Ergebnis der
+Claude-Design-Session vorliegt; Design-Entscheidungen werden nicht
+vorweggenommen.**
 
 ## Arbeitsregeln
 
@@ -172,12 +173,21 @@ Ziel: Delta-Dateien werden korrekt geholt und vollständig geparst
 (noch ohne DB-Schreiben).
 
 Aufgaben:
-- [ ] Downloader: Sequenzlogik ab `import_state`, Netz-/Retry-Handling
-- [ ] Parser für alle Tabellen des Dump-Formats (Phase 0), inkl.
-      Fehlerfälle (kaputte Zeile, unbekanntes Feld)
-- [ ] Test-Fixtures aus echten Beispiel-Deltas (Phase 0) eingebunden
+- [x] Arbeitslisten-Logik (pure): Tage×Ströme ab import_state-Sicht,
+      §5.2-Reihenfolge, Lücken werden gemeldet statt nachgeholt
+- [x] Downloader: .part+Rename, Range-Resume (iter_raw!), Backoff
+      1→10 s ×5, Größenvalidierung gegen index.json + Content-Length,
+      gzip-Prüfung (abschaltbar), Skip validierter Dateien
+- [x] Parser: 7 Ströme streamend, frozen Dataclasses, zentrale
+      Absent-Semantik, Feld-Sanity-Check, **Epochen-Lesart fürs
+      COPY-Escaping (≤2024-12-04)** — HOCH-Befund, §5.1 korrigiert
+- [x] Fixtures: 10. Datei ergänzt (2011-08-19-meta als
+      Alt-Epochen-Beleg); 159 neue Tests inkl. lokalem HTTP-Testserver
+      und optionalen network-Tests
 
-Definition of Done: Parser-Unit-Tests mit echten Beispiel-Deltas grün.
+Definition of Done: erfüllt 2026-07-25 — 453 Tests grün (lokal + CI);
+Parser-Durchsatz ~65 MB gz/s gemessen (Anhaltspunkt für Phase 8).
+Commit 0893abe.
 
 ## Phase 7: Importer — Transaktionaler DB-Import & Index-Feed
 

@@ -5,6 +5,35 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-07-25: Korrektur — COPY-Escaping ist epochenabhängig; Parser-Regeln Phase 6
+
+Entscheidung: Der Parser liest Delta-Dateien epochenabhängig: bis
+einschließlich 2024-12-04 mit COPY-Text-Unescape (Backslashes
+verdoppelt — betrifft praktisch nur `meta`), ab 2024-12-05 als reines
+JSONL; je Zeile gibt es einen gezählten Fallback auf die andere
+Lesart, Override per Parameter. Dies **korrigiert** den Eintrag
+„Import-Verfahren" vom selben Tag: die dortige empirische Widerlegung
+galt nur für die 2026er-Epoche (Stichprobe deckte die Zeitachse nicht
+ab). Am Kernverfahren (zeilenweiser Parse + Batch-Upserts, kein
+COPY-FROM-Staging) ändert sich nichts.
+Weitere Phase-6-Entscheide: (a) **Lücken werden gemeldet, nicht
+automatisch nachgeholt** — ein nachträglich eingespielter alter Tag
+würde neuere Upsert-Stände überschreiben; (b) Zeitstempel/UUIDs
+bleiben im Parser rohe Strings (Postgres castet; spart ein zweites
+Parsen pro Zeile), Formprüfung per Regex; (c) Records als frozen
+Dataclasses ohne Defaults (pydantic nur für Config — Heißpfad!); (d)
+`verify_gzip` abschaltbar für den Bootstrap; (e) Downloader nutzt
+`iter_raw()` statt `iter_bytes()` (Resume-korrekt).
+Begründung: Empirisch belegt an Stichproben 2011–2026 und der neuen
+Alt-Epochen-Fixture `2011-08-19-meta-update` (85/85 kaputte Zeilen
+per Unescape wiederhergestellt; unabhängig von Agent und Fable
+verifiziert). Ohne Epochen-Lesart wäre der Bootstrap an Tag 1,
+Zeile 128 gescheitert — und scheinbar parsende Alt-Zeilen hätten
+still falsche Werte geliefert.
+Alternativen: Nur-JSONL-Lesart (bricht/verfälscht ~89 % der Historie),
+automatisches Lücken-Backfill (Datenverfälschung), pydantic-Records
+(Doppel-Validierung im Heißpfad) — verworfen.
+
 ## 2026-07-25: Index-Client — Bootstrap-Name, Healthcheck-Semantik, strikte Client-Validierung
 
 Entscheidung: (a) Der Indexname kommt als Bootstrap-Variable
@@ -261,7 +290,9 @@ COPY-FROM-Staging.
 Begründung: Die Dateien sind valides JSONL — die COPY-Escaping-Hypothese
 aus der Code-Analyse wurde an den Fixtures empirisch widerlegt (52
 Quote-Werte parsen sauber); ein COPY-FROM-Textimport würde die Dateien
-sogar korrumpieren. Bulk-Muster (Indizes nachziehen, Batches, Prefetch,
+sogar korrumpieren. **[Korrigiert am selben Tag, Phase 6: gilt nur für
+die Epoche ab 2024-12-05 — siehe Eintrag „COPY-Escaping ist
+epochenabhängig".]** Bulk-Muster (Indizes nachziehen, Batches, Prefetch,
 Resume) sind durch Prior Art belegt (chromaforge Apache-2.0, offizielle
 populate-Skripte, dokumentierte CDN-Abbrüche).
 Alternativen: COPY-Staging (verworfen, s. o.); Einzel-INSERTs

@@ -69,6 +69,20 @@ Stellhebel konfigurierbar machen, Default + Empfehlungstabelle
 dokumentieren — und dazuschreiben, was eine Änderung kostet (hier:
 Index-Neuaufbau).
 
+## [Bug] httpx: iter_bytes(chunk_size) verliert beim Abbruch den Puffer
+
+Was: `Response.iter_bytes(chunk_size)` puffert bis zur Blockgröße und
+verwirft den Puffer bei Verbindungsabbruch — mit 1-MiB-Blöcken verliert
+ein Download-Resume bis zu 1 MiB Fortschritt; im Extremfall wird gar
+kein Range-Header gesendet, weil die .part-Datei leer bleibt. Richtig:
+`iter_raw()` ohne Blockgröße (jeder Netzblock wird sofort geschrieben).
+Warum: Der Fehler ist unsichtbar, solange Verbindungen halten, und
+macht Resume-Logik wirkungslos, wenn sie am nötigsten ist.
+Anwenden: Bei Streaming-Downloads mit Resume immer die rohe
+Iterationsform verwenden und den Abbruch-Fall im Test simulieren
+(Assertion auf die tatsächlich gesendeten Range-Header über mehrere
+Versuche).
+
 ## [Technik] amd64-only-Images hängen unter qemu-Emulation still
 
 Was: Das acoustid-index-Image (nur linux/amd64) startet auf Apple
@@ -174,6 +188,14 @@ Anwenden: Jede als „zwingend" markierte Herleitung, die Design-
 Entscheidungen treibt, vor der Übernahme mit einem minimalen Experiment
 gegen echte Daten testen — besonders wenn Recherche- und Verifikations-
 Möglichkeit (Fixtures!) bereits nebeneinander vorliegen.
+**Addendum (Phase 6):** Die Gegenprüfung selbst war korrekt — aber die
+Stichprobe deckte nur EINE Epoche ab. Real war das Escaping bis
+2024-12-04 vorhanden (~89 % der Historie), die „Widerlegung" galt nur
+für neue Dateien. Bei langlebigen Datenquellen muss die Stichprobe
+über die ZEITACHSE streuen (ältester Tag, Umbruchskandidaten,
+neuester Tag), nicht nur über Kategorien; Formatumbrüche fallen gern
+mit dokumentierten Betriebsstörungen zusammen (hier: Export-Ausfall
+11/2024).
 
 ## [Technik] JSON-Dumps mit json_strip_nulls: fehlender Schlüssel = Wert
 
