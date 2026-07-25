@@ -13,21 +13,29 @@ Teilanfrage beantwortet, sonst nur die erste. ``index`` traegt die Nummer
 aus dem Parameter-Suffix (``fingerprint.3`` -> ``3``) und ist ``null``, wenn
 die Teilanfrage ohne Suffix kam.
 
-``meta`` bleibt in dieser Phase ohne Wirkung: Metadaten aus der
-MusicBrainz-Spiegel-Datenbank kommen in Phase 10. Der Parameter wird
-angenommen (Picard und beets schicken ihn immer mit) und protokolliert.
+``meta`` haengt seit Phase 10 Metadaten an die fertigen Trefferobjekte
+(:mod:`acoustid_api.meta`). Wichtig dabei: das geschieht **einmal fuer die
+ganze Anfrage**, nicht je Teilanfrage. Taucht dieselbe AcoustID in mehreren
+Teilanfragen auf, teilen sich ihre Trefferobjekte einen Eintrag in der
+Zuordnung ``track_id -> Objekte`` und bekommen dieselben Metadaten — das
+spart Roundtrips zur MusicBrainz-Datenbank und ist zugleich das Verhalten
+des Originals.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 
 from acoustid_api.matching import Match, Matcher
+from acoustid_api.meta import MetaPlan, inject_metadata
 from acoustid_api.params import FingerprintQuery, LookupParams, TrackQuery
 from acoustid_api.store import resolve_track_gid
+
+if TYPE_CHECKING:  # pragma: no cover - nur fuer die Typpruefung
+    from acoustid_api.service import ApiService
 
 __all__ = ["TRACK_QUERY_SCORE", "handle_lookup"]
 
@@ -39,13 +47,13 @@ TRACK_QUERY_SCORE = 1.0
 
 
 def handle_lookup(
-    connection: psycopg.Connection, matcher: Matcher, params: LookupParams
+    connection: psycopg.Connection, service: ApiService, params: LookupParams
 ) -> dict[str, Any]:
     """Beantwortet einen Lookup (ohne den ``status``-Schluessel).
 
     Args:
         connection: Verbindung zur AcoustID-Postgres.
-        matcher: Die zweistufige Pipeline.
+        service: Laufzeitumgebung (Pipeline, MusicBrainz-Client, Config).
         params: Geprueftes Ergebnis von :func:`acoustid_api.params.parse_lookup`.
 
     Returns:
@@ -54,24 +62,35 @@ def handle_lookup(
 
     Raises:
         ServiceUnavailableError: Der Suchindex war nicht ansprechbar.
+        InternalError: Die MusicBrainz-Abfrage ist gescheitert, obwohl der
+            Spiegel erreichbar war.
     """
-    if params.meta:
-        _LOG.debug(
-            "meta wird in dieser Phase nicht ausgewertet (Phase 10)",
-            extra={"meta": list(params.meta)},
-        )
-
     queries = params.selected()
-    all_matches = [_run(connection, matcher, query, params) for query in queries]
+    all_matches = [_run(connection, service.matcher, query, params) for query in queries]
+
+    # Track-ID -> alle Trefferobjekte dieser AcoustID in dieser Anfrage.
+    # Bewusst ueber alle Teilanfragen hinweg (Original-Verhalten): derselbe
+    # Treffer in zwei Teilanfragen kostet nur einen MB-Roundtrip.
+    result_map: dict[int, list[dict[str, Any]]] = {}
+    all_results = [_results(matches, result_map) for matches in all_matches]
+
+    if params.meta and result_map:
+        inject_metadata(
+            connection,
+            service.mb,
+            MetaPlan.parse(params.meta),
+            result_map,
+            keep_submitted_mbid=service.config.mb.keep_submitted_mbid,
+        )
 
     if params.batch:
         return {
             "fingerprints": [
-                {"index": query.index, "results": _results(matches)}
-                for query, matches in zip(queries, all_matches, strict=True)
+                {"index": query.index, "results": results}
+                for query, results in zip(queries, all_results, strict=True)
             ]
         }
-    return {"results": _results(all_matches[0]) if all_matches else []}
+    return {"results": all_results[0] if all_results else []}
 
 
 def _run(
@@ -95,6 +114,17 @@ def _run(
     )
 
 
-def _results(matches: list[Match]) -> list[dict[str, Any]]:
-    """Treffer in die Antwortstruktur uebersetzen."""
-    return [{"id": str(match.track_gid), "score": match.score} for match in matches]
+def _results(
+    matches: list[Match], result_map: dict[int, list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    """Treffer in die Antwortstruktur uebersetzen und fuer ``meta`` merken.
+
+    Die erzeugten Objekte landen zusaetzlich in ``result_map``; der
+    Metadaten-Aufbau ergaenzt sie spaeter **an Ort und Stelle**.
+    """
+    results: list[dict[str, Any]] = []
+    for match in matches:
+        result = {"id": str(match.track_gid), "score": match.score}
+        result_map.setdefault(match.track_id, []).append(result)
+        results.append(result)
+    return results

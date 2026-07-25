@@ -107,11 +107,16 @@ class StubService:
         self,
         matcher: StubMatcher | None = None,
         connection: StubConnection | None = None,
+        mb: Any = None,
+        config: Config | None = None,
     ) -> None:
         self.matcher = matcher or StubMatcher()
         self.connection = connection or StubConnection()
         self.pool = StubPool(self.connection)
-        self.config = Config()
+        self.config = config or Config()
+        #: MusicBrainz-Client; ``None`` = nicht konfiguriert, also der
+        #: degradierte Betrieb aus Invariante §8.7.
+        self.mb = mb
 
     def close(self) -> None:
         pass

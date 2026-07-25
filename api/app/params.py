@@ -153,9 +153,9 @@ class LookupParams:
     queries: tuple[FingerprintQuery | TrackQuery, ...]
     batch: bool
     max_duration_diff: int = DEFAULT_MAX_DURATION_DIFF
-    #: ``meta``-Werte, bereits in die Liste zerlegt. Phase 9 wertet sie noch
-    #: nicht aus (Metadaten kommen in Phase 10), nimmt sie aber entgegen —
-    #: Picard und beets schicken sie immer mit.
+    #: ``meta``-Werte, bereits in die Liste zerlegt. Ausgewertet werden sie
+    #: erst im Antwortaufbau (:mod:`acoustid_api.meta`) — dort sitzt auch
+    #: die Praezedenzregel.
     meta: tuple[str, ...] = ()
     #: Optionale Versionsangabe des Clients; nur fuer Logs.
     client_version: str | None = None

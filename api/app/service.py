@@ -1,7 +1,7 @@
-"""Laufzeitumgebung des API-Dienstes: Datenbank-Pool, Index, Konfiguration.
+"""Laufzeitumgebung des API-Dienstes: Datenbank-Pool, Index, MusicBrainz.
 
-Ein API-Prozess braucht drei langlebige Dinge, und alle drei entstehen genau
-einmal beim Start:
+Ein API-Prozess braucht vier langlebige Dinge, und alle vier entstehen
+genau einmal beim Start:
 
 * **Postgres-Pool.** Die Lookups sind kurz und rein lesend; ein Pool spart
   den Verbindungsaufbau je Anfrage. Die Verbindungen laufen mit
@@ -10,10 +10,17 @@ einmal beim Start:
   das sonst alte Zeilenversionen festhalten).
 * **Index-Client.** Ein HTTP-Pool auf den acoustid-index, geteilt von allen
   Anfragen.
+* **MusicBrainz-Client.** Ein zweiter, kleiner Postgres-Pool auf den
+  Spiegel des Betreibers (``mb.dsn``). Er ist **optional**: ohne DSN
+  bleibt er ``None``, und der Lookup antwortet dauerhaft ohne Metadaten.
+  Beim Start laeuft einmal der Schema-Selfcheck — er wirft nie, ein
+  unerreichbarer oder abweichender Spiegel darf den Dienst nicht am
+  Starten hindern (Invariante §8.7).
 * **Laufzeit-Konfiguration.** Aus ihr kommt ``index.query_hashes`` — der
   Wert **muss** derselbe sein, mit dem der Importer indexiert hat; deshalb
   liest die API dieselbe ``config.yaml`` (im Container read-only gemountet)
-  und nicht etwa eine eigene Env-Variable.
+  und nicht etwa eine eigene Env-Variable. Dazu ``mb.dsn`` und
+  ``mb.keep_submitted_mbid``.
 
 Der Dienst ist bewusst **synchron**: der Index-Client und psycopg sind es
 auch, die Anfragen sind kurz, und das Rescoring ist ohnehin rechen- und
@@ -33,6 +40,7 @@ from acoustid_api.matching import Matcher
 from shared.config import Config, load_config
 from shared.env import EnvSettings
 from shared.fpindex import FpIndexClient
+from shared.mb import MbClient
 
 __all__ = ["DEFAULT_POOL_MAX_SIZE", "DEFAULT_POOL_MIN_SIZE", "ApiService"]
 
@@ -55,10 +63,13 @@ class ApiService:
         pool: ConnectionPool,
         index: FpIndexClient,
         config: Config,
+        mb: MbClient | None = None,
     ) -> None:
         self.pool = pool
         self.index = index
         self.config = config
+        #: MusicBrainz-Spiegel; ``None`` heisst „nicht konfiguriert".
+        self.mb = mb
         self.matcher = Matcher(index, query_hashes=config.index.query_hashes)
 
     @classmethod
@@ -82,6 +93,7 @@ class ApiService:
                 "index_url": settings.index_url,
                 "index_name": settings.index_name,
                 "query_hashes": config.index.query_hashes,
+                "mb_configured": config.mb.configured,
             },
         )
         pool = ConnectionPool(
@@ -91,16 +103,27 @@ class ApiService:
             kwargs={"autocommit": True},
             open=False,
         )
-        return cls(pool, FpIndexClient.from_env(settings), config)
+        return cls(pool, FpIndexClient.from_env(settings), config, MbClient.from_config(config))
 
     def open(self, *, timeout: float = 30.0) -> None:
-        """Oeffnet den Datenbank-Pool und wartet auf die erste Verbindung."""
+        """Oeffnet die Pools und prueft den MusicBrainz-Spiegel.
+
+        Auf die **eigene** Datenbank wird gewartet — ohne sie kann der
+        Dienst nichts. Auf den MusicBrainz-Spiegel nicht: sein Pool oeffnet
+        ohne Wartezeit, und der Selfcheck meldet einen Ausfall nur ins Log
+        (Invariante §8.7).
+        """
         self.pool.open(wait=True, timeout=timeout)
+        if self.mb is not None:
+            self.mb.open()
+            self.mb.startup_check()
 
     def close(self) -> None:
-        """Gibt Pool und HTTP-Verbindungen frei."""
+        """Gibt Pools und HTTP-Verbindungen frei."""
         self.pool.close()
         self.index.close()
+        if self.mb is not None:
+            self.mb.close()
 
     def __enter__(self) -> Self:
         self.open()

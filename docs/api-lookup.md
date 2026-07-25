@@ -1,13 +1,14 @@
-# API-Dienst: `/v2/lookup` (Phase 9)
+# API-Dienst: `/v2/lookup` (Phasen 9 und 10)
 
 Referenz zum Lookup-Endpunkt des Containers `acoustid-api`. Vertrag und
-Begründungen: ARCHITECTURE §5.3 und §7 sowie
-[docs/research/phase1-api-formate.md](research/phase1-api-formate.md) und
-[docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md).
+Begründungen: ARCHITECTURE §5.3, §5.4 und §7 sowie
+[docs/research/phase1-api-formate.md](research/phase1-api-formate.md),
+[docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md)
+und [docs/research/phase1-mb-schema.md](research/phase1-mb-schema.md).
 
-**Stand:** Lookup ohne `meta`. Metadaten aus der MusicBrainz-Spiegel-Datenbank
-kommen in Phase 10, `/v2/submit` in Phase 11/12, `/v2/lookup/batch` und
-`/v2/submission_status` in Phase 13.
+**Stand:** Lookup **mit** `meta` (Metadaten aus der
+MusicBrainz-Spiegel-Datenbank, Phase 10). `/v2/submit` folgt in Phase 11/12,
+`/v2/lookup/batch` und `/v2/submission_status` in Phase 13.
 
 ## Betrieb
 
@@ -29,9 +30,13 @@ Lookup-Cache durch — die API selbst prüft keine Keys (ARCHITECTURE §7,
 
 Env-Variablen: `AOFF_DB_*`, `AOFF_INDEX_URL`, `AOFF_INDEX_NAME`,
 `AOFF_CONFIG_PATH`, `AOFF_LOG_LEVEL` (siehe `.env.example`). Aus der
-`config.yaml` liest der Dienst genau einen Wert: **`index.query_hashes`**. Er
-muss mit dem Wert übereinstimmen, mit dem der Importer indexiert hat — sonst
-bildet die Suche einen anderen Query-Extrakt und findet nichts.
+`config.yaml` liest der Dienst drei Werte:
+
+| Schlüssel | Bedeutung |
+|---|---|
+| `index.query_hashes` | Muss mit dem Wert übereinstimmen, mit dem der Importer indexiert hat — sonst bildet die Suche einen anderen Query-Extrakt und findet nichts. |
+| `mb.dsn` | Read-only-DSN der MusicBrainz-Spiegel-Datenbank. **Leer = keine Metadaten** (der Lookup antwortet dann dauerhaft wie im degradierten Betrieb). |
+| `mb.keep_submitted_mbid` | Default `false`. Bei aufgelösten Recording-Redirects trägt die Antwort die **kanonische** MBID; `true` reicht stattdessen die eingereichte durch. |
 
 Lokal ohne Container:
 
@@ -53,7 +58,7 @@ AOFF_DB_HOST=127.0.0.1 AOFF_DB_PASSWORD=… AOFF_INDEX_URL=http://127.0.0.1:6081
 | `format` | nein | `json` (Default), `jsonp`, `xml`. |
 | `jsoncallback` | nein | Funktionsname für `jsonp`, Default `jsonAcoustidApi`. |
 | `clientversion` | nein | Nur fürs Log. |
-| `meta` | nein | Wird angenommen und protokolliert, in Phase 9 **ohne Wirkung**. |
+| `meta` | nein | Welche Metadaten die Antwort trägt — siehe unten. |
 
 ¹ Je Teilanfrage entweder `trackid` **oder** `fingerprint` + `duration`.
 
@@ -89,6 +94,127 @@ Mit `batch`:
 
 19 Codes mit festem HTTP-Status (`api/app/errors.py`); abweichend von 400
 sind 5→500, 13→503, 14→429, 18→404, 19→413.
+
+## `meta` — Metadaten in der Antwort
+
+Der Wert wird an **Whitespace** zerlegt; zusätzlich gibt es die numerische
+Kurzform `0` (nichts), `1` (= `recordingids`) und `2` (= `m2`). Unbekannte
+Werte werden stillschweigend ignoriert.
+
+| Wert | Wirkung |
+|---|---|
+| `recordings` | Aufnahmen mit `id`, `title` (immer, ggf. `""`), `duration` (nur wenn gesetzt) und `artists[]`. |
+| `recordingids` | Nur die Recording-MBID. Spart die Nutzdaten: MusicBrainz wird nur nach der Existenz gefragt. |
+| `releases` | Veröffentlichungen mit `id`, `title`, `medium_count`, `track_count`, `artists[]`, `releaseevents[]`. |
+| `releaseids` | Nur die Release-MBID. |
+| `releasegroups` | Release-Gruppen mit `id`, `title`, `type`, `secondarytypes[]`, `artists[]`. |
+| `releasegroupids` | Nur die Release-Gruppen-MBID. |
+| `tracks` | Je Veröffentlichung `mediums[]` mit `position`, `track_count`, `format`, `title` und `tracks[]`. |
+| `compress` | Löscht Felder, die dem übergeordneten Objekt entsprechen (siehe unten). |
+| `sources` | `submission_count` je MBID — aus **unserer** Datenbank, nicht aus MusicBrainz. Picard gewichtet damit sein Ranking. |
+| `usermeta` | Rückfall auf eingereichte Textmetadaten (`meta`/`track_meta`), **nur** wenn MusicBrainz zu keiner MBID etwas liefert. |
+| `m2` | Ältere Antwortform: Aufnahme mit flacher `tracks[]`-Liste, jeder Track mit seinem `medium` und dessen `release`. |
+
+**Präzedenz — genau ein Zweig.** Welcher Schlüssel unmittelbar unter einem
+Treffer erscheint, entscheidet diese Reihenfolge; der erste zutreffende
+gewinnt, alle weiteren wirken nur noch als Detailgrad:
+
+1. `m2`
+2. `recordings` | `recordingids`
+3. `releasegroups` | `releasegroupids`
+4. `releases` | `releaseids`
+
+`meta=recordings releasegroups releases tracks compress sources` (Picard)
+ergibt deshalb `results[] → recordings[] → releasegroups[] → releases[] →
+mediums[] → tracks[]`; `meta=releases` allein hängt `releases[]` direkt unter
+den Treffer — dann ohne MBID der Aufnahme.
+
+Beispiel (gekürzt):
+
+```json
+{"status": "ok", "results": [{
+  "id": "<acoustid>", "score": 0.98,
+  "recordings": [{
+    "id": "<recording-mbid>", "title": "Titel", "duration": 209.0, "sources": 7,
+    "artists": [{"id": "<artist-mbid>", "name": "Band", "joinphrase": " feat. "}],
+    "releasegroups": [{
+      "id": "<rg-mbid>", "title": "Album", "type": "Album",
+      "secondarytypes": ["Compilation"],
+      "releases": [{
+        "id": "<release-mbid>", "medium_count": 2, "track_count": 22,
+        "country": "DE", "date": {"year": 1999, "month": 7},
+        "releaseevents": [{"country": "DE", "date": {"year": 1999, "month": 7}}],
+        "mediums": [{"position": 1, "track_count": 12, "format": "CD",
+                     "tracks": [{"id": "<track-mbid>", "position": 4}]}]
+      }]
+    }]
+  }]
+}]}
+```
+
+Eigenheiten des Originals, die hier bewusst nachgebildet sind:
+
+- **Sekunden werden abgeschnitten, nie gerundet** (`length / 1000` als
+  Ganzzahldivision): 209 999 ms sind `209`, nicht `210`. Serialisiert wird
+  als Fließkommazahl (`209.0`).
+- **Das erste Release-Ereignis steht zusätzlich flach im Release** (`country`
+  und `date` neben `releaseevents[]`).
+- `track_count` eines Mediums zählt Data-Tracks mit.
+- `compress` löscht: Track-Titel gleich dem Titel der Aufnahme, Track-Künstler
+  gleich denen der Veröffentlichung, Release-Künstler/-Titel gleich denen der
+  Release-Gruppe — und die Künstler der Release-Gruppe **nur bei der letzten**
+  Gruppe einer Aufnahme (eine Einrückung im Original, Wert für Wert
+  nachgebildet).
+- `usermeta`-Künstler stehen als nackte Zeichenketten in `artists[]`, nicht
+  als `{"id": …, "name": …}`.
+
+## Anbindung der MusicBrainz-Datenbank
+
+Der Zugriff läuft über einen **eigenen kleinen Pool** (`shared/shared/mb/`),
+getrennt vom Lookup-Pool: der Spiegel gehört nicht zu diesem Stack und darf
+eine Anfrage nicht mit in seine Wartezeit ziehen.
+
+| Einstellung | Wert | Warum |
+|---|---|---|
+| `connect_timeout` | 2 s | Länger warten lohnt nicht — wir degradieren ohnehin. |
+| `statement_timeout` | 2000 ms | Serverseitige Frist je Anweisung. |
+| `default_transaction_read_only` | `on` | Gürtel zum Hosenträger der Rolle `acoustid_ro`. |
+| `idle_in_transaction_session_timeout` | 5000 ms | Notbremse gegen hängende Transaktionen auf fremder Datenbank. |
+| `search_path` | `musicbrainz, public` | Alle Abfragen sind trotzdem schema-qualifiziert. |
+| Pool | max. 4 Verbindungen, 2 s Wartezeit, Pre-Ping | Eine Privatinstanz braucht nicht mehr. |
+| Circuit-Breaker | 3 Fehler in 30 s → 30 s Sperre | Dokumentierte Konstanten, **kein** Config-Schlüssel. |
+| Zeilenobergrenze | 5000 Zeilen je Release-Abfrage | DoS-Schutz; greift sie, wird gekürzt **und** geloggt. |
+
+Alle Abfragen einer Anfrage laufen in **einer** Read-only-Transaktion (ein
+Snapshot). Genau **eine** Datei kennt MusicBrainz-Tabellennamen
+(`shared/shared/mb/queries.py`); ein Test hält die Regel fest.
+
+**Beim Start** liest der Dienst `replication_control` und vergleicht die
+Spalten der 17 erwarteten Relationen mit dem Systemkatalog:
+
+- Fehlende Spalten ⇒ lautes `ERROR` im Log, Start trotzdem, Lookups
+  antworten ohne Metadaten. Zusätzliche Spalten sind **kein** Mismatch.
+- Fehlt die View `release_event`, wird auf `release_country UNION
+  release_unknown_country` zurückgefallen (`WARNING`).
+- Abweichende Schema-Sequenz (erwartet: 31) ⇒ `WARNING`, kein Fehler.
+- Replikationsalter > 36 h ⇒ `WARNING`, > 7 Tage ⇒ `ERROR`. Ausgeliefert
+  werden die Daten weiterhin.
+
+Die Read-only-Rolle legt der Betreiber einmalig selbst an (SQL-Schnipsel in
+[docs/research/phase1-mb-schema.md](research/phase1-mb-schema.md)); nach
+einem MB-Schema-Upgrade muss `GRANT SELECT` erneuert werden.
+
+### Degradierter Betrieb (Invariante §8.7)
+
+| Lage | Antwort |
+|---|---|
+| `mb.dsn` leer, Spiegel nicht erreichbar, Circuit-Breaker offen, Schema-Mismatch | **HTTP 200.** AcoustID-UUIDs bleiben; in den Zweigen `m2`/`recordings`/`recordingids` auch die MBIDs und `sources` (beide aus der eigenen Datenbank). Ereignis im Log. |
+| Abfrage scheitert trotz stehender Verbindung und passendem Schema | Fehler 5 / **HTTP 500**. Bewusst kein degradierter Betrieb — sonst verschwindet ein Programmfehler hinter leeren Metadaten. |
+
+In den Zweigen `releases`/`releasegroups` bleibt im degradierten Betrieb eine
+leere Liste übrig; MBIDs trägt diese Antwortform auch im Normalfall nicht.
+Beide bekannten Clients (Picard, beets) schicken `recordings` mit und sehen
+die MBIDs deshalb auch bei ausgefallenem Spiegel.
 
 ## Matching-Pipeline
 
@@ -138,6 +264,13 @@ AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
   uv run pytest api/tests --integration=require
 ```
 
+Die `meta`-Integrationstests brauchen **nur Postgres**: sie schlagen über
+`trackid` nach und fassen den Suchindex nicht an. Das MusicBrainz-Schema
+entsteht dafür als **Mini-Fixture** (`api/tests/mb_fixture.py`) im Schema
+`musicbrainz` derselben Wegwerf-Datenbank — 17 Relationen, die
+`release_event`-View und eine Handvoll synthetischer Zeilen. Echte
+MusicBrainz-Dumps kommen in den Tests bewusst nicht vor.
+
 ## Bewusste Abweichungen vom Original
 
 | Punkt | Original | Hier | Grund |
@@ -148,3 +281,18 @@ AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
 | Rumpf `multipart/form-data` | wird gelesen | wird ignoriert | Kein bekannter Client benutzt es beim Lookup; spart eine Abhängigkeit. |
 | Kaputter gzip-Rumpf | nacktes HTTP 400 ohne AcoustID-Format | gilt als leerer Rumpf, WARNING im Log, danach Fehler 2 | Die 19er-Tabelle kennt keinen Code für „kaputter Rumpf". |
 | Zu großer gzip-Rumpf (`Content-Length`) | nacktes HTTP 400 | Fehler 19 / HTTP 413 | Einheitlich mit der Grenze für unkomprimierte Rümpfe; Picard wertet genau das aus. |
+
+### Zusätzlich ab `meta` (Phase 10)
+
+| Punkt | Original | Hier | Grund |
+|---|---|---|---|
+| Aufnahme ohne Veröffentlichung bei `meta=…releases` | verschwindet vollständig (INNER JOIN) — auch Titel, Länge und Künstler | Basisdaten bleiben, `releases` ist leer | Der Verlust betrifft ausgerechnet die Felder, die der Client sicher braucht (Forschungsbericht, Fallstrick 1). |
+| MBID, die MusicBrainz nicht (mehr) kennt | wird als Merge-Auftrag in eine Warteschlange gestellt, nach 7 Tagen deaktiviert; `resolve_mbid_redirect` ist toter Code | Auflösung **online** gegen `recording_gid_redirect`, Antwort mit kanonischer MBID (`mb.keep_submitted_mbid` kehrt das um) | Ohne Auflösung lieferte die Instanz für jede zusammengeführte Aufnahme dauerhaft leere Metadaten — der realistische Haupt-Fehlerfall (DECISIONS 2026-07-25). |
+| MusicBrainz nicht erreichbar | HTTP 500 | HTTP 200 ohne Metadaten, Ereignis im Log | Invariante §8.7: eine Antwort mit UUIDs und MBIDs ist brauchbar, ein 500 nicht. |
+| Fehlende Spalte / verweigerte Rechte auf dem Spiegel | HTTP 500 | HTTP 200 ohne Metadaten, `ERROR` im Log | Dasselbe Argument; das jährliche MB-Schema-Update darf die Instanz nicht abschalten. |
+| Zeilenzahl der Release-Abfrage | unbegrenzt | 5000 Zeilen, danach gekappt + `WARNING` | Eine Anfrage darf 20 Fingerprints × N MBIDs × jede Veröffentlichung ziehen — ein DoS-Vektor. |
+| Reihenfolge der Release-Ereignisse und Sekundärtypen | ungeordnet (Planer entscheidet) | deterministisch (Land/Datum bzw. `child_order`) | Das **erste** Ereignis wird flach ins Release kopiert; eine zufällige Reihenfolge machte die Antwort unreproduzierbar. |
+| `m2` mit einem Track ohne Länge | `float(None)` ⇒ HTTP 500 | Feld `duration` fehlt | Tracks ohne Länge sind in MusicBrainz normal. |
+| `m2` mit demselben Treffer in mehreren Teilanfragen | teilt eine `tracks`-Liste (Aliasing) und hängt Tracks mehrfach an | jedes Trefferobjekt bekommt seine eigene Liste | Der Effekt wäre eine duplizierte Trackliste, kein Kompatibilitätsmerkmal. |
+| Fehlende Nebenzeilen (Artist-Credit, Medienzahl, Release-Gruppe) | `KeyError` ⇒ HTTP 500 | Feld fehlt bzw. leere Liste | Fallstrick 3 des Forschungsberichts. |
+| `compress` bei leerer `releasegroups`-Liste | `NameError` ⇒ HTTP 500 | ohne Wirkung | Ein Absturz ist kein Verhalten, das ein Client auswerten könnte. |

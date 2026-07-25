@@ -1,7 +1,7 @@
 """Lesezugriffe der API auf die AcoustID-Postgres (ARCHITECTURE §5.2).
 
 Alles, was der Lookup aus der eigenen Datenbank braucht, steht in diesem
-Modul — drei Abfragen, alle rein lesend:
+Modul — sechs Abfragen, alle rein lesend:
 
 1. :func:`load_candidates` holt zu den Kandidaten-IDs des Suchindex die
    **Vollvektoren**. Nur sie erlauben den echten AcoustID-Score; der Index
@@ -13,6 +13,18 @@ Modul — drei Abfragen, alle rein lesend:
    **Merge-Verkettung** ueber ``track.new_id``.
 3. :func:`resolve_track_gid` ist der Weg fuer den Parameter ``trackid``:
    dieselbe Verkettung, nur von einer GID aus.
+
+Ab Phase 10 kommen die drei Abfragen des ``meta``-Parameters dazu, die
+**nicht** aus MusicBrainz stammen:
+
+4. :func:`lookup_mbids` — die Recording-MBIDs einer AcoustID samt
+   ``submission_count``. Letzterer ist der ``sources``-Wert der Antwort;
+   Picard gewichtet damit sein Ranking. Er kommt aus unserem eigenen
+   Delta-Bestand, MusicBrainz kennt ihn gar nicht.
+5. :func:`lookup_meta_ids` und 6. :func:`lookup_meta` — der
+   ``usermeta``-Rueckfall: die von Nutzern eingereichten Textmetadaten aus
+   ``track_meta``/``meta``. Sie greifen nur, wenn MusicBrainz zu **keiner**
+   MBID etwas liefert (Original-Verhalten).
 
 **Zur Merge-Verkettung.** Der Original-Server verbindet Fingerprint und
 Track direkt (``JOIN track t ON f.track_id = t.id``) und folgt ``new_id``
@@ -31,7 +43,7 @@ Rescoring vorzeichenlos gelesen.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Final
 from uuid import UUID
@@ -40,8 +52,13 @@ import psycopg
 
 __all__ = [
     "MAX_MERGE_DEPTH",
+    "MAX_META_IDS_PER_TRACK",
     "Candidate",
+    "MetaRow",
     "load_candidates",
+    "lookup_mbids",
+    "lookup_meta",
+    "lookup_meta_ids",
     "resolve_track_gid",
     "resolve_tracks",
 ]
@@ -52,6 +69,10 @@ _LOG = logging.getLogger(__name__)
 #: bis zwei Glieder lang; die Grenze schuetzt vor einem Zyklus in den Daten
 #: (der Rekursionsschritt haette sonst kein Abbruchkriterium).
 MAX_MERGE_DEPTH: Final = 10
+
+#: ``MAX_META_IDS_PER_TRACK`` des Originals: so viele Nutzer-Metadatensaetze
+#: werden je AcoustID hoechstens ausgeliefert (``usermeta``).
+MAX_META_IDS_PER_TRACK: Final = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +89,24 @@ class Candidate:
     fingerprint_id: int
     track_id: int
     hashes: Sequence[int]
+
+
+@dataclass(frozen=True, slots=True)
+class MetaRow:
+    """Ein eingereichter Textmetadatensatz aus der Tabelle ``meta`` (§5.2).
+
+    Alle Felder ausser :attr:`meta_id` sind optional: der Submit-Endpunkt
+    des Originals nimmt jede Teilmenge entgegen.
+    """
+
+    meta_id: int
+    track: str | None
+    artist: str | None
+    album: str | None
+    album_artist: str | None
+    track_no: int | None
+    disc_no: int | None
+    year: int | None
 
 
 _CANDIDATES_SQL: Final = """
@@ -96,6 +135,35 @@ WITH RECURSIVE chain AS (
 SELECT DISTINCT ON (start_id) start_id, id, gid
 FROM chain
 ORDER BY start_id, depth DESC
+"""
+
+# `disabled` filtert zurueckgezogene Zuordnungen (§5.1: der Schluessel steht
+# nur bei `true` im Dump, der Importer setzt ihn sonst explizit auf `false`).
+# Sortierung wie im Original nach MBID — die Reihenfolge landet unveraendert
+# in der Antwort.
+_MBIDS_SQL: Final = """
+SELECT track_id, mbid::text, submission_count
+FROM track_mbid
+WHERE track_id = ANY(%(ids)s::integer[])
+  AND disabled = false
+ORDER BY track_id, mbid
+"""
+
+# Die besten Metadatensaetze zuerst; `meta_id` bricht den Gleichstand, damit
+# die Auswahl bei gleicher Einreichungszahl reproduzierbar bleibt (das
+# Original ueberlaesst sie dem Planer).
+_META_IDS_SQL: Final = """
+SELECT track_id, meta_id
+FROM track_meta
+WHERE track_id = ANY(%(ids)s::integer[])
+ORDER BY track_id, submission_count DESC, meta_id
+"""
+
+_META_SQL: Final = """
+SELECT id, track, artist, album, album_artist, track_no, disc_no, year
+FROM meta
+WHERE id = ANY(%(ids)s::integer[])
+ORDER BY id
 """
 
 _RESOLVE_GID_SQL: Final = """
@@ -170,6 +238,72 @@ def resolve_tracks(
             extra={"track_ids": sorted(missing)[:10], "count": len(missing)},
         )
     return resolved
+
+
+def lookup_mbids(
+    connection: psycopg.Connection, track_ids: Iterable[int]
+) -> dict[int, list[tuple[str, int]]]:
+    """MusicBrainz-Recording-MBIDs je AcoustID, mit ``submission_count``.
+
+    Das ist der Einstieg jedes ``meta``-Lookups **und** zugleich alles, was
+    der degradierte Betrieb braucht: MBIDs und ``sources`` stehen in unserer
+    eigenen Datenbank, dafuer muss MusicBrainz nicht erreichbar sein
+    (Invariante §8.7).
+
+    Returns:
+        Track-ID -> ``[(MBID, submission_count), …]``, nach MBID sortiert.
+        AcoustIDs ohne (aktive) Zuordnung fehlen in der Abbildung.
+    """
+    ids = sorted(set(track_ids))
+    if not ids:
+        return {}
+    result: dict[int, list[tuple[str, int]]] = {}
+    for track_id, mbid, sources in connection.execute(_MBIDS_SQL, {"ids": ids}).fetchall():
+        result.setdefault(track_id, []).append((mbid, sources))
+    return result
+
+
+def lookup_meta_ids(
+    connection: psycopg.Connection,
+    track_ids: Iterable[int],
+    *,
+    max_ids_per_track: int = MAX_META_IDS_PER_TRACK,
+) -> dict[int, list[int]]:
+    """IDs der eingereichten Textmetadaten je AcoustID (``usermeta``).
+
+    Sortiert nach Einreichungszahl absteigend und je AcoustID auf
+    ``max_ids_per_track`` gekappt — die Kappung macht das Original ebenfalls
+    erst in Python, damit die Reihenfolge stimmt.
+    """
+    ids = sorted(set(track_ids))
+    if not ids:
+        return {}
+    result: dict[int, list[int]] = {}
+    for track_id, meta_id in connection.execute(_META_IDS_SQL, {"ids": ids}).fetchall():
+        found = result.setdefault(track_id, [])
+        if len(found) < max_ids_per_track:
+            found.append(meta_id)
+    return result
+
+
+def lookup_meta(connection: psycopg.Connection, meta_ids: Iterable[int]) -> list[MetaRow]:
+    """Die eingereichten Textmetadaten zu den IDs aus :func:`lookup_meta_ids`."""
+    ids = sorted(set(meta_ids))
+    if not ids:
+        return []
+    return [
+        MetaRow(
+            meta_id=row[0],
+            track=row[1],
+            artist=row[2],
+            album=row[3],
+            album_artist=row[4],
+            track_no=row[5],
+            disc_no=row[6],
+            year=row[7],
+        )
+        for row in connection.execute(_META_SQL, {"ids": ids}).fetchall()
+    ]
 
 
 def resolve_track_gid(connection: psycopg.Connection, gid: str) -> tuple[int, UUID] | None:

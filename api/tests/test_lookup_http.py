@@ -307,3 +307,68 @@ def test_every_response_allows_any_origin(client: TestClient) -> None:
     error = client.get("/v2/lookup", params={})
     assert ok.headers["access-control-allow-origin"] == "*"
     assert error.headers["access-control-allow-origin"] == "*"
+
+
+# --- meta ueber HTTP (Phase 10) ---------------------------------------------
+
+MBID = "5f1b1f4c-1111-4111-8111-111111111111"
+
+
+def meta_client(rows: list[tuple[object, ...]]) -> tuple[TestClient, StubConnection]:
+    """Testclient mit einer Attrappe, die ``track_mbid``-Zeilen liefert.
+
+    Ohne MusicBrainz-Anbindung (``mb=None``) — das ist der degradierte
+    Betrieb aus Invariante §8.7 und zugleich der Weg, der ohne Dienste
+    ueber HTTP pruefbar ist.
+    """
+    connection = StubConnection(rows)
+    matcher = StubMatcher([make_match(score=0.9, track_id=7, gid=GID)])
+    client = TestClient(create_app(StubService(matcher, connection)))  # type: ignore[arg-type]
+    return client, connection
+
+
+def test_meta_reaches_the_response_through_the_http_layer() -> None:
+    client, _ = meta_client([(7, MBID, 12)])
+    with client:
+        response = client.get("/v2/lookup", params={**BASE, "meta": "recordings sources"})
+
+    assert response.status_code == 200
+    assert response.json()["results"] == [
+        {"id": str(GID), "score": 0.9, "recordings": [{"id": MBID, "sources": 12}]}
+    ]
+
+
+@pytest.mark.parametrize("meta", [None, "0"])
+def test_without_meta_no_metadata_query_runs(meta: str | None) -> None:
+    client, connection = meta_client([(7, MBID, 12)])
+    params = BASE if meta is None else {**BASE, "meta": meta}
+    with client:
+        response = client.get("/v2/lookup", params=params)
+
+    assert response.json()["results"] == [{"id": str(GID), "score": 0.9}]
+    assert connection.queries == []
+
+
+def test_metadata_is_attached_to_every_batch_entry() -> None:
+    """Ein Treffer in zwei Teilanfragen bekommt zweimal dieselben Metadaten."""
+    client, connection = meta_client([(7, MBID, 3)])
+    with client:
+        response = client.post(
+            "/v2/lookup",
+            data={
+                "client": "testkey",
+                "batch": "1",
+                "meta": "recordings",
+                "fingerprint.0": FINGERPRINT,
+                "duration.0": "241",
+                "fingerprint.1": FINGERPRINT,
+                "duration.1": "241",
+            },
+        )
+
+    parts = response.json()["fingerprints"]
+    assert len(parts) == 2
+    for part in parts:
+        assert part["results"][0]["recordings"] == [{"id": MBID}]
+    # Genau eine Abfrage auf `track_mbid` fuer die ganze Anfrage.
+    assert len(connection.queries) == 1

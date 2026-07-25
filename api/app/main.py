@@ -138,7 +138,7 @@ async def _lookup(request: Request) -> Response:
 def _run_lookup(service: ApiService, params: LookupParams) -> dict[str, Any]:
     """Synchroner Teil: Verbindung ziehen, Pipeline laufen lassen."""
     with service.pool.connection() as connection:
-        return handle_lookup(connection, service.matcher, params)
+        return handle_lookup(connection, service, params)
 
 
 def _render(response_format: ResponseFormat, data: dict[str, Any], status_code: int) -> Response:
