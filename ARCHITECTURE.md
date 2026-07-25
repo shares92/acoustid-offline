@@ -267,6 +267,15 @@ CREATE TABLE import_state (                          -- [P] Buchführung resumie
    unsichere PG-Bulk-Einstellungen nur währenddessen und danach
    zurücknehmen (Details Phase 8).
 
+**Umsetzung (Phase 4):** Migrations-Runner in `shared/shared/db/`
+(CLI `python -m shared.db`), SQL in den Gruppen `core` (Tabellen+PKs,
+inkl. lz4-Compression — muss vor dem Massenimport gesetzt sein) und
+`indexes` (Sekundärindizes, beim Bootstrap nachgezogen); idempotent,
+Checksummen-Drift-Erkennung, Advisory-Lock. Compose-Service `db` =
+`postgres:18` (Achtung PG-18-Volume-Layout: Mount auf
+`/var/lib/postgresql`). Ein Test hält das DDL in diesem Abschnitt und
+die Migrations-SQL anweisungsgleich.
+
 **Weitere Tabellen (Spalten werden in ihren Phasen festgelegt):**
 | Tabelle | Inhalt |
 |---|---|

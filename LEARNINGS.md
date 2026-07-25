@@ -63,6 +63,19 @@ Stellhebel konfigurierbar machen, Default + Empfehlungstabelle
 dokumentieren — und dazuschreiben, was eine Änderung kostet (hier:
 Index-Neuaufbau).
 
+## [Technik] Postgres-18-Image ändert das Volume-Layout
+
+Was: Das offizielle postgres:18-Image deklariert `VOLUME
+/var/lib/postgresql` mit `PGDATA=/var/lib/postgresql/18/docker` —
+bisher üblich war der Mountpunkt `/var/lib/postgresql/data`. Wer den
+alten Pfad mountet, hat ein Volume, das die Daten nicht enthält
+(empirisch per `docker image inspect` belegt).
+Warum: Der Fehler fällt erst beim Update/Restore auf, wenn die
+vermeintlich persistierten Daten weg sind.
+Anwenden: Bei Major-Upgrades offizieller Images VOLUME/ENV per
+`docker image inspect` prüfen, nicht vom Vorgänger übernehmen;
+Mountpunkt im Compose ist bei PG 18 das Elternverzeichnis.
+
 ## [Bug] YAML 1.1 liest unquotierte Uhrzeiten als Sexagesimal-Zahl
 
 Was: PyYAML (YAML 1.1) parst `time: 14:30` ohne Anführungszeichen als
@@ -122,6 +135,10 @@ Folgefund (Phase 3): `import shared` schlägt fehl, wenn das CWD das
 Repo-Root ist (Workspace-Member-Verzeichnis gewinnt als Namespace-Paket
 gegen den Editable-Finder) — in Skripten/Docker-WORKDIR nie das
 Repo-Root als Arbeitsverzeichnis verwenden.
+Folgefund (Phase 4): Eine `conftest.py` im Repo-Root legt das
+Wurzelverzeichnis auf `sys.path[0]` und reaktiviert die Kollision
+(`--import-mode=importlib` hilft nicht); Lösung: im Root-conftest den
+Wurzelpfad beim Laden wieder aus `sys.path` entfernen.
 
 ## [Prozess] Mechanisch hergeleitete Befunde empirisch gegenprüfen
 

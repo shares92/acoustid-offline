@@ -3,12 +3,13 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–3 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (153 Tests).
-Warten auf Go für Phase 4 — nach deren Abschluss ist turnusgemäß der
-5-Phasen-Doku-Sweep mit Diff-Anzeige fällig. Phasen 23–27 (Admin-UI)
-sind blockiert, bis das Ergebnis der Claude-Design-Session vorliegt;
-Design-Entscheidungen werden nicht vorweggenommen.**
+**Status: Phasen 0–4 abgeschlossen (2026-07-25); 5-Phasen-Doku-Sweep
+nach Phase 4 durchgeführt. Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (202 Tests, davon
+33 Integration gegen echtes Postgres 18). Warten auf Go für Phase 5.
+Phasen 23–27 (Admin-UI) sind blockiert, bis das Ergebnis der
+Claude-Design-Session vorliegt; Design-Entscheidungen werden nicht
+vorweggenommen.**
 
 ## Arbeitsregeln
 
@@ -128,14 +129,22 @@ alle §6-Schlüssel abgedeckt. Commit 481315c.
 Ziel: AcoustID-Postgres steht per Compose mit vollständigem Schema.
 
 Aufgaben:
-- [ ] Migrationen für `track`, `fingerprint`, `track_mbid`,
-      `local_submission`, `import_state` (Spalten aus Phase 0)
-- [ ] Migrationsmechanismus (idempotent, beim Job-/Service-Start nutzbar)
-- [ ] docker-compose.yml: db-Service (offizielles Postgres, neueste
-      stabile Major), Volumes, Healthcheck
-- [ ] Integrationstest: leere DB → Migration → Schema vollständig
+- [x] Migrationen für alle 7 Dump-Zieltabellen + `import_state` exakt
+      nach §5.2 (`local_submission` bewusst erst in Phase 11 — §5.2
+      „Weitere Tabellen" ersetzt den alten Aufgabentext)
+- [x] Eigener Migrations-Runner (`shared/shared/db/`, kein Alembic):
+      idempotent, je Migration eine Transaktion, Advisory-Lock,
+      Drift-Erkennung per Checksumme, CLI `python -m shared.db`;
+      zwei Gruppen `core`/`indexes` für den Bootstrap-Weg
+- [x] docker-compose.yml: db-Service `acoustid-db` (postgres:18,
+      Healthcheck, benanntes Volume, kein Host-Publish)
+- [x] 33 Integrationstests (Schema-Introspektion inkl. Partialindizes
+      und lz4, Idempotenz, Gruppen, Drift) — lokal gegen echtes PG 18
+      gelaufen und als CI-Job mit Postgres-Service verankert
 
-Definition of Done: Migrationstest gegen Container-Postgres grün.
+Definition of Done: erfüllt 2026-07-25 — Migrationstests lokal und in
+CI grün; ein Test hält ARCHITECTURE-§5.2-DDL und Migrations-SQL
+anweisungsgleich. Commit 1f294c4.
 
 ## Phase 5: Index-Client
 

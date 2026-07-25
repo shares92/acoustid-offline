@@ -5,6 +5,33 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-07-25: DB-Migrationen — eigener Runner, zwei Gruppen, lz4 in core
+
+Entscheidung: Eigener schlanker Migrations-Runner in `shared/shared/db/`
+(nummerierte SQL-Dateien als Package-Data, je Migration eine
+Transaktion, `schema_migrations`-Protokoll mit Checksummen-Drift-
+Erkennung, Advisory-Lock gegen parallele Starts, CLI
+`python -m shared.db`) statt Alembic. Zwei Gruppen: `core` (Tabellen +
+PKs) und `indexes` (Sekundärindizes) — der Bootstrap wendet erst
+`core` an und zieht `indexes` nach dem Massenimport nach; global
+aufsteigende Nummern über die Gruppen erzwingen identische Reihenfolge.
+**`SET COMPRESSION lz4` liegt in `core`, nicht in `indexes`:** die
+Einstellung wirkt nur auf neu geschriebene Werte — nach dem Bootstrap
+gesetzt, bliebe genau der Erstbestand unkomprimiert (Fable-Entscheid
+auf Agenten-Rückfrage).
+Begründung: Raw-SQL-first-Design; Alembic brächte ORM-Kopplung ohne
+Nutzen. Ein Test hält ARCHITECTURE-§5.2 und Migrations-SQL
+anweisungsgleich — Doku und Schema können nicht divergieren.
+Alternativen: Alembic (verworfen), lz4 in `indexes` (verworfen, s. o.),
+FKs im Schema (bereits per §5.2 ausgeschlossen).
+Nebenentscheide: Integrationstest-Schalter
+`--integration=auto|require|off` (Abwahl immer sichtbar, `require`
+scheitert laut); `tests/docker-compose.test.yml` publiziert 5432 nur
+auf 127.0.0.1 für lokale Läufe — der Produktions-Compose bleibt bei
+`expose`; `shared.db` bewusst nicht in `shared/__init__` re-exportiert
+(psycopg lädt nur bei Bedarf; Wächter-Image bleibt schlank, optionales
+Extra später möglich).
+
 ## 2026-07-25: Shared-Config — Designregeln (Phase 3)
 
 Entscheidung (Paket zusammengehöriger Regeln):
