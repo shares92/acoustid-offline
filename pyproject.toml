@@ -89,4 +89,5 @@ addopts = "-q --strict-markers --strict-config"
 markers = [
     "integration: braucht einen erreichbaren Compose-Dienst — Steuerung ueber --integration, siehe conftest.py",
     "index: (zusammen mit integration) braucht den acoustid-index statt der Postgres",
+    "network: greift auf das echte Internet zu (data.acoustid.org) — laeuft nur mit --network, nie in der CI",
 ]

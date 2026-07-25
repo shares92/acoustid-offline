@@ -59,10 +59,14 @@ version = "0.0.1"
 source = { editable = "importer" }
 dependencies = [
     { name = "acoustid-offline-shared" },
+    { name = "httpx" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "acoustid-offline-shared", editable = "shared" }]
+requires-dist = [
+    { name = "acoustid-offline-shared", editable = "shared" },
+    { name = "httpx", specifier = ">=0.28.1" },
+]
 
 [[package]]
 name = "acoustid-offline-shared"

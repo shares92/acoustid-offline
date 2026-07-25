@@ -2,7 +2,7 @@
 """Laedt die AcoustID-Dump-Fixtures fuer die Testsuite nach.
 
 Die Dateien liegen bewusst nicht im Repo (Lizenz CC BY-SA 3.0, Groesse) —
-siehe ``acoustid-dumps/README.md``. Dieses Skript beschafft genau die neun
+siehe ``acoustid-dumps/README.md``. Dieses Skript beschafft genau die zehn
 Referenzdateien reproduzierbar von data.acoustid.org.
 
 Nur Python-Stdlib, keine Abhaengigkeiten:
@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-BASE_URL = "https://data.acoustid.org/2026/2026-07/"
+BASE_URL = "https://data.acoustid.org/"
 
 DEFAULT_DEST = Path(__file__).resolve().parent / "acoustid-dumps"
 
@@ -35,8 +35,13 @@ TIMEOUT_S = 120
 EMPTY_GZ_SIZE = 23
 
 # Dateiname -> erwartete Groesse in Byte (Referenzstand 2026-07-25; die
-# Tagesdateien sind upstream unveraenderlich).
+# Tagesdateien sind upstream unveraenderlich). Die URL ergibt sich aus dem
+# Namen: <BASE_URL>/<YYYY>/<YYYY-MM>/<name>.
 FIXTURES: dict[str, int] = {
+    # Alt-Epoche: bis 2024-12-04 liegt ueber dem JSON zusaetzlich das
+    # Text-Escaping von COPY (Phase 6). 85 der 11.677 Zeilen sind ohne
+    # Unescape kein gueltiges JSON — der einzige Fixture-Beleg dafuer.
+    "2011-08-19-meta-update.jsonl.gz": 423_795,
     "2026-07-22-fingerprint-update.jsonl.gz": 8_925_088,
     "2026-07-22-meta-update.jsonl.gz": 169_027,
     "2026-07-22-track-update.jsonl.gz": 53_159,
@@ -82,6 +87,12 @@ def download(url: str, target: Path) -> None:
     part.replace(target)
 
 
+def fixture_url(name: str) -> str:
+    """URL einer Fixture: ``<BASE_URL>/<YYYY>/<YYYY-MM>/<name>``."""
+    year, month = name[:4], name[:7]
+    return f"{BASE_URL.rstrip('/')}/{year}/{month}/{name}"
+
+
 def fetch_one(name: str, expected: int, dest: Path, force: bool) -> tuple[bool, str]:
     """Beschafft eine Fixture. Rueckgabe: (Erfolg, Statuszeile)."""
     target = dest / name
@@ -91,7 +102,7 @@ def fetch_one(name: str, expected: int, dest: Path, force: bool) -> tuple[bool, 
             return False, f"vorhanden, aber unbrauchbar ({problem}) — mit --force neu laden"
         return True, f"vorhanden ({target.stat().st_size:,} Byte)"
 
-    url = BASE_URL + name
+    url = fixture_url(name)
     try:
         download(url, target)
     except (urllib.error.URLError, OSError) as exc:
@@ -138,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.list:
         for name, expected in FIXTURES.items():
-            print(f"{BASE_URL + name}  ({expected:,} Byte)")
+            print(f"{fixture_url(name)}  ({expected:,} Byte)")
         return 0
 
     dest: Path = args.dest

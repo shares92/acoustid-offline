@@ -12,7 +12,12 @@ version = "0.0.1"
 description = "Delta-Importer und Index-Feed von acoustid-offline"
 requires-python = ">=3.14"
 license = "MIT"
-dependencies = ["acoustid-offline-shared"]
+dependencies = [
+    "acoustid-offline-shared",
+    # Delta-Download (Phase 6): Streaming-GET mit Range-Resume und sauberen
+    # Timeouts. Dieselbe Bibliothek wie im Index-Client des shared-Pakets.
+    "httpx>=0.28.1",
+]
 
 [tool.setuptools]
 # Neue Unterpakete unterhalb von app/ hier ergaenzen.

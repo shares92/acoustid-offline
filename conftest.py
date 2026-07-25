@@ -26,6 +26,11 @@ Alternativ ueber die Umgebungsvariable ``ACOUSTID_INTEGRATION_TESTS``
 (gleiche Werte). Bewusst ohne `AOFF_`-Praefix: das sind Bootstrap-Variablen
 der Anwendung, deren Satz gegen `.env.example` geprueft wird.
 
+Davon unabhaengig gibt es den Marker ``network`` (seit Phase 6): Tests, die
+das **echte** Internet brauchen (data.acoustid.org). Sie sind per Vorgabe
+abgewaehlt — mit Begruendung im Report — und laufen nur mit ``--network``
+bzw. ``ACOUSTID_NETWORK_TESTS=1``; in der CI laufen sie nie.
+
 Die Zugaenge kommen aus denselben `AOFF_`-Variablen wie im Betrieb
 (`shared.env.EnvSettings`); fuer den lokalen Lauf gegen Compose siehe
 `tests/docker-compose.test.yml`.
@@ -51,13 +56,16 @@ import pytest  # noqa: E402  (erst nach der sys.path-Korrektur importieren)
 
 MARKER = "integration"
 INDEX_MARKER = "index"
+NETWORK_MARKER = "network"
 ENV_SWITCH = "ACOUSTID_INTEGRATION_TESTS"
+NETWORK_SWITCH = "ACOUSTID_NETWORK_TESTS"
 MODES = ("auto", "require", "off")
 
 #: Menschenlesbare Namen der Dienste (fuer Meldungen im Report).
 SERVICES = {"db": "Postgres", INDEX_MARKER: "acoustid-index"}
 
 _STATUS_KEY = pytest.StashKey[str]()
+_NETWORK_KEY = pytest.StashKey[str]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -68,6 +76,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help=(
             "Integrationstests: auto (Default, laufen wenn der jeweilige Dienst "
             f"erreichbar ist), require (erzwingen) oder off. Auch ueber {ENV_SWITCH} setzbar."
+        ),
+    )
+    parser.addoption(
+        "--network",
+        action="store_true",
+        default=os.environ.get(NETWORK_SWITCH, "").strip().lower() in ("1", "true", "yes"),
+        help=(
+            f"Tests mit dem Marker '{NETWORK_MARKER}' mitlaufen lassen (echtes Netz, "
+            f"data.acoustid.org). Auch ueber {NETWORK_SWITCH}=1 setzbar."
         ),
     )
 
@@ -126,6 +143,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     # trylast: erst greift pytests eigene `-m`-Auswahl, dann diese. Sonst
     # wuerden wir Dienste anproben, die durch `-m` ohnehin schon draussen
     # sind (z. B. `-m "integration and index"` ohne Postgres).
+    _select_network_tests(config, items)
+
     mode = config.getoption("--integration")
     marked = [item for item in items if item.get_closest_marker(MARKER)]
     if not marked:
@@ -164,11 +183,29 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if item not in deselected]
 
 
+def _select_network_tests(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Netz-Tests abwaehlen, solange ``--network`` nicht gesetzt ist."""
+    if config.getoption("--network"):
+        return
+    marked = [item for item in items if item.get_closest_marker(NETWORK_MARKER)]
+    if not marked:
+        return
+    config.stash[_NETWORK_KEY] = (
+        f"{len(marked)}x abgewaehlt (echtes Netz; mit --network bzw. {NETWORK_SWITCH}=1 laufen sie)"
+    )
+    config.hook.pytest_deselected(items=marked)
+    items[:] = [item for item in items if item not in marked]
+
+
 def pytest_report_header(config: pytest.Config) -> str:
-    return f"integration: Modus {config.getoption('--integration')}"
+    network = "an" if config.getoption("--network") else "aus"
+    return f"integration: Modus {config.getoption('--integration')}; network: {network}"
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     status = terminalreporter.config.stash.get(_STATUS_KEY, None)
     if status is not None:
         terminalreporter.write_line(f"integration: {status}")
+    network = terminalreporter.config.stash.get(_NETWORK_KEY, None)
+    if network is not None:
+        terminalreporter.write_line(f"network: {network}")
