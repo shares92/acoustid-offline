@@ -15,8 +15,8 @@ Admin-UI (Phasen 23–27): Designpaket vollständig und abgenommen —
 Prototyp verifiziert (initialisiert sauber, Zustände per
 Prototyp-Steuerung durchschaltbar, Responsive-Breakpoint greift, keine
 Konsolenfehler). Der Design-Blocker ist damit aufgehoben; gebaut wird
-die UI weiterhin erst in ihren Phasen. Offen: ob das Designpaket ins
-Repo wandert (z. B. docs/design/).**
+die UI weiterhin erst in ihren Phasen. Das Paket liegt versioniert
+unter docs/design/ (Betreiber-Entscheid 2026-07-25).**
 
 ## Arbeitsregeln
 

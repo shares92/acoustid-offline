@@ -1,0 +1,1352 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>acoustid-offline — Admin</title>
+<style>
+:root,body[data-ao-theme="dark"]{color-scheme:dark;--bg:oklch(0.18 0.008 250);--surface:oklch(0.225 0.009 250);--surface-2:oklch(0.27 0.010 250);--line:oklch(0.315 0.012 250);--line-2:oklch(0.375 0.013 250);--line-3:oklch(0.43 0.014 250);--txt-4:oklch(0.52 0.012 250);--txt-3:oklch(0.60 0.012 250);--txt-2:oklch(0.69 0.012 250);--txt-1:oklch(0.80 0.010 250);--txt:oklch(0.94 0.005 250);--on-acc:oklch(0.17 0.02 250);--scrim:oklch(0.10 0.005 250 / 0.66);--shadow:oklch(0.08 0.01 250 / 0.55);--header-bg:oklch(0.195 0.008 250 / 0.94);--proto-bg:oklch(0.155 0.008 250 / 0.97);--focus:oklch(0.40 0.06 240 / 0.28);--acc-tint:oklch(0.24 0.022 240);--acc-line:oklch(0.40 0.055 240);--acc-line-2:oklch(0.62 0.105 240);--acc-fg:oklch(0.72 0.11 240);--acc-solid:oklch(0.65 0.115 240);--acc-solid-h:oklch(0.72 0.12 240);--link:oklch(0.74 0.10 240);--link-h:oklch(0.83 0.11 240);--ok-tint:oklch(0.25 0.032 155);--ok-tint-h:oklch(0.30 0.045 155);--ok-line:oklch(0.44 0.075 155);--ok-fg:oklch(0.75 0.13 155);--warn-tint:oklch(0.25 0.029 82);--warn-line:oklch(0.41 0.055 82);--warn-fg:oklch(0.80 0.12 82);--warn-fg-2:oklch(0.80 0.030 82);--err-tint:oklch(0.235 0.032 27);--err-tint-h:oklch(0.30 0.050 27);--err-line:oklch(0.44 0.080 27);--err-fg:oklch(0.74 0.145 27);--err-fg-2:oklch(0.80 0.030 27);--err-solid:oklch(0.46 0.14 27);--on-err:oklch(0.97 0.01 27)}
+body[data-ao-theme="light"]{color-scheme:light;--bg:oklch(0.965 0.002 250);--surface:oklch(1 0 0);--surface-2:oklch(0.945 0.003 250);--line:oklch(0.900 0.004 250);--line-2:oklch(0.850 0.005 250);--line-3:oklch(0.775 0.007 250);--txt-4:oklch(0.630 0.010 250);--txt-3:oklch(0.545 0.011 250);--txt-2:oklch(0.460 0.012 250);--txt-1:oklch(0.340 0.010 250);--txt:oklch(0.215 0.008 250);--on-acc:oklch(0.99 0.002 250);--scrim:oklch(0.45 0.012 250 / 0.42);--shadow:oklch(0.50 0.02 250 / 0.16);--header-bg:oklch(0.975 0.002 250 / 0.92);--proto-bg:oklch(0.99 0.002 250 / 0.97);--focus:oklch(0.62 0.13 250 / 0.24);--acc-tint:oklch(0.960 0.020 250);--acc-line:oklch(0.830 0.055 250);--acc-line-2:oklch(0.640 0.130 250);--acc-fg:oklch(0.510 0.150 250);--acc-solid:oklch(0.545 0.155 250);--acc-solid-h:oklch(0.480 0.160 250);--link:oklch(0.505 0.150 250);--link-h:oklch(0.400 0.145 250);--ok-tint:oklch(0.955 0.030 155);--ok-tint-h:oklch(0.925 0.045 155);--ok-line:oklch(0.810 0.070 155);--ok-fg:oklch(0.480 0.130 155);--warn-tint:oklch(0.960 0.045 90);--warn-line:oklch(0.815 0.075 85);--warn-fg:oklch(0.500 0.115 70);--warn-fg-2:oklch(0.430 0.045 70);--err-tint:oklch(0.960 0.028 27);--err-tint-h:oklch(0.925 0.045 27);--err-line:oklch(0.815 0.075 27);--err-fg:oklch(0.495 0.175 27);--err-fg-2:oklch(0.440 0.055 27);--err-solid:oklch(0.520 0.190 27);--on-err:oklch(0.99 0.005 27)}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI","Helvetica Neue",Arial,sans-serif;font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;color:inherit;font-variant-numeric:tabular-nums}
+button{cursor:pointer}
+a{color:var(--link);text-decoration:none}
+a:hover{color:var(--link-h);text-decoration:underline}
+table{border-collapse:collapse;width:100%}
+h1,h2,h3,p{margin:0}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:6px;border:2px solid var(--bg)}
+@keyframes ao-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.78)}}
+@keyframes ao-stripe{from{background-position:0 0}to{background-position:22px 0}}
+@keyframes ao-fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@media (max-width:900px){
+ [data-r="shell"]{flex-direction:column!important}
+ [data-r="nav"]{width:100%!important;min-height:0!important;border-right:0!important;border-bottom:1px solid var(--line)!important}
+ [data-r="navlist"]{flex-direction:row!important;overflow-x:auto!important;padding:0 8px 8px!important}
+ [data-r="navlist"] button{white-space:nowrap!important;border-left:0!important;border-bottom:2px solid transparent!important}
+ [data-r="navfoot"]{border-top:0!important}
+ [data-r="hide-sm"]{display:none!important}
+ [data-r="tap"]{min-height:44px!important}
+}
+</style>
+</helmet>
+
+<sc-if value="{{ showLogin }}" hint-placeholder-val="{{ false }}">
+<div data-screen-label="Login" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(120% 80% at 50% 0%,var(--surface) 0%,var(--bg) 70%)">
+  <div style="width:100%;max-width:392px;display:flex;flex-direction:column;gap:14px">
+    <div style="display:flex;align-items:baseline;gap:8px;padding-left:2px">
+      <span style="font:600 15px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;letter-spacing:-0.01em">acoustid-offline</span>
+      <span style="font:400 11px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">0.9.4</span>
+    </div>
+    <form onSubmit="{{ doLogin }}" style="background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:22px;display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <h1 style="font:600 15px/1.3 ui-sans-serif,system-ui,sans-serif">Admin-Anmeldung</h1>
+        <p style="color:var(--txt-3);font-size:12px">Benutzer <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-1)">admin</span> · Session-Cookie, 12 Std. gültig</p>
+      </div>
+
+      <sc-if value="{{ loginFirstRun }}" hint-placeholder-val="{{ false }}">
+        <div style="border:1px solid var(--acc-line);background:var(--surface-2);border-radius:4px;padding:11px 12px;display:flex;flex-direction:column;gap:6px">
+          <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--acc-fg)">Erster Start</span>
+          <p style="font-size:12px;color:var(--txt-1)">Das Erst-Passwort steht im Container-Log des Wächters.</p>
+          <code style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px;color:var(--txt-1);background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:7px 9px;overflow-x:auto;white-space:nowrap">docker logs acoustid-waechter | grep Erst-Passwort</code>
+        </div>
+      </sc-if>
+
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <label for="pw" style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-3)">Passwort</label>
+        <input id="pw" type="password" value="{{ pw }}" onChange="{{ setPw }}" placeholder="••••••••••••" autoComplete="current-password" data-r="tap" style="width:100%;height:38px;padding:0 11px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none;border-color:{{ loginBorder }}" style-focus="border-color:var(--acc-fg);box-shadow:0 0 0 3px var(--focus)" />
+      </div>
+
+      <sc-if value="{{ loginError }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;gap:9px;align-items:flex-start;border-left:2px solid var(--err-fg);background:var(--err-tint);padding:9px 11px;border-radius:0 3px 3px 0">
+          <span style="font-size:12.5px;color:var(--err-fg)">Passwort falsch. Versuch {{ loginAttempts }} von 5.</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{ loginRateLimited }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;flex-direction:column;gap:4px;border-left:2px solid var(--warn-fg);background:var(--warn-tint);padding:9px 11px;border-radius:0 3px 3px 0">
+          <span style="font:600 12.5px/1.4 ui-sans-serif,system-ui,sans-serif;color:var(--warn-fg)">Zu viele Fehlversuche</span>
+          <span style="font-size:12px;color:var(--warn-fg-2)">Anmeldung für diese IP gesperrt. Nächster Versuch in <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">04:32</span> min.</span>
+        </div>
+      </sc-if>
+
+      <button type="submit" data-r="tap" style="display:flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--acc-solid);color:var(--on-acc);font:600 13px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--acc-solid-h)">Anmelden</button>
+    </form>
+    <p style="font-size:11.5px;color:var(--txt-4);padding-left:2px">Läuft im Wächter-Container. Die Anmeldung weckt das Array nicht.</p>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ showApp }}" hint-placeholder-val="{{ true }}">
+<div data-r="shell" style="display:flex;min-height:100vh;align-items:stretch">
+
+  <aside data-r="nav" style="width:216px;flex:0 0 216px;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--line)">
+    <div style="padding:16px 16px 13px;display:flex;flex-direction:column;gap:2px">
+      <span style="font:600 13.5px/1.2 ui-monospace,'SF Mono',Menlo,Consolas,monospace;letter-spacing:-0.01em">acoustid-offline</span>
+      <span style="font:400 11px/1.2 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">Wächter-Admin · 0.9.4</span>
+    </div>
+    <nav data-r="navlist" style="display:flex;flex-direction:column;gap:1px;padding:4px 0;flex:1 1 auto">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="6">
+        <button type="button" onClick="{{ item.go }}" data-r="tap" style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:34px;padding:0 15px;border:0;border-left:2px solid transparent;background:transparent;color:var(--txt-2);font:500 13px/1 ui-sans-serif,system-ui,sans-serif;text-align:left;background:{{ item.bg }};color:{{ item.fg }};border-left-color:{{ item.bar }}" style-hover="background:var(--line);color:var(--txt)">
+          <span>{{ item.t }}</span>
+          <sc-if value="{{ item.count }}" hint-placeholder-val="{{ false }}">
+            <span style="font:600 10.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;padding:3px 5px;border-radius:2px;background:var(--line);color:var(--txt-2)">{{ item.count }}</span>
+          </sc-if>
+        </button>
+      </sc-for>
+    </nav>
+    <div data-r="navfoot" style="padding:10px 12px;border-top:1px solid var(--surface-2);display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;gap:0;border:1px solid var(--line);border-radius:3px;overflow:hidden">
+        <sc-for list="{{ themeOptions }}" as="o" hint-placeholder-count="3">
+          <button type="button" onClick="{{ o.onClick }}" title="{{ o.title }}" data-r="tap" style="flex:1 1 0;min-width:0;min-height:28px;padding:0 6px;border:0;background:transparent;color:var(--txt-4);font:600 11px/1 ui-sans-serif,system-ui,sans-serif;background:{{ o.bg }};color:{{ o.fg }}" style-hover="background:var(--surface-2)">{{ o.t }}</button>
+        </sc-for>
+      </div>
+      <button type="button" onClick="{{ askLogout }}" data-r="tap" style="display:flex;align-items:center;gap:8px;min-height:32px;padding:0 11px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-2);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="border-color:var(--line-3);color:var(--txt)">Abmelden</button>
+    </div>
+  </aside>
+
+  <div style="flex:1 1 auto;min-width:0;display:flex;flex-direction:column">
+
+    <header style="position:sticky;top:0;z-index:20;background:var(--header-bg);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:11px 22px">
+        <div style="display:flex;flex-direction:column;gap:1px;min-width:0">
+          <h1 style="font:600 15px/1.25 ui-sans-serif,system-ui,sans-serif">{{ pageTitle }}</h1>
+          <span data-r="hide-sm" style="font-size:11.5px;color:var(--txt-4);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">{{ pagePath }}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span data-r="hide-sm" style="font:400 11px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">{{ pollNote }}</span>
+          <div style="display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px 0 9px;border-radius:3px;border:1px solid var(--line-2);background:var(--surface-2);border-color:{{ st.border }};background:{{ st.tint }}">
+            <span style="width:7px;height:7px;border-radius:50%;background:var(--txt-3);background:{{ st.color }};animation:{{ st.anim }}"></span>
+            <span style="font:600 11.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.03em;color:var(--txt);color:{{ st.color }}">{{ st.label }}</span>
+          </div>
+        </div>
+      </div>
+      <sc-if value="{{ hasSideBadges }}" hint-placeholder-val="{{ false }}">
+        <div data-r="scrollx" style="display:flex;align-items:center;gap:7px;padding:0 22px 10px;flex-wrap:wrap;min-width:0">
+          <sc-for list="{{ sideBadges }}" as="b" hint-placeholder-count="2">
+            <span style="display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:3px;border:1px solid var(--line-2);background:var(--surface-2);font:500 11.5px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap;border-color:{{ b.border }};background:{{ b.tint }};color:{{ b.color }}">
+              <span style="width:5px;height:5px;border-radius:50%;background:{{ b.color }};animation:{{ b.anim }}"></span>{{ b.t }}
+            </span>
+          </sc-for>
+        </div>
+      </sc-if>
+    </header>
+
+    <main style="flex:1 1 auto;padding:20px 22px 96px;max-width:1320px;width:100%">
+
+      <sc-if value="{{ isDash }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Dashboard" style="display:flex;flex-direction:column;gap:14px">
+
+        <section style="background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line-3);border-radius:4px;border-left-color:{{ st.color }}">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line)">
+            <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Stack-Zustand</span>
+            <span style="font:400 11px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--line-3)">{{ pollNote }}</span>
+          </div>
+          <div style="padding:18px;display:flex;flex-direction:column;gap:16px">
+            <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">
+              <div style="display:inline-flex;align-items:center;gap:9px;height:34px;padding:0 14px 0 12px;border-radius:3px;border:1px solid var(--line-2);background:var(--surface-2);border-color:{{ st.border }};background:{{ st.tint }}">
+                <span style="width:9px;height:9px;border-radius:50%;background:var(--txt-3);background:{{ st.color }};animation:{{ st.anim }}"></span>
+                <span style="font:600 14px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.01em;color:{{ st.color }}">{{ st.label }}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:3px;min-width:220px;flex:1 1 260px">
+                <span style="font:600 15px/1.3 ui-sans-serif,system-ui,sans-serif;color:var(--txt)">{{ st.headline }}</span>
+                <span style="font-size:12.5px;color:var(--txt-2)">{{ st.sub }}</span>
+              </div>
+            </div>
+
+            <sc-if value="{{ st.isError }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid var(--err-line);background:var(--err-tint);border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:7px">
+                <span style="font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif;color:var(--err-fg)">Start fehlgeschlagen — Container <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">acoustid-index</span> unhealthy</span>
+                <code style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px;color:var(--err-fg-2);white-space:pre-wrap">healthcheck exit 1 nach 4 Versuchen · /data/index: input/output error</code>
+                <div style="display:flex;gap:14px;flex-wrap:wrap;padding-top:2px">
+                  <a href="#" onClick="{{ goLogs }}">Ereignis-Log öffnen</a>
+                  <a href="#" onClick="{{ goJobs }}">Letzte Läufe ansehen</a>
+                </div>
+              </div>
+            </sc-if>
+
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <sc-if value="{{ canWake }}" hint-placeholder-val="{{ true }}">
+                <button type="button" onClick="{{ askWake }}" data-r="tap" style="display:inline-flex;align-items:center;gap:8px;min-height:34px;padding:0 14px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--acc-solid);color:var(--on-acc);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--acc-solid-h)">Wecken<span style="font:500 10.5px/1 ui-sans-serif,system-ui,sans-serif;opacity:.72">weckt das Array</span></button>
+              </sc-if>
+              <sc-if value="{{ canSleep }}" hint-placeholder-val="{{ false }}">
+                <button type="button" onClick="{{ askSleep }}" data-r="tap" style="display:inline-flex;align-items:center;min-height:34px;padding:0 13px;border-radius:3px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--txt);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="border-color:var(--txt-4);background:var(--line)">Jetzt schlafen legen</button>
+              </sc-if>
+              <sc-if value="{{ canRestart }}" hint-placeholder-val="{{ false }}">
+                <button type="button" onClick="{{ askRestart }}" data-r="tap" style="display:inline-flex;align-items:center;min-height:34px;padding:0 13px;border-radius:3px;border:1px solid var(--err-line);background:var(--err-tint-h);color:var(--err-fg);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--err-tint-h)">Neu starten</button>
+              </sc-if>
+              <sc-if value="{{ wakeDisabled }}" hint-placeholder-val="{{ false }}">
+                <button type="button" disabled="{{ true }}" title="Der Stack läuft bereits — Wecken ist in diesem Zustand ohne Wirkung." data-r="tap" style="display:inline-flex;align-items:center;min-height:34px;padding:0 13px;border-radius:3px;border:1px dashed var(--line-2);background:transparent;color:var(--line-3);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif;cursor:not-allowed">Wecken</button>
+              </sc-if>
+              <sc-if value="{{ st.isBusy }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:12px;color:var(--txt-3)">Aktionen gesperrt, solange der Übergang läuft.</span>
+              </sc-if>
+            </div>
+          </div>
+        </section>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(288px,1fr));gap:14px">
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column">
+            <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Datenstand</span>
+              <a href="#" onClick="{{ goJobs }}" style="font-size:11.5px">Jobs</a>
+            </div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:11px">
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <span style="font-size:11.5px;color:var(--txt-3)">Letzte eingespielte Delta-Sequenz</span>
+                <span style="font:600 17px/1.15 ui-monospace,'SF Mono',Menlo,Consolas,monospace">#1 742 883</span>
+                <span style="font-size:12px;color:var(--txt-2)">24.07.2026, 03:14 · 42 Dateien, 1 284 402 Zeilen</span>
+              </div>
+              <div style="height:1px;background:var(--line)"></div>
+              <div style="display:flex;justify-content:space-between;gap:10px">
+                <span style="font-size:12.5px;color:var(--txt-2)">Nächster Update-Lauf</span>
+                <span style="font:500 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt)">heute 03:00</span>
+              </div>
+              <sc-if value="{{ lastRunOk }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;justify-content:space-between;gap:10px;align-items:center">
+                  <span style="font-size:12.5px;color:var(--txt-2)">Letzter Lauf</span>
+                  <span style="display:inline-flex;align-items:center;gap:6px;font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif;color:var(--ok-fg)"><span style="width:5px;height:5px;border-radius:50%;background:var(--ok-fg)"></span>ok · 14 min 22 s</span>
+                </div>
+              </sc-if>
+              <sc-if value="{{ lastRunFailed }}" hint-placeholder-val="{{ false }}">
+                <div style="border:1px solid var(--err-line);background:var(--err-tint);border-radius:3px;padding:10px 11px;display:flex;flex-direction:column;gap:5px">
+                  <span style="display:inline-flex;align-items:center;gap:7px;font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif;color:var(--err-fg)"><span style="width:5px;height:5px;border-radius:50%;background:var(--err-fg)"></span>Letzter Lauf fehlgeschlagen</span>
+                  <span style="font-size:12px;color:var(--err-fg-2)">Update 25.07.2026 03:00 · Abbruch nach 2 min 11 s · Datenstand unverändert</span>
+                  <a href="#" onClick="{{ goJobs }}" style="font-size:12px">Fehlermeldung in der Historie öffnen</a>
+                </div>
+              </sc-if>
+            </div>
+          </section>
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column">
+            <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px">
+              <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Aktivität</span>
+              <a href="#" onClick="{{ goStats }}" style="font-size:11.5px">Statistiken</a>
+            </div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:11px">
+              <div style="display:flex;gap:20px;flex-wrap:wrap">
+                <div style="display:flex;flex-direction:column;gap:1px">
+                  <span style="font-size:11.5px;color:var(--txt-3)">Lookups heute</span>
+                  <span style="font:600 20px/1.1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">1 284</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:1px">
+                  <span style="font-size:11.5px;color:var(--txt-3)">7 Tage</span>
+                  <span style="font:600 20px/1.1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-1)">9 137</span>
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;justify-content:space-between"><span style="font-size:12px;color:var(--txt-2)">Cache-Hit-Quote</span><span style="font:600 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">78,4 %</span></div>
+                <div style="height:5px;border-radius:3px;background:var(--line);overflow:hidden"><div style="height:100%;width:78.4%;background:var(--acc-solid);border-radius:3px"></div></div>
+              </div>
+              <div style="height:1px;background:var(--line)"></div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <span style="font-size:11.5px;color:var(--txt-3)">Submissions</span>
+                <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px">
+                  <span>lokal <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-weight:600">63</span></span>
+                  <span style="color:var(--txt-2)">weitergeleitet <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-weight:600;color:var(--txt)">41</span></span>
+                  <span style="color:var(--txt-2)">wartend <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-weight:600;color:{{ queueColor }}">{{ queueN }}</span></span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column">
+            <div style="padding:11px 16px;border-bottom:1px solid var(--line)">
+              <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">System</span>
+            </div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;color:var(--txt-2)">Array frei</span><span style="font:600 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:{{ diskColor }}">{{ diskFree }}</span></div>
+                <div style="height:5px;border-radius:3px;background:var(--line);overflow:hidden"><div style="height:100%;border-radius:3px;width:{{ diskPct }};background:{{ diskColor }}"></div></div>
+                <span style="font-size:11px;color:var(--txt-4)">Warnschwelle 500 GB · Mindestreserve 300 GB</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;color:var(--txt-2)">Cache-Volume frei</span><span style="font:600 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">21,8 GB / 40 GB</span></div>
+                <div style="height:5px;border-radius:3px;background:var(--line);overflow:hidden"><div style="height:100%;width:45.5%;background:var(--txt-3);border-radius:3px"></div></div>
+              </div>
+              <div style="height:1px;background:var(--line)"></div>
+              <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:12.5px;color:var(--txt-2)">Lookup-Cache</span><span style="font:500 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">1,9 GB · 412 883 Einträge</span></div>
+              <div style="display:flex;justify-content:space-between;gap:10px"><span style="font-size:12.5px;color:var(--txt-2)">Version</span><span style="font:500 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">0.9.4 · Wächter 0.9.4</span></div>
+            </div>
+          </section>
+        </div>
+
+        <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+          <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Letzte Ereignisse</span>
+            <a href="#" onClick="{{ goLogs }}" style="font-size:11.5px">Alle Ereignisse</a>
+          </div>
+          <div data-r="scrollx" style="overflow-x:auto;min-width:0">
+            <sc-for list="{{ recentLogs }}" as="e" hint-placeholder-count="8">
+              <div style="display:flex;align-items:baseline;gap:12px;padding:7px 16px;border-bottom:1px solid var(--line);min-width:520px">
+                <span style="flex:0 0 84px;font:400 11.5px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">{{ e.time }}</span>
+                <span style="flex:0 0 48px;font:600 10px/1.6 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:{{ e.color }}">{{ e.level }}</span>
+                <span style="flex:0 0 68px;font:400 11.5px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-3)">{{ e.src }}</span>
+                <span style="flex:1 1 auto;font-size:12.5px;color:var(--txt-1);text-wrap:pretty">{{ e.msg }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isConfig }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Konfiguration" style="display:flex;flex-direction:column;gap:14px;max-width:820px">
+        <p style="font-size:12.5px;color:var(--txt-3);max-width:66ch;text-wrap:pretty">Gespeichert wird pro Gruppe — jede Gruppe ist ein eigenes Formular und schreibt nur ihren Abschnitt in <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-1)">config.yaml</span>. Felder mit der Markierung <span style="display:inline-flex;align-items:center;height:17px;padding:0 5px;border-radius:2px;border:1px solid var(--warn-line);color:var(--warn-fg);font:600 9.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.06em;text-transform:uppercase;vertical-align:middle">API-Reload</span> lösen beim Speichern einen Reload der API-Konfiguration aus. Das Array wird dabei nicht geweckt.</p>
+
+        <sc-for list="{{ configGroups }}" as="g" hint-placeholder-count="4">
+          <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+            <div style="padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div style="display:flex;flex-direction:column;gap:1px">
+                <span style="font:600 13px/1.3 ui-sans-serif,system-ui,sans-serif">{{ g.title }}</span>
+                <span style="font-size:11.5px;color:var(--txt-4)">{{ g.note }}</span>
+              </div>
+              <sc-if value="{{ g.dirty }}" hint-placeholder-val="{{ false }}">
+                <span style="display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border-radius:2px;border:1px solid var(--warn-line);background:var(--warn-tint);color:var(--warn-fg);font:600 11px/1 ui-sans-serif,system-ui,sans-serif"><span style="width:5px;height:5px;border-radius:50%;background:var(--warn-fg)"></span>ungespeichert</span>
+              </sc-if>
+            </div>
+            <div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">
+              <sc-for list="{{ g.fields }}" as="f" hint-placeholder-count="3">
+                <div style="display:flex;flex-direction:column;gap:5px;grid-column:{{ f.span }}">
+                  <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+                    <label style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.07em;text-transform:uppercase;color:var(--txt-3)">{{ f.label }}</label>
+                    <sc-if value="{{ f.reload }}" hint-placeholder-val="{{ false }}">
+                      <span style="display:inline-flex;align-items:center;height:16px;padding:0 5px;border-radius:2px;border:1px solid var(--warn-line);color:var(--warn-fg);font:600 9.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.06em;text-transform:uppercase">API-Reload</span>
+                    </sc-if>
+                  </div>
+
+                  <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}">
+                    <input type="text" value="{{ f.value }}" onChange="{{ f.onChange }}" placeholder="{{ f.ph }}" data-r="tap" style="width:100%;height:34px;padding:0 10px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none;border-color:{{ f.border }}" style-focus="border-color:var(--acc-fg);box-shadow:0 0 0 3px var(--focus)" />
+                  </sc-if>
+                  <sc-if value="{{ f.isSelect }}" hint-placeholder-val="{{ false }}">
+                    <select value="{{ f.value }}" onChange="{{ f.onChange }}" data-r="tap" style="width:100%;height:34px;padding:0 8px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none">
+                      <sc-for list="{{ f.options }}" as="o" hint-placeholder-count="3">
+                        <option value="{{ o.v }}">{{ o.t }}</option>
+                      </sc-for>
+                    </select>
+                  </sc-if>
+                  <sc-if value="{{ f.isToggle }}" hint-placeholder-val="{{ false }}">
+                    <button type="button" onClick="{{ f.onToggle }}" data-r="tap" style="display:inline-flex;align-items:center;gap:9px;min-height:34px;padding:0 11px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);font:500 13px/1 ui-sans-serif,system-ui,sans-serif;text-align:left">
+                      <span style="width:30px;height:17px;border-radius:9px;padding:2px;background:var(--line-2);display:inline-flex;background:{{ f.trackBg }};justify-content:{{ f.knobPos }}"><span style="width:13px;height:13px;border-radius:50%;background:var(--txt);display:block"></span></span>
+                      <span>{{ f.toggleLabel }}</span>
+                    </button>
+                  </sc-if>
+                  <sc-if value="{{ f.isSecret }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+                      <sc-if value="{{ f.secretLocked }}" hint-placeholder-val="{{ true }}">
+                        <span style="flex:1 1 150px;min-width:0;display:inline-flex;align-items:center;height:34px;padding:0 10px;border-radius:3px;border:1px dashed var(--line-2);background:var(--bg);color:var(--txt-4);font:400 12.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">•••••••••••••• gesetzt</span>
+                        <button type="button" onClick="{{ f.onUnlock }}" data-r="tap" style="min-height:34px;padding:0 12px;border-radius:3px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--txt);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="border-color:var(--txt-4)">Ändern</button>
+                      </sc-if>
+                      <sc-if value="{{ f.secretOpen }}" hint-placeholder-val="{{ false }}">
+                        <input type="password" placeholder="Neuer Wert" onChange="{{ f.onChange }}" data-r="tap" style="flex:1 1 150px;min-width:0;height:34px;padding:0 10px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--bg);color:var(--txt);font-size:13px;outline:none" />
+                        <button type="button" onClick="{{ f.onUnlock }}" data-r="tap" style="min-height:34px;padding:0 12px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-2);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif">Abbrechen</button>
+                      </sc-if>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ f.isAction }}" hint-placeholder-val="{{ false }}">
+                    <button type="button" onClick="{{ f.onAction }}" data-r="tap" style="align-self:flex-start;display:inline-flex;align-items:center;min-height:34px;padding:0 13px;border-radius:3px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--txt);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ f.actionBorder }};color:{{ f.actionColor }}" style-hover="background:var(--line)">{{ f.actionLabel }}</button>
+                  </sc-if>
+
+                  <sc-if value="{{ f.error }}" hint-placeholder-val="{{ false }}">
+                    <span style="font-size:11.5px;color:var(--err-fg)">{{ f.error }}</span>
+                  </sc-if>
+                  <sc-if value="{{ f.help }}" hint-placeholder-val="{{ true }}">
+                    <span style="font-size:11.5px;color:var(--txt-4);text-wrap:pretty">{{ f.help }}</span>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+            <div style="padding:11px 16px;border-top:1px solid var(--surface-2);display:flex;align-items:center;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+              <sc-if value="{{ g.dirty }}" hint-placeholder-val="{{ false }}">
+                <button type="button" onClick="{{ g.onReset }}" data-r="tap" style="min-height:32px;padding:0 12px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-2);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif">Verwerfen</button>
+              </sc-if>
+              <button type="button" onClick="{{ g.onSave }}" disabled="{{ g.clean }}" data-r="tap" style="min-height:32px;padding:0 14px;border-radius:3px;border:1px solid var(--line-2);background:var(--surface-2);color:var(--txt-4);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif;cursor:not-allowed;border-color:{{ g.saveBorder }};background:{{ g.saveBg }};color:{{ g.saveFg }};cursor:{{ g.saveCursor }}">{{ g.saveLabel }}</button>
+            </div>
+          </section>
+        </sc-for>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isKeys }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="API-Keys" style="display:flex;flex-direction:column;gap:14px;max-width:1000px">
+        <sc-if value="{{ authNone }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;gap:10px;align-items:flex-start;border:1px solid var(--acc-line);background:var(--surface);border-radius:4px;padding:12px 14px">
+            <span style="width:6px;height:6px;border-radius:50%;background:var(--acc-fg);margin-top:6px;flex:0 0 auto"></span>
+            <p style="font-size:12.5px;color:var(--txt-1);text-wrap:pretty">Auth-Modus steht auf <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">none</span> — Keys werden derzeit nicht geprüft. Du kannst sie trotzdem anlegen und vorbereiten; sie greifen, sobald du in der <a href="#" onClick="{{ goConfig }}">Konfiguration</a> auf <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">apikey</span> umstellst.</p>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ newKey }}" hint-placeholder-val="{{ false }}">
+          <div style="border:1px solid var(--ok-line);background:var(--ok-tint);border-radius:4px;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span style="font:600 12.5px/1.3 ui-sans-serif,system-ui,sans-serif;color:var(--ok-fg)">Key „{{ newKey.label }}“ erzeugt</span>
+              <span style="font-size:12px;color:var(--ok-fg)">Einmalige Anzeige — nach dem Verlassen der Seite ist der Key nur noch maskiert sichtbar.</span>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <code style="flex:1 1 260px;min-width:0;overflow-x:auto;white-space:nowrap;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:9px 11px;color:var(--txt)">{{ newKey.plain }}</code>
+              <button type="button" onClick="{{ copyKey }}" data-r="tap" style="min-height:36px;padding:0 13px;border-radius:3px;border:1px solid var(--ok-line);background:var(--ok-tint-h);color:var(--ok-fg);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif">Kopieren</button>
+              <button type="button" onClick="{{ dismissKey }}" data-r="tap" style="min-height:36px;padding:0 13px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-2);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif">Verstanden</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+          <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Keys ({{ keyCount }})</span>
+            <button type="button" onClick="{{ openKeyDialog }}" data-r="tap" style="min-height:32px;padding:0 13px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--acc-solid);color:var(--on-acc);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--acc-solid-h)">Neuen Key erzeugen</button>
+          </div>
+
+          <sc-if value="{{ keysEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:44px 20px;display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center">
+              <div style="width:38px;height:38px;border-radius:3px;border:1px dashed var(--line-2);background:repeating-linear-gradient(135deg,var(--surface-2) 0 5px,var(--surface) 5px 10px)"></div>
+              <span style="font:600 13px/1.3 ui-sans-serif,system-ui,sans-serif">Noch keine API-Keys</span>
+              <p style="font-size:12.5px;color:var(--txt-3);max-width:44ch;text-wrap:pretty">Lege einen Key pro Client an (Navidrome, beets, Skript) — so kannst du einzelne Clients später sperren, ohne alle anderen zu stören.</p>
+              <button type="button" onClick="{{ openKeyDialog }}" data-r="tap" style="margin-top:4px;min-height:34px;padding:0 13px;border-radius:3px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--txt);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif">Ersten Key erzeugen</button>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ keysPresent }}" hint-placeholder-val="{{ true }}">
+            <div data-r="scrollx" style="overflow-x:auto;min-width:0">
+              <table style="min-width:760px">
+                <thead>
+                  <tr>
+                    <th style="text-align:left;padding:9px 16px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Label</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Key</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Status</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Erstellt</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Zuletzt benutzt</th>
+                    <th style="text-align:right;padding:9px 16px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Aktionen</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ keys }}" as="k" hint-placeholder-count="3">
+                    <tr>
+                      <td style="padding:11px 16px;border-bottom:1px solid var(--line);font:500 13px/1.4 ui-sans-serif,system-ui,sans-serif">{{ k.label }}</td>
+                      <td style="padding:11px 12px;border-bottom:1px solid var(--line);font:400 12px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2)">{{ k.mask }}</td>
+                      <td style="padding:11px 12px;border-bottom:1px solid var(--line)">
+                        <span style="display:inline-flex;align-items:center;gap:6px;height:21px;padding:0 8px;border-radius:2px;border:1px solid var(--line-2);font:600 11px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ k.border }};background:{{ k.tint }};color:{{ k.color }}"><span style="width:5px;height:5px;border-radius:50%;background:{{ k.color }}"></span>{{ k.status }}</span>
+                      </td>
+                      <td style="padding:11px 12px;border-bottom:1px solid var(--line);font:400 12px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2)">{{ k.created }}</td>
+                      <td style="padding:11px 12px;border-bottom:1px solid var(--line);font:400 12px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2)">{{ k.used }}</td>
+                      <td style="padding:11px 16px;border-bottom:1px solid var(--line)">
+                        <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+                          <button type="button" onClick="{{ k.onToggle }}" data-r="tap" style="min-height:28px;padding:0 10px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-1);font:500 12px/1 ui-sans-serif,system-ui,sans-serif" style-hover="border-color:var(--line-3);background:var(--surface-2)">{{ k.toggleLabel }}</button>
+                          <button type="button" onClick="{{ k.onDelete }}" data-r="tap" style="min-height:28px;padding:0 10px;border-radius:3px;border:1px solid var(--err-line);background:transparent;color:var(--err-fg);font:500 12px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--err-tint-h)">Löschen</button>
+                        </div>
+                      </td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </sc-if>
+        </section>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isJobs }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Updates und Jobs" style="display:flex;flex-direction:column;gap:14px;max-width:1060px">
+
+        <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+          <div style="padding:11px 16px;border-bottom:1px solid var(--line)">
+            <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Manuelle Aktionen</span>
+          </div>
+          <div style="padding:16px;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px">
+            <sc-for list="{{ jobActions }}" as="a" hint-placeholder-count="3">
+              <div style="border:1px solid var(--line);border-radius:4px;padding:13px;display:flex;flex-direction:column;gap:9px;background:var(--surface)">
+                <div style="display:flex;flex-direction:column;gap:3px">
+                  <span style="font:600 13px/1.3 ui-sans-serif,system-ui,sans-serif">{{ a.title }}</span>
+                  <span style="font-size:11.5px;color:var(--txt-3);text-wrap:pretty">{{ a.note }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:auto">
+                  <button type="button" onClick="{{ a.onRun }}" disabled="{{ a.disabled }}" title="{{ a.title2 }}" data-r="tap" style="min-height:32px;padding:0 12px;border-radius:3px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--txt);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ a.border }};background:{{ a.bg }};color:{{ a.fg }};cursor:{{ a.cursor }}" style-hover="border-color:var(--txt-4)">{{ a.cta }}</button>
+                  <sc-if value="{{ a.wakes }}" hint-placeholder-val="{{ true }}">
+                    <span style="display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:2px;border:1px solid var(--warn-line);color:var(--warn-fg);font:600 10px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.05em;text-transform:uppercase">weckt das Array</span>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+
+          <sc-if value="{{ jobRunning }}" hint-placeholder-val="{{ false }}">
+            <div style="margin:0 16px 16px;border:1px solid var(--acc-line);background:var(--surface);border-radius:4px;padding:14px 15px;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+                <div style="display:flex;align-items:center;gap:9px">
+                  <span style="width:8px;height:8px;border-radius:50%;background:var(--acc-fg);animation:ao-pulse 1.4s ease-in-out infinite"></span>
+                  <span style="font:600 13px/1 ui-sans-serif,system-ui,sans-serif">{{ job.title }}</span>
+                  <span style="font:400 11.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-3)">gestartet {{ job.started }} · Polling 5 s</span>
+                </div>
+                <button type="button" onClick="{{ askCancelJob }}" data-r="tap" style="min-height:30px;padding:0 11px;border-radius:3px;border:1px solid var(--err-line);background:transparent;color:var(--err-fg);font:500 12px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--err-tint-h)">Abbrechen</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;justify-content:space-between;gap:10px;font-size:12px">
+                  <span style="color:var(--txt-2)">{{ job.step }}</span>
+                  <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-weight:600">{{ job.pctLabel }}</span>
+                </div>
+                <div style="height:7px;border-radius:4px;background:var(--surface-2);overflow:hidden">
+                  <div style="height:100%;border-radius:4px;background:var(--acc-fg);background-image:linear-gradient(115deg,oklch(1 0 0 / 0.16) 25%,transparent 25%,transparent 50%,oklch(1 0 0 / 0.16) 50%,oklch(1 0 0 / 0.16) 75%,transparent 75%);background-size:22px 22px;animation:ao-stripe 0.9s linear infinite;width:{{ job.pctWidth }}"></div>
+                </div>
+                <span style="font:400 11.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">{{ job.detail }}</span>
+              </div>
+            </div>
+          </sc-if>
+        </section>
+
+        <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+          <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+            <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">Historie</span>
+            <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+              <select value="{{ jobFilterType }}" onChange="{{ setJobFilterType }}" data-r="tap" style="height:30px;padding:0 8px;border-radius:3px;border:1px solid var(--line-2);background:var(--bg);color:var(--txt-1);font-size:12.5px;outline:none">
+                <option value="alle">Typ: alle</option>
+                <option value="Update">Typ: Update</option>
+                <option value="Backup">Typ: Backup</option>
+              </select>
+              <select value="{{ jobFilterResult }}" onChange="{{ setJobFilterResult }}" data-r="tap" style="height:30px;padding:0 8px;border-radius:3px;border:1px solid var(--line-2);background:var(--bg);color:var(--txt-1);font-size:12.5px;outline:none">
+                <option value="alle">Ergebnis: alle</option>
+                <option value="ok">Ergebnis: ok</option>
+                <option value="fehler">Ergebnis: fehlgeschlagen</option>
+              </select>
+            </div>
+          </div>
+
+          <sc-if value="{{ historyEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:44px 20px;display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center">
+              <div style="width:38px;height:38px;border-radius:3px;border:1px dashed var(--line-2);background:repeating-linear-gradient(135deg,var(--surface-2) 0 5px,var(--surface) 5px 10px)"></div>
+              <span style="font:600 13px/1.3 ui-sans-serif,system-ui,sans-serif">{{ historyEmptyTitle }}</span>
+              <p style="font-size:12.5px;color:var(--txt-3);max-width:46ch;text-wrap:pretty">{{ historyEmptyText }}</p>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ historyPresent }}" hint-placeholder-val="{{ true }}">
+            <div data-r="scrollx" style="overflow-x:auto;min-width:0">
+              <table style="min-width:820px">
+                <thead>
+                  <tr>
+                    <th style="text-align:left;padding:9px 16px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Typ</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Start</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Dauer</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Dateien / Zeilen</th>
+                    <th style="text-align:left;padding:9px 12px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)">Ergebnis</th>
+                    <th style="text-align:right;padding:9px 16px;font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4);border-bottom:1px solid var(--line)"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <sc-for list="{{ history }}" as="r" hint-placeholder-count="5">
+                    <tr>
+                      <td style="padding:10px 16px;border-bottom:1px solid var(--line);font:500 12.5px/1.4 ui-sans-serif,system-ui,sans-serif">{{ r.type }}</td>
+                      <td style="padding:10px 12px;border-bottom:1px solid var(--line);font:400 12px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2)">{{ r.start }}</td>
+                      <td style="padding:10px 12px;border-bottom:1px solid var(--line);font:400 12px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2)">{{ r.dur }}</td>
+                      <td style="padding:10px 12px;border-bottom:1px solid var(--line);font:400 12px/1.4 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2)">{{ r.rows }}</td>
+                      <td style="padding:10px 12px;border-bottom:1px solid var(--line)">
+                        <span style="display:inline-flex;align-items:center;gap:6px;font:600 12px/1 ui-sans-serif,system-ui,sans-serif;color:{{ r.color }}"><span style="width:5px;height:5px;border-radius:50%;background:{{ r.color }}"></span>{{ r.result }}</span>
+                      </td>
+                      <td style="padding:10px 16px;border-bottom:1px solid var(--line);text-align:right">
+                        <sc-if value="{{ r.hasError }}" hint-placeholder-val="{{ false }}">
+                          <button type="button" onClick="{{ r.onExpand }}" data-r="tap" style="min-height:26px;padding:0 9px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-2);font:500 11.5px/1 ui-sans-serif,system-ui,sans-serif">{{ r.expandLabel }}</button>
+                        </sc-if>
+                      </td>
+                    </tr>
+                    <sc-if value="{{ r.expanded }}" hint-placeholder-val="{{ false }}">
+                      <tr>
+                        <td colSpan="6" style="padding:0 16px 12px;border-bottom:1px solid var(--line);background:var(--surface)">
+                          <pre style="margin:10px 0 0;padding:11px 12px;border-radius:3px;border:1px solid var(--err-line);background:var(--bg);color:var(--err-fg);font:400 11.5px/1.6 ui-monospace,'SF Mono',Menlo,Consolas,monospace;white-space:pre-wrap;overflow-x:auto">{{ r.error }}</pre>
+                        </td>
+                      </tr>
+                    </sc-if>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </sc-if>
+        </section>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isLogs }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Ereignis-Log" style="display:flex;flex-direction:column;gap:14px;max-width:1120px">
+        <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px">
+          <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:space-between">
+            <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">
+              <sc-for list="{{ levelChips }}" as="c" hint-placeholder-count="4">
+                <button type="button" onClick="{{ c.onClick }}" data-r="tap" style="display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;border-radius:3px;border:1px solid var(--line-2);background:transparent;color:var(--txt-2);font:500 12px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ c.border }};background:{{ c.bg }};color:{{ c.fg }}" style-hover="border-color:var(--line-3)">
+                  <span style="width:5px;height:5px;border-radius:50%;background:{{ c.dot }}"></span>{{ c.t }} <span style="opacity:.6;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">{{ c.n }}</span>
+                </button>
+              </sc-for>
+              <select value="{{ logSource }}" onChange="{{ setLogSource }}" data-r="tap" style="height:28px;padding:0 8px;border-radius:3px;border:1px solid var(--line-2);background:var(--bg);color:var(--txt-1);font-size:12.5px;outline:none">
+                <option value="alle">Quelle: alle</option>
+                <option value="waechter">Quelle: Wächter</option>
+                <option value="api">Quelle: API</option>
+                <option value="importer">Quelle: Importer</option>
+              </select>
+              <select value="{{ logWindow }}" onChange="{{ setLogWindow }}" data-r="tap" style="height:28px;padding:0 8px;border-radius:3px;border:1px solid var(--line-2);background:var(--bg);color:var(--txt-1);font-size:12.5px;outline:none">
+                <option value="1">Zeitraum: 24 Std.</option>
+                <option value="7">Zeitraum: 7 Tage</option>
+                <option value="30">Zeitraum: 30 Tage</option>
+                <option value="9999">Zeitraum: alles</option>
+              </select>
+              <input type="text" value="{{ logQuery }}" onChange="{{ setLogQuery }}" placeholder="Freitext filtern…" data-r="tap" style="height:28px;width:190px;max-width:100%;padding:0 9px;border-radius:3px;border:1px solid var(--line-2);background:var(--bg);color:var(--txt);font-size:12.5px;outline:none" style-focus="border-color:var(--acc-line-2)" />
+            </div>
+            <button type="button" onClick="{{ toggleAutoRefresh }}" data-r="tap" style="display:inline-flex;align-items:center;gap:8px;min-height:28px;padding:0 10px;border-radius:3px;border:1px solid var(--line-2);background:transparent;font:500 12px/1 ui-sans-serif,system-ui,sans-serif;color:{{ arColor }};border-color:{{ arBorder }}">
+              <span style="width:26px;height:15px;border-radius:8px;padding:2px;display:inline-flex;background:{{ arTrack }};justify-content:{{ arKnob }}"><span style="width:11px;height:11px;border-radius:50%;background:var(--txt);display:block"></span></span>
+              Auto-Refresh {{ arLabel }}
+            </button>
+          </div>
+
+          <sc-if value="{{ logsEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:52px 20px;display:flex;flex-direction:column;align-items:center;gap:9px;text-align:center">
+              <div style="width:38px;height:38px;border-radius:3px;border:1px dashed var(--line-2);background:repeating-linear-gradient(135deg,var(--surface-2) 0 5px,var(--surface) 5px 10px)"></div>
+              <span style="font:600 13px/1.3 ui-sans-serif,system-ui,sans-serif">{{ logsEmptyTitle }}</span>
+              <p style="font-size:12.5px;color:var(--txt-3);max-width:46ch;text-wrap:pretty">{{ logsEmptyText }}</p>
+              <sc-if value="{{ logsFiltered }}" hint-placeholder-val="{{ false }}">
+                <button type="button" onClick="{{ resetLogFilters }}" data-r="tap" style="margin-top:4px;min-height:32px;padding:0 12px;border-radius:3px;border:1px solid var(--line-3);background:var(--surface-2);color:var(--txt);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif">Filter zurücksetzen</button>
+              </sc-if>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ logsPresent }}" hint-placeholder-val="{{ true }}">
+            <div data-r="scrollx" style="overflow-x:auto;min-width:0">
+              <sc-for list="{{ logs }}" as="e" hint-placeholder-count="10">
+                <div style="display:flex;align-items:baseline;gap:12px;padding:8px 16px;border-bottom:1px solid var(--surface-2);min-width:640px;background:{{ e.rowBg }}">
+                  <span style="flex:0 0 116px;font:400 11.5px/1.5 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">{{ e.full }}</span>
+                  <span style="flex:0 0 54px;display:inline-flex;align-items:center;justify-content:center;height:18px;border-radius:2px;font:600 9.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.07em;text-transform:uppercase;border:1px solid var(--line-2);border-color:{{ e.border }};background:{{ e.tint }};color:{{ e.color }}">{{ e.level }}</span>
+                  <span style="flex:0 0 72px;font:400 11.5px/1.5 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-3)">{{ e.src }}</span>
+                  <span style="flex:1 1 auto;font-size:12.5px;color:var(--txt-1);text-wrap:pretty">{{ e.msg }}</span>
+                </div>
+              </sc-for>
+              <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;border-top:1px solid var(--surface-2)">
+                <span style="font-size:11.5px;color:var(--txt-4);font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">{{ logCountLabel }}</span>
+                <div style="display:flex;align-items:center;gap:6px">
+                  <button type="button" onClick="{{ logPrev }}" disabled="{{ logAtStart }}" data-r="tap" style="min-height:28px;padding:0 10px;border-radius:3px;border:1px solid var(--line-2);background:transparent;font:500 12px/1 ui-sans-serif,system-ui,sans-serif;color:{{ logPrevFg }};cursor:{{ logPrevCur }}">Neuer</button>
+                  <span style="font:500 11.5px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-2);padding:0 2px">{{ logPageLabel }}</span>
+                  <button type="button" onClick="{{ logNext }}" disabled="{{ logAtEnd }}" data-r="tap" style="min-height:28px;padding:0 10px;border-radius:3px;border:1px solid var(--line-2);background:transparent;font:500 12px/1 ui-sans-serif,system-ui,sans-serif;color:{{ logNextFg }};cursor:{{ logNextCur }}">Älter</button>
+                </div>
+                <span data-r="hide-sm" style="font-size:11.5px;color:var(--txt-4)">Nur strukturierte Events aus <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace">event_log</span> — kein Container-stdout.</span>
+              </div>
+            </div>
+          </sc-if>
+        </section>
+      </div>
+      </sc-if>
+
+      <sc-if value="{{ isStats }}" hint-placeholder-val="{{ false }}">
+      <div data-screen-label="Statistiken" style="display:flex;flex-direction:column;gap:14px;max-width:1120px">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px">
+          <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="5">
+            <div style="background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:13px 15px;display:flex;flex-direction:column;gap:4px">
+              <span style="font:600 10.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.08em;text-transform:uppercase;color:var(--txt-4)">{{ k.label }}</span>
+              <span style="font:600 21px/1.15 ui-monospace,'SF Mono',Menlo,Consolas,monospace">{{ k.value }}</span>
+              <span style="font-size:11.5px;color:var(--txt-4)">{{ k.sub }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px">
+          <sc-for list="{{ charts }}" as="c" hint-placeholder-count="5">
+            <section style="background:var(--surface);border:1px solid var(--line);border-radius:4px;display:flex;flex-direction:column">
+              <div style="padding:11px 16px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;justify-content:space-between;gap:10px">
+                <span style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--txt-3)">{{ c.title }}</span>
+                <span style="font:400 11px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">{{ c.range }}</span>
+              </div>
+              <div style="padding:14px 16px 12px;display:flex;flex-direction:column;gap:7px">
+                <div style="display:flex;align-items:baseline;gap:8px">
+                  <span style="font:600 17px/1.1 ui-monospace,'SF Mono',Menlo,Consolas,monospace">{{ c.latest }}</span>
+                  <span style="font-size:11.5px;color:var(--txt-4)">{{ c.latestNote }}</span>
+                </div>
+                <div style="position:relative">
+                  <svg viewBox="0 0 680 132" preserveAspectRatio="none" style="width:100%;height:118px;display:block;overflow:visible">
+                    <line x1="0" y1="0.5" x2="680" y2="0.5" stroke="var(--line)" strokeWidth="1"></line>
+                    <line x1="0" y1="66" x2="680" y2="66" stroke="var(--surface-2)" strokeWidth="1" strokeDasharray="3 4"></line>
+                    <line x1="0" y1="131.5" x2="680" y2="131.5" stroke="var(--line-2)" strokeWidth="1"></line>
+                    <sc-if value="{{ c.isBar }}" hint-placeholder-val="{{ true }}">
+                      <sc-for list="{{ c.bars }}" as="b" hint-placeholder-count="14">
+                        <rect x="{{ b.x }}" y="{{ b.y }}" width="{{ b.w }}" height="{{ b.h }}" rx="1" fill="{{ b.fill }}"></rect>
+                      </sc-for>
+                    </sc-if>
+                    <sc-if value="{{ c.isLine }}" hint-placeholder-val="{{ false }}">
+                      <path d="{{ c.area }}" fill="{{ c.areaFill }}"></path>
+                      <path d="{{ c.path }}" fill="none" stroke="{{ c.stroke }}" strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke"></path>
+                    </sc-if>
+                  </svg>
+                  <div style="position:absolute;top:-4px;right:0;font:400 10px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-4)">{{ c.maxLabel }}</div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font:400 10px/1 ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--line-3)">
+                  <span>{{ c.xFirst }}</span><span>{{ c.xMid }}</span><span>{{ c.xLast }}</span>
+                </div>
+              </div>
+            </section>
+          </sc-for>
+        </div>
+
+        <p style="font-size:11.5px;color:var(--txt-4);max-width:70ch;text-wrap:pretty">Alle Werte stammen aus den Aufzeichnungen des Wächters (SQLite). DB- und Index-Größen werden beim Update-Lauf erfasst — es gibt keinen Live-Zugriff auf das Array. Die Diagramme sind serverseitig als SVG gerendert; kein JavaScript, kein Build-Schritt.</p>
+      </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{ dialogOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:20px">
+    <div role="dialog" aria-modal="true" style="width:100%;max-width:452px;background:var(--surface);border:1px solid var(--line-2);border-radius:5px;box-shadow:0 18px 48px var(--shadow);animation:ao-fade .14s ease-out">
+      <div style="padding:16px 18px 12px;display:flex;flex-direction:column;gap:7px;border-bottom:1px solid var(--line)">
+        <h2 style="font:600 14.5px/1.35 ui-sans-serif,system-ui,sans-serif">{{ dlg.title }}</h2>
+        <p style="font-size:12.5px;color:var(--txt-2);text-wrap:pretty">{{ dlg.body }}</p>
+      </div>
+      <sc-if value="{{ dlg.warn }}" hint-placeholder-val="{{ false }}">
+        <div style="margin:12px 18px 0;display:flex;gap:9px;align-items:flex-start;border:1px solid var(--warn-line);background:var(--warn-tint);border-radius:3px;padding:10px 12px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--warn-fg);margin-top:5px;flex:0 0 auto"></span>
+          <span style="font-size:12.5px;color:var(--warn-fg);text-wrap:pretty">{{ dlg.warn }}</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{ dlg.detail }}" hint-placeholder-val="{{ false }}">
+        <code style="display:block;margin:12px 18px 0;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px;color:var(--txt-1);background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:9px 11px">{{ dlg.detail }}</code>
+      </sc-if>
+      <div style="padding:16px 18px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button type="button" onClick="{{ closeDialog }}" data-r="tap" style="min-height:34px;padding:0 14px;border-radius:3px;border:1px solid var(--line-3);background:transparent;color:var(--txt-1);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--surface-2)">Abbrechen</button>
+        <button type="button" onClick="{{ confirmDialog }}" data-r="tap" style="min-height:34px;padding:0 15px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--acc-solid);color:var(--on-acc);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ dlg.okBorder }};background:{{ dlg.okBg }};color:{{ dlg.okFg }}">{{ dlg.ok }}</button>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<sc-if value="{{ keyDialog }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:20px">
+    <form onSubmit="{{ createKey }}" style="width:100%;max-width:420px;background:var(--surface);border:1px solid var(--line-2);border-radius:5px;box-shadow:0 18px 48px var(--shadow);animation:ao-fade .14s ease-out">
+      <div style="padding:16px 18px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:5px">
+        <h2 style="font:600 14.5px/1.35 ui-sans-serif,system-ui,sans-serif">Neuen API-Key erzeugen</h2>
+        <p style="font-size:12.5px;color:var(--txt-2)">Der Key wird genau einmal im Klartext angezeigt.</p>
+      </div>
+      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:6px">
+        <label style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.07em;text-transform:uppercase;color:var(--txt-3)">Label</label>
+        <input type="text" value="{{ keyLabel }}" onChange="{{ setKeyLabel }}" placeholder="z. B. Navidrome" data-r="tap" style="width:100%;height:36px;padding:0 10px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none" style-focus="border-color:var(--acc-fg);box-shadow:0 0 0 3px var(--focus)" />
+        <span style="font-size:11.5px;color:var(--txt-4)">Nur zur Wiedererkennung in dieser Tabelle — der Client sieht das Label nicht.</span>
+      </div>
+      <div style="padding:0 18px 16px;display:flex;gap:8px;justify-content:flex-end">
+        <button type="button" onClick="{{ closeKeyDialog }}" data-r="tap" style="min-height:34px;padding:0 14px;border-radius:3px;border:1px solid var(--line-3);background:transparent;color:var(--txt-1);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif">Abbrechen</button>
+        <button type="submit" data-r="tap" style="min-height:34px;padding:0 15px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--acc-solid);color:var(--on-acc);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif">Key erzeugen</button>
+      </div>
+    </form>
+  </div>
+</sc-if>
+
+<sc-if value="{{ pwDialog }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;inset:0;z-index:60;background:var(--scrim);backdrop-filter:blur(2px);display:flex;align-items:center;justify-content:center;padding:20px">
+    <form onSubmit="{{ submitPw }}" style="width:100%;max-width:436px;background:var(--surface);border:1px solid var(--line-2);border-radius:5px;box-shadow:0 18px 48px var(--shadow);animation:ao-fade .14s ease-out">
+      <div style="padding:16px 18px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:5px">
+        <h2 style="font:600 14.5px/1.35 ui-sans-serif,system-ui,sans-serif">Admin-Passwort ändern</h2>
+        <p style="font-size:12.5px;color:var(--txt-2)">Benutzer <span style="font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;color:var(--txt-1)">admin</span> · mindestens 12 Zeichen</p>
+      </div>
+      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:13px">
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <label style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.07em;text-transform:uppercase;color:var(--txt-3)">Aktuelles Passwort</label>
+          <input type="password" value="{{ pwCur }}" onChange="{{ setPwCur }}" autoComplete="current-password" data-r="tap" style="width:100%;height:36px;padding:0 10px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none;border-color:{{ pwCurBorder }}" style-focus="border-color:var(--acc-fg);box-shadow:0 0 0 3px var(--focus)" />
+          <sc-if value="{{ pwCurError }}" hint-placeholder-val="{{ false }}">
+            <span style="font-size:11.5px;color:var(--err-fg)">{{ pwCurError }}</span>
+          </sc-if>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <label style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.07em;text-transform:uppercase;color:var(--txt-3)">Neues Passwort</label>
+          <input type="password" value="{{ pwNew }}" onChange="{{ setPwNew }}" autoComplete="new-password" data-r="tap" style="width:100%;height:36px;padding:0 10px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none;border-color:{{ pwNewBorder }}" style-focus="border-color:var(--acc-fg);box-shadow:0 0 0 3px var(--focus)" />
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="flex:1 1 auto;height:4px;border-radius:2px;background:var(--line);overflow:hidden"><div style="height:100%;border-radius:2px;width:{{ pwStrengthPct }};background:{{ pwStrengthColor }}"></div></div>
+            <span style="font:500 11px/1 ui-sans-serif,system-ui,sans-serif;color:{{ pwStrengthColor }}">{{ pwStrengthLabel }}</span>
+          </div>
+          <sc-if value="{{ pwNewError }}" hint-placeholder-val="{{ false }}">
+            <span style="font-size:11.5px;color:var(--err-fg)">{{ pwNewError }}</span>
+          </sc-if>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <label style="font:600 11px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.07em;text-transform:uppercase;color:var(--txt-3)">Neues Passwort wiederholen</label>
+          <input type="password" value="{{ pwRep }}" onChange="{{ setPwRep }}" autoComplete="new-password" data-r="tap" style="width:100%;height:36px;padding:0 10px;border-radius:3px;border:1px solid var(--line-3);background:var(--bg);color:var(--txt);font-size:13px;outline:none;border-color:{{ pwRepBorder }}" style-focus="border-color:var(--acc-fg);box-shadow:0 0 0 3px var(--focus)" />
+          <sc-if value="{{ pwRepError }}" hint-placeholder-val="{{ false }}">
+            <span style="font-size:11.5px;color:var(--err-fg)">{{ pwRepError }}</span>
+          </sc-if>
+        </div>
+        <div style="display:flex;gap:9px;align-items:flex-start;border:1px solid var(--warn-line);background:var(--warn-tint);border-radius:3px;padding:10px 12px">
+          <span style="width:6px;height:6px;border-radius:50%;background:var(--warn-fg);margin-top:5px;flex:0 0 auto"></span>
+          <span style="font-size:12.5px;color:var(--warn-fg);text-wrap:pretty">Nach dem Ändern werden alle bestehenden Sessions ungültig — auch diese. Du wirst neu angemeldet.</span>
+        </div>
+      </div>
+      <div style="padding:0 18px 16px;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+        <button type="button" onClick="{{ closePwDialog }}" data-r="tap" style="min-height:34px;padding:0 14px;border-radius:3px;border:1px solid var(--line-3);background:transparent;color:var(--txt-1);font:500 12.5px/1 ui-sans-serif,system-ui,sans-serif" style-hover="background:var(--surface-2)">Abbrechen</button>
+        <button type="submit" data-r="tap" style="min-height:34px;padding:0 15px;border-radius:3px;border:1px solid var(--acc-line-2);background:var(--acc-solid);color:var(--on-acc);font:600 12.5px/1 ui-sans-serif,system-ui,sans-serif">Passwort ändern</button>
+      </div>
+    </form>
+  </div>
+</sc-if>
+
+<sc-if value="{{ toastOpen }}" hint-placeholder-val="{{ false }}">
+  <div style="position:fixed;left:20px;bottom:20px;z-index:70;display:flex;align-items:center;gap:9px;padding:9px 13px;border-radius:3px;border:1px solid var(--line-2);background:var(--surface-2);box-shadow:0 8px 24px var(--shadow);animation:ao-fade .16s ease-out">
+    <span style="width:5px;height:5px;border-radius:50%;background:var(--ok-fg)"></span>
+    <span style="font-size:12.5px;color:var(--txt-1)">{{ toast.text }}</span>
+  </div>
+</sc-if>
+
+<sc-if value="{{ protoOpen }}" hint-placeholder-val="{{ true }}">
+  <div style="position:fixed;right:14px;bottom:14px;z-index:50;width:264px;max-width:calc(100vw - 28px);border:1px dashed var(--line-3);background:var(--proto-bg);backdrop-filter:blur(6px);border-radius:4px;box-shadow:0 10px 30px var(--shadow)">
+    <button type="button" onClick="{{ toggleProto }}" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 11px;border:0;background:transparent;color:var(--txt-3);font:600 10px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.10em;text-transform:uppercase">
+      <span>Prototyp-Steuerung</span><span style="font-size:12px">{{ protoChevron }}</span>
+    </button>
+    <sc-if value="{{ protoExpanded }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:0 11px 11px;display:flex;flex-direction:column;gap:10px;max-height:62vh;overflow-y:auto">
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font:600 9.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--line-3)">Stack-Zustand</span>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            <sc-for list="{{ protoStates }}" as="p" hint-placeholder-count="5">
+              <button type="button" onClick="{{ p.onClick }}" style="min-height:24px;padding:0 8px;border-radius:2px;border:1px solid var(--line);background:transparent;color:var(--txt-3);font:500 11px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ p.border }};background:{{ p.bg }};color:{{ p.fg }}">{{ p.t }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font:600 9.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--line-3)">Neben-Badges &amp; Leerzustände</span>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            <sc-for list="{{ protoFlags }}" as="p" hint-placeholder-count="8">
+              <button type="button" onClick="{{ p.onClick }}" style="min-height:24px;padding:0 8px;border-radius:2px;border:1px solid var(--line);background:transparent;color:var(--txt-3);font:500 11px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ p.border }};background:{{ p.bg }};color:{{ p.fg }}">{{ p.t }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <span style="font:600 9.5px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:0.09em;text-transform:uppercase;color:var(--line-3)">Login-Zustand</span>
+          <div style="display:flex;flex-wrap:wrap;gap:4px">
+            <sc-for list="{{ protoLogin }}" as="p" hint-placeholder-count="4">
+              <button type="button" onClick="{{ p.onClick }}" style="min-height:24px;padding:0 8px;border-radius:2px;border:1px solid var(--line);background:transparent;color:var(--txt-3);font:500 11px/1 ui-sans-serif,system-ui,sans-serif;border-color:{{ p.border }};background:{{ p.bg }};color:{{ p.fg }}">{{ p.t }}</button>
+            </sc-for>
+          </div>
+        </div>
+        <p style="font-size:10.5px;color:var(--line-3);text-wrap:pretty">Nur für die Design-Abnahme — in Jinja2/HTMX kommen diese Zustände vom Server.</p>
+      </div>
+    </sc-if>
+  </div>
+</sc-if>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;theme&quot;: {&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;system&quot;,&quot;options&quot;:[&quot;system&quot;,&quot;dark&quot;,&quot;light&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Darstellung&quot;},
+  &quot;pollIntervalSeconds&quot;: {&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:5,&quot;tsType&quot;:&quot;number&quot;,&quot;min&quot;:2,&quot;max&quot;:30,&quot;unit&quot;:&quot;s&quot;,&quot;section&quot;:&quot;Verhalten&quot;},
+  &quot;weckDauerSekunden&quot;: {&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:6,&quot;tsType&quot;:&quot;number&quot;,&quot;min&quot;:2,&quot;max&quot;:40,&quot;unit&quot;:&quot;s&quot;,&quot;section&quot;:&quot;Verhalten&quot;},
+  &quot;logsAutoRefresh&quot;: {&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Verhalten&quot;},
+  &quot;initialScreen&quot;: {&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;dash&quot;,&quot;options&quot;:[&quot;login&quot;,&quot;dash&quot;,&quot;config&quot;,&quot;keys&quot;,&quot;jobs&quot;,&quot;logs&quot;,&quot;stats&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Prototyp&quot;},
+  &quot;showPrototypeBar&quot;: {&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Prototyp&quot;}
+}">
+const C = {
+  txt:'var(--txt)', mut:'var(--txt-2)',
+  ok:'var(--ok-fg)', okT:'var(--ok-tint)', okB:'var(--ok-line)',
+  warn:'var(--warn-fg)', warnT:'var(--warn-tint)', warnB:'var(--warn-line)',
+  err:'var(--err-fg)', errT:'var(--err-tint)', errB:'var(--err-line)',
+  acc:'var(--acc-fg)', accT:'var(--surface-2)', accB:'var(--acc-line)',
+  sleep:'var(--txt-1)', sleepT:'var(--surface-2)', sleepB:'var(--line-3)'
+};
+const PULSE = 'ao-pulse 1.5s ease-in-out infinite';
+
+const STATES = {
+  schlafend: { label:'schlafend', color:C.sleep, tint:C.sleepT, border:C.sleepB, anim:'none',
+    headline:'Array darf schlafen', sub:'Schläft seit 6 Std. 12 Min. · Letzter Weckvorgang heute 03:00 · 4 Lookups aus dem Cache beantwortet' },
+  startet: { label:'startet', isBusy:true, color:C.warn, tint:C.warnT, border:C.warnB, anim:PULSE,
+    headline:'Wächter fährt den Stack hoch', sub:'Array geweckt · Container acoustid-index, acoustid-api, postgres starten · seit 00:12' },
+  bereit: { label:'bereit', color:C.ok, tint:C.okT, border:C.okB, anim:'none',
+    headline:'Stack läuft — Lookups gehen direkt', sub:'Uptime 00:41:08 · Idle-Timeout in 17 min · 3 Container healthy' },
+  stoppt: { label:'stoppt', isBusy:true, color:C.warn, tint:C.warnT, border:C.warnB, anim:PULSE,
+    headline:'Idle-Timeout erreicht, Stack fährt herunter', sub:'Keine Lookups seit 20 min · Container werden gestoppt, danach darf das Array schlafen' },
+  fehler: { label:'Fehler', isError:true, color:C.err, tint:C.errT, border:C.errB, anim:PULSE,
+    headline:'Stack konnte nicht gestartet werden', sub:'Letzter Versuch heute 03:00 · Automatische Wiederholung ausgesetzt' }
+};
+
+const LOGS = [
+  { t:'05:12:04', d:'25.07.', lv:'info', src:'waechter', m:'Stack heruntergefahren — Idle-Timeout (20 min) erreicht, Array darf schlafen' },
+  { t:'04:51:38', d:'25.07.', lv:'info', src:'api', m:'Lookup-Cache kompaktiert: 1,9 GB, 412 883 Einträge' },
+  { t:'04:36:02', d:'25.07.', lv:'info', src:'waechter', m:'Backup abgeschlossen: /mnt/backup/acoustid-2026-07-25.tar.zst (18,4 GB)' },
+  { t:'03:14:22', d:'25.07.', lv:'info', src:'importer', m:'Delta-Import abgeschlossen: 42 Dateien, 1 284 402 Zeilen, Sequenz #1 742 883' },
+  { t:'03:02:11', d:'25.07.', lv:'warn', src:'importer', m:'Delta-Datei 1742861.txt.gz erneut geladen (Prüfsumme beim ersten Versuch ungültig)' },
+  { t:'03:00:05', d:'25.07.', lv:'info', src:'waechter', m:'Array geweckt für geplanten Update-Lauf' },
+  { t:'01:22:10', d:'25.07.', lv:'warn', src:'waechter', m:'Plattenreserve auf dem Array unter Warnschwelle: 412 GB frei (Schwelle 500 GB)' },
+  { t:'23:58:47', d:'24.07.', lv:'info', src:'api', m:'Submit weitergeleitet an upstream AcoustID: 12 Fingerprints, HTTP 200' },
+  { t:'23:41:09', d:'24.07.', lv:'error', src:'api', m:'Upstream-Submit fehlgeschlagen: HTTP 503 — 3 Submissions in Queue zurückgestellt' },
+  { t:'22:14:33', d:'24.07.', lv:'info', src:'api', m:'API-Key „beets (Laptop)“ benutzt · 214 Lookups in 6 min' },
+  { t:'20:07:52', d:'24.07.', lv:'info', src:'waechter', m:'Stack heruntergefahren — Idle-Timeout (20 min) erreicht' },
+  { t:'19:44:18', d:'24.07.', lv:'info', src:'waechter', m:'Array geweckt durch Lookup (Cache-Miss von 10.0.0.24)' },
+  { t:'12:03:55', d:'24.07.', lv:'error', src:'waechter', m:'MusicBrainz-DSN nicht erreichbar: connection refused — degradierter Betrieb aktiv' },
+  { t:'09:41:26', d:'24.07.', lv:'info', src:'api', m:'API-Key „Navidrome“ benutzt · 1 042 Lookups, Cache-Hit-Quote 81,2 %' },
+  { t:'03:14:58', d:'24.07.', lv:'info', src:'importer', m:'Delta-Import abgeschlossen: 38 Dateien, 1 102 774 Zeilen, Sequenz #1 742 841' },
+  { t:'03:04:12', d:'23.07.', lv:'error', src:'importer', m:'Delta-Sequenz #1 742 802 konnte nicht geladen werden: HTTP 503 vom Mirror' },
+  { t:'04:30:02', d:'23.07.', lv:'error', src:'waechter', m:'Backup nicht gestartet: /mnt/backup nicht eingehängt — Array wurde dafür nicht geweckt' },
+  { t:'21:18:40', d:'20.07.', lv:'info', src:'api', m:'Lookup-Cache auf Maximalgröße gelaufen — älteste 24 118 Einträge verworfen' },
+  { t:'03:15:31', d:'20.07.', lv:'info', src:'importer', m:'Delta-Import abgeschlossen: 44 Dateien, 1 341 908 Zeilen, Sequenz #1 742 702' },
+  { t:'17:52:09', d:'18.07.', lv:'warn', src:'api', m:'Rate-Limit erreicht für Key „Testskript“ — 60 Requests/min, 14 Anfragen verworfen' },
+  { t:'03:12:47', d:'11.07.', lv:'info', src:'waechter', m:'Wächter aktualisiert auf 0.9.4 — Konfiguration migriert, keine Änderungen nötig' },
+  { t:'08:04:55', d:'26.06.', lv:'info', src:'waechter', m:'Voll-Import abgeschlossen: 34 812 004 Tracks, 71 204 883 Fingerprints' },
+  { t:'07:00:00', d:'26.06.', lv:'info', src:'waechter', m:'Instanz eingerichtet — Erst-Passwort erzeugt und ins Container-Log geschrieben' }
+];
+
+const AGE = { '25.07.':0, '24.07.':1, '23.07.':2, '20.07.':5, '18.07.':7, '11.07.':14, '26.06.':29 };
+
+const HISTORY = [
+  { type:'Update', start:'25.07.2026 03:00', dur:'14 min 22 s', rows:'42 / 1 284 402', result:'ok' },
+  { type:'Backup', start:'25.07.2026 04:30', dur:'6 min 03 s', rows:'18,4 GB', result:'ok' },
+  { type:'Update', start:'24.07.2026 03:00', dur:'13 min 41 s', rows:'38 / 1 102 774', result:'ok' },
+  { type:'Backup', start:'24.07.2026 04:30', dur:'5 min 48 s', rows:'18,1 GB', result:'ok' },
+  { type:'Update', start:'23.07.2026 03:00', dur:'2 min 11 s', rows:'0 / 0', result:'fehler',
+    error:'importer.DeltaFetchError: Sequenz 1742802 nicht abrufbar\n  GET https://data.acoustid.org/delta/1742802.txt.gz -> HTTP 503\n  3 Wiederholungen (Backoff 30 s / 120 s / 300 s) erfolglos\n  Abbruch, Datenstand unverändert bei #1 742 801\n  Array nach 2 min 11 s wieder freigegeben' },
+  { type:'Backup', start:'23.07.2026 04:30', dur:'—', rows:'—', result:'fehler',
+    error:'backup.TargetUnavailable: /mnt/backup nicht eingehängt\n  Zielverzeichnis existiert nicht — Backup nicht gestartet\n  Array wurde für diesen Lauf nicht geweckt' },
+  { type:'Update', start:'22.07.2026 03:00', dur:'15 min 02 s', rows:'44 / 1 341 908', result:'ok' },
+  { type:'Update', start:'21.07.2026 03:00', dur:'12 min 55 s', rows:'36 / 1 048 220', result:'ok' }
+];
+
+const DAYS = ['12.07','13.07','14.07','15.07','16.07','17.07','18.07','19.07','20.07','21.07','22.07','23.07','24.07','25.07'];
+
+class Component extends DCLogic {
+  state = {
+    auth: true, screen: 'dash', loginMode: 'normal', pw: '', attempts: 2,
+    stack: 'schlafend', importRun: false, importFile: 17, importTotal: 42,
+    backupRun: false, queueN: 3, mbDown: false, diskLow: true,
+    jobRun: null, jobPct: 0,
+    keysEmpty: false, logsEmpty: false, historyEmpty: false,
+    keys: [
+      { id:1, label:'Navidrome', mask:'ao_k1_••••••••••3f21', active:true, created:'12.03.2026', used:'heute, 09:41' },
+      { id:2, label:'beets (Laptop)', mask:'ao_k1_••••••••••b70c', active:true, created:'02.05.2026', used:'gestern, 22:14' },
+      { id:3, label:'Testskript', mask:'ao_k1_••••••••••e18a', active:false, created:'18.06.2026', used:'—' }
+    ],
+    newKey: null, keyDialog: false, keyLabel: '',
+    cfg: { authMode:'apikey', rate:'60', submitMode:'local+upstream', idle:'20', hold:'10', updTime:'03:00', reserve:'300', cacheOn:true, cacheMax:'40', ntfy:'https://ntfy.example.net/acoustid', smtpHost:'mail.example.net', smtpPort:'587', smtpUser:'acoustid@example.net', smtpFrom:'acoustid@example.net', smtpTo:'admin@example.net', backupDir:'/mnt/backup', backupTime:'04:30' },
+    dirty: {}, secrets: {},
+    dialog: null, toast: null, tick: 0,
+    logLevel: 'alle', logSource: 'alle', logQuery: '',
+    logWindow: '30', logPage: 0, lastRunFailed: false,
+    pwDialog: false, pwCur: '', pwNew: '', pwRep: '', pwTouched: false,
+    autoRefresh: true, jobFilterType: 'alle', jobFilterResult: 'alle', expanded: null,
+    protoExpanded: true, theme: 'dark'
+  };
+
+  constructor(props) {
+    super(props);
+    const s = props.initialScreen || 'dash';
+    if (s === 'login') { this.state.auth = false; this.state.screen = 'dash'; }
+    else this.state.screen = s;
+    if (props.logsAutoRefresh === false) this.state.autoRefresh = false;
+    this.state.theme = props.theme || 'system';
+  }
+
+  applyThemeValue(t) {
+    const dark = t === 'dark' || (t === 'system' && !(window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches));
+    document.body.setAttribute('data-ao-theme', dark ? 'dark' : 'light');
+  }
+  applyTheme() { this.applyThemeValue(this.state.theme); }
+  setTheme(t) { this.applyThemeValue(t); this.setState({ theme: t }); }
+
+  componentDidMount() {
+    this.applyTheme();
+    this.mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)');
+    if (this.mq && this.mq.addEventListener) { this.mqL = () => { if (this.state.theme === 'system') this.applyTheme(); }; this.mq.addEventListener('change', this.mqL); }
+    this.iv = setInterval(() => this.setState(s => {
+      const n = { tick: s.tick + 1 };
+      if (s.importRun && s.tick % 3 === 2) n.importFile = s.importFile >= s.importTotal ? 1 : s.importFile + 1;
+      if (s.jobRun) n.jobPct = s.jobPct >= 100 ? 4 : s.jobPct + 2;
+      return n;
+    }), 1000);
+  }
+  componentWillUnmount() { clearInterval(this.iv); clearTimeout(this.tr); clearTimeout(this.tt);
+    if (this.mq && this.mqL) this.mq.removeEventListener('change', this.mqL); }
+
+  notify(text) {
+    this.setState({ toast: { text } });
+    clearTimeout(this.tt);
+    this.tt = setTimeout(() => this.setState({ toast: null }), 3400);
+  }
+  transition(to, then, ms) {
+    this.setState({ stack: to });
+    clearTimeout(this.tr);
+    this.tr = setTimeout(() => this.setState({ stack: then }), ms);
+  }
+  ask(cfg) { this.setState({ dialog: cfg }); }
+
+  // ---------- charts ----------
+  bars(vals, fills) {
+    const max = Math.max.apply(null, vals) || 1, W = 680, H = 128, gap = 5, n = vals.length;
+    const bw = (W - (n - 1) * gap) / n;
+    return vals.map((v, i) => {
+      const h = Math.max(2, (v / max) * H);
+      return { key: i, x: +(i * (bw + gap)).toFixed(2), w: +bw.toFixed(2), y: +(131 - h).toFixed(2), h: +h.toFixed(2), fill: fills ? fills[i] : C.acc };
+    });
+  }
+  line(vals, lo, hi) {
+    const W = 680, min = lo != null ? lo : Math.min.apply(null, vals), max = hi != null ? hi : Math.max.apply(null, vals);
+    const span = (max - min) || 1, n = vals.length;
+    const pts = vals.map((v, i) => [+((i / (n - 1)) * W).toFixed(2), +(126 - ((v - min) / span) * 118).toFixed(2)]);
+    const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ');
+    return { path, area: path + ' L' + W + ',131 L0,131 Z' };
+  }
+
+  renderVals() {
+    const s = this.state, P = this.props;
+    const st = STATES[s.stack];
+    const poll = P.pollIntervalSeconds || 5;
+    const set = (k, v) => this.setState({ [k]: v });
+    const go = k => e => { if (e && e.preventDefault) e.preventDefault(); this.setState({ screen: k }); };
+
+    // nav
+    const items = [
+      ['dash', 'Dashboard', null], ['config', 'Konfiguration', null],
+      ['keys', 'API-Keys', s.keysEmpty ? null : String(s.keys.length)],
+      ['jobs', 'Updates & Jobs', s.jobRun ? '1' : null],
+      ['logs', 'Ereignis-Log', null], ['stats', 'Statistiken', null]
+    ];
+    const nav = items.map(([k, t, count]) => {
+      const on = s.screen === k;
+      return { key: k, t, count, go: go(k),
+        bg: on ? 'var(--surface-2)' : 'transparent',
+        fg: on ? C.txt : 'var(--txt-2)',
+        bar: on ? C.acc : 'transparent' };
+    });
+    const titles = { dash:['Dashboard','/admin/'], config:['Konfiguration','/admin/config'], keys:['API-Keys','/admin/keys'], jobs:['Updates & Jobs','/admin/jobs'], logs:['Ereignis-Log','/admin/logs'], stats:['Statistiken','/admin/stats'] };
+    const polls = s.screen === 'dash' || (s.screen === 'jobs' && s.jobRun) || (s.screen === 'logs' && s.autoRefresh);
+
+    // side badges
+    const sideBadges = [];
+    if (s.importRun) sideBadges.push({ key:'imp', t:'Import läuft — Datei ' + s.importFile + ' von ' + s.importTotal, color:C.acc, tint:C.accT, border:C.accB, anim:PULSE });
+    if (s.backupRun) sideBadges.push({ key:'bak', t:'Backup läuft', color:C.acc, tint:C.accT, border:C.accB, anim:PULSE });
+    if (s.queueN > 0) sideBadges.push({ key:'q', t:'Upstream-Queue: ' + s.queueN + ' wartend', color:'var(--txt-1)', tint:'var(--line)', border:'var(--line-2)', anim:'none' });
+    if (s.mbDown) sideBadges.push({ key:'mb', t:'MB nicht erreichbar — degradierter Betrieb', color:C.warn, tint:C.warnT, border:C.warnB, anim:'none' });
+    if (s.diskLow) sideBadges.push({ key:'d', t:'Plattenplatz knapp — 412 GB frei', color:C.warn, tint:C.warnT, border:C.warnB, anim:'none' });
+
+    // dashboard
+    const recentLogs = LOGS.slice(0, 8).map((e, i) => ({ key:i, time:e.d + ' ' + e.t, level:e.lv, src:e.src === 'waechter' ? 'Wächter' : e.src === 'api' ? 'API' : 'Importer', msg:e.m,
+      color: e.lv === 'error' ? C.err : e.lv === 'warn' ? C.warn : 'var(--txt-3)' }));
+
+    // config
+    const bindTxt = (k, group) => ({ value: s.cfg[k], onChange: ev => this.setState(p => ({ cfg: { ...p.cfg, [k]: ev.target.value }, dirty: { ...p.dirty, [group]: true } })) });
+    const idleNum = parseInt(s.cfg.idle, 10);
+    const idleErr = (!s.cfg.idle || isNaN(idleNum) || idleNum < 1 || idleNum > 1440) ? 'Ganzzahl zwischen 1 und 1440 Minuten erwartet.' : null;
+    const secret = (k, group) => ({ isSecret:true, secretLocked: !s.secrets[k], secretOpen: !!s.secrets[k],
+      onUnlock: () => this.setState(p => ({ secrets: { ...p.secrets, [k]: !p.secrets[k] } })),
+      onChange: () => this.setState(p => ({ dirty: { ...p.dirty, [group]: true } })) });
+    const mk = o => Object.assign({ isText:false, isSelect:false, isToggle:false, isSecret:false, isAction:false, span:'auto', reload:false, error:null, help:null, options:[], value:'', ph:'', border:'var(--line-3)' }, o);
+
+    const groupDefs = [
+      { key:'api', title:'API & Auth', note:'Zugriffsschutz der Lookup-Schnittstelle', fields:[
+        mk({ isSelect:true, label:'Auth-Modus', reload:true, value:s.cfg.authMode, options:[{v:'none',t:'none — offen im LAN'},{v:'apikey',t:'apikey — Key erforderlich'}],
+             onChange: ev => this.setState(p => ({ cfg:{...p.cfg, authMode: ev.target.value}, dirty:{...p.dirty, api:true} })),
+             help:'Bei „apikey“ prüft die API den Header X-API-Key gegen die Key-Tabelle.' }),
+        mk(Object.assign({ isText:true, label:'Rate-Limit (Requests/min)', reload:true, help:'0 = unbegrenzt. Gilt pro Key, im Modus „none“ pro IP.' }, bindTxt('rate','api')))
+      ]},
+      { key:'submit', title:'Submit', note:'Was mit eingereichten Fingerprints passiert', fields:[
+        mk({ isSelect:true, label:'Submit-Modus', reload:true, value:s.cfg.submitMode,
+             options:[{v:'off',t:'off — Submits ablehnen'},{v:'local',t:'local — nur lokal speichern'},{v:'local+upstream',t:'local+upstream — lokal + weiterleiten'}],
+             onChange: ev => this.setState(p => ({ cfg:{...p.cfg, submitMode: ev.target.value}, dirty:{...p.dirty, submit:true} })),
+             help:'Weiterleitung läuft über die Upstream-Queue und weckt das Array nicht.' }),
+        mk(Object.assign({ label:'Upstream-App-Key', help:'Wird nur beim Weiterleiten an acoustid.org benutzt.' }, secret('upstream','submit')))
+      ]},
+      { key:'betrieb', title:'Betrieb', note:'Wann der Stack laufen darf und wann er schlafen geht', fields:[
+        mk(Object.assign({ isText:true, label:'Idle-Timeout (min)', error:idleErr, border: idleErr ? C.err : 'var(--line-3)', help:'Ohne Lookups fährt der Wächter den Stack danach herunter.' }, bindTxt('idle','betrieb'))),
+        mk(Object.assign({ isText:true, label:'Weck-Haltezeit (min)', help:'Mindestlaufzeit nach einem Weckvorgang, damit das Array nicht taktet.' }, bindTxt('hold','betrieb'))),
+        mk(Object.assign({ isText:true, label:'Update-Uhrzeit', help:'Täglicher Delta-Lauf. Weckt das Array planmäßig.' }, bindTxt('updTime','betrieb'))),
+        mk(Object.assign({ isText:true, label:'Mindest-Plattenreserve (GB)', help:'Unterschreitung stoppt Import und Backup.' }, bindTxt('reserve','betrieb')))
+      ]},
+      { key:'cache', title:'Cache', note:'Lookup-Antworten aus dem Wächter — hält das Array im Schlaf', fields:[
+        mk({ isToggle:true, label:'Lookup-Cache', toggleLabel: s.cfg.cacheOn ? 'aktiv' : 'deaktiviert',
+             trackBg: s.cfg.cacheOn ? C.acc : 'var(--line-2)', knobPos: s.cfg.cacheOn ? 'flex-end' : 'flex-start',
+             onToggle: () => this.setState(p => ({ cfg:{...p.cfg, cacheOn: !p.cfg.cacheOn}, dirty:{...p.dirty, cache:true} })),
+             help:'Ohne Cache weckt jeder Lookup das Array.' }),
+        mk(Object.assign({ isText:true, label:'Maximalgröße (GB)' }, bindTxt('cacheMax','cache'))),
+        mk({ isAction:true, label:'Wartung', actionLabel:'Cache jetzt leeren', actionBorder:C.errB, actionColor:'var(--err-fg)',
+             onAction: () => this.ask({ title:'Lookup-Cache leeren?', body:'Alle 412 883 zwischengespeicherten Antworten werden verworfen.',
+               warn:'Danach wecken die nächsten Lookups das Array, bis der Cache wieder gefüllt ist.', ok:'Cache leeren', danger:true,
+               run: () => this.notify('Lookup-Cache geleert.') }) })
+      ]},
+      { key:'notify', title:'Benachrichtigungen', note:'Nur bei Fehlern — Erfolge bleiben still', fields:[
+        mk(Object.assign({ isText:true, label:'ntfy- / Webhook-URL', span:'1 / -1' }, bindTxt('ntfy','notify'))),
+        mk({ isAction:true, label:'Test', actionLabel:'Testnachricht senden', onAction: () => this.notify('Testnachricht an ntfy gesendet.') }),
+        mk(Object.assign({ isText:true, label:'SMTP-Host' }, bindTxt('smtpHost','notify'))),
+        mk(Object.assign({ isText:true, label:'SMTP-Port' }, bindTxt('smtpPort','notify'))),
+        mk(Object.assign({ isText:true, label:'SMTP-Benutzer' }, bindTxt('smtpUser','notify'))),
+        mk(Object.assign({ label:'SMTP-Passwort' }, secret('smtp','notify'))),
+        mk(Object.assign({ isText:true, label:'Absender (From)' }, bindTxt('smtpFrom','notify'))),
+        mk(Object.assign({ isText:true, label:'Empfänger (To)' }, bindTxt('smtpTo','notify'))),
+        mk({ isAction:true, label:'Test', actionLabel:'Test-Mail senden', onAction: () => this.notify('Test-Mail an admin@example.net gesendet.') })
+      ]},
+      { key:'backup', title:'Backup', note:'Sichert Index, Datenbank und config.yaml', fields:[
+        mk(Object.assign({ isText:true, label:'Zielverzeichnis' }, bindTxt('backupDir','backup'))),
+        mk(Object.assign({ isText:true, label:'Uhrzeit', help:'Läuft nach dem Update-Lauf, solange das Array ohnehin wach ist.' }, bindTxt('backupTime','backup')))
+      ]},
+      { key:'mb', title:'MusicBrainz', note:'Nur für Metadaten-Anreicherung', fields:[
+        mk(Object.assign({ label:'DSN', span:'1 / -1', help:'postgresql://user:passwort@host:5432/musicbrainz' }, secret('dsn','mb'))),
+        mk({ isAction:true, label:'Prüfung', actionLabel:'Verbindung testen', onAction: () => this.notify('MusicBrainz-Verbindung ok (42 ms).'),
+             help:'Der Test läuft direkt vom Wächter und weckt das Array nicht.' })
+      ]},
+      { key:'admin', title:'Admin', note:'Zugang zu dieser Oberfläche', fields:[
+        mk({ isAction:true, label:'Passwort', actionLabel:'Passwort ändern…',
+             onAction: () => this.setState({ pwDialog:true, pwCur:'', pwNew:'', pwRep:'', pwTouched:false }),
+             help:'Eigener Dialog mit Bestätigung des aktuellen Passworts — läuft nicht über das Speichern dieser Gruppe.' }),
+        mk({ isText:true, label:'Benutzername', value:'admin', onChange: () => {}, help:'Fest vorgegeben — ein Admin-Benutzer pro Instanz.', border:'var(--line)' })
+      ]}
+    ];
+    const configGroups = groupDefs.map(g => {
+      const dirty = !!s.dirty[g.key];
+      return { key:g.key, title:g.title, note:g.note, fields:g.fields, dirty, clean: !dirty,
+        saveLabel: dirty ? 'Gruppe speichern' : 'Gespeichert',
+        saveBorder: dirty ? 'var(--acc-line-2)' : 'var(--line)',
+        saveBg: dirty ? 'var(--acc-solid)' : 'transparent',
+        saveFg: dirty ? 'var(--on-acc)' : 'var(--line-3)',
+        saveCursor: dirty ? 'pointer' : 'not-allowed',
+        onSave: () => { this.setState(p => { const d = { ...p.dirty }; delete d[g.key]; return { dirty:d }; }); this.notify(g.title + ' gespeichert.'); },
+        onReset: () => this.setState(p => { const d = { ...p.dirty }; delete d[g.key]; return { dirty:d }; }) };
+    });
+
+    // keys
+    const keys = s.keys.map(k => ({ key:k.id, label:k.label, mask:k.mask, created:k.created, used:k.used,
+      status: k.active ? 'aktiv' : 'inaktiv',
+      color: k.active ? C.ok : 'var(--txt-3)',
+      tint: k.active ? C.okT : 'var(--surface-2)',
+      border: k.active ? C.okB : 'var(--line-2)',
+      toggleLabel: k.active ? 'Deaktivieren' : 'Aktivieren',
+      onToggle: () => { if (k.active) { this.ask({ title:'Key „' + k.label + '“ deaktivieren?', body:'Der Client kann sofort keine Lookups mehr ausführen. Der Key bleibt erhalten und kann wieder aktiviert werden.', ok:'Deaktivieren', danger:false, run: () => { this.setState(p => ({ keys: p.keys.map(x => x.id === k.id ? { ...x, active:false } : x) })); this.notify('Key deaktiviert.'); } }); } else { this.setState(p => ({ keys: p.keys.map(x => x.id === k.id ? { ...x, active:true } : x) })); this.notify('Key aktiviert.'); } },
+      onDelete: () => this.ask({ title:'Key „' + k.label + '“ löschen?', body:'Der Key wird unwiderruflich entfernt. Clients mit diesem Key erhalten ab sofort HTTP 401.',
+        detail: k.mask, ok:'Endgültig löschen', danger:true,
+        run: () => { this.setState(p => ({ keys: p.keys.filter(x => x.id !== k.id) })); this.notify('Key gelöscht.'); } }) }));
+
+    // jobs
+    const busy = !!s.jobRun;
+    const jobActions = [
+      { key:'upd', title:'Update jetzt ausführen', note:'Lädt fehlende Delta-Sequenzen und spielt sie in den Index ein.', cta:'Update starten', wakes:true, run:'Update' },
+      { key:'bak', title:'Backup jetzt ausführen', note:'Sichert Index, Datenbank und config.yaml nach /mnt/backup.', cta:'Backup starten', wakes:true, run:'Backup' },
+      { key:'q', title:'Upstream-Queue jetzt senden', note:s.queueN > 0 ? s.queueN + ' Submissions warten auf die Weiterleitung an acoustid.org.' : 'Die Queue ist leer — nichts zu senden.', cta:'Queue senden', wakes:false, run:'Queue' }
+    ].map(a => {
+      const off = busy || (a.key === 'q' && s.queueN === 0);
+      return { key:a.key, title:a.title, note:a.note, cta:a.cta, wakes:a.wakes, disabled:off,
+        title2: busy ? 'Es läuft bereits ein Job — bitte abwarten oder abbrechen.' : (a.key === 'q' && s.queueN === 0 ? 'Die Upstream-Queue ist leer.' : ''),
+        border: off ? 'var(--line)' : 'var(--line-3)',
+        bg: off ? 'transparent' : 'var(--surface-2)',
+        fg: off ? 'var(--line-3)' : 'var(--txt)',
+        cursor: off ? 'not-allowed' : 'pointer',
+        onRun: off ? (() => {}) : (() => this.ask({
+          title: a.title + '?',
+          body: a.key === 'upd' ? 'Der Wächter startet den Stack und spielt alle fehlenden Delta-Sequenzen ein. Der Lauf dauert erfahrungsgemäß 12–15 Minuten.'
+            : a.key === 'bak' ? 'Der Wächter startet den Stack, hält die Datenbank kurz an und schreibt ein konsistentes Archiv nach /mnt/backup.'
+            : 'Die ' + s.queueN + ' wartenden Submissions werden direkt vom Wächter an acoustid.org gesendet.',
+          warn: a.wakes ? 'Diese Aktion weckt das Array. Es bleibt danach mindestens 10 Minuten wach (Weck-Haltezeit).' : null,
+          ok: a.cta, danger:false,
+          run: () => { this.setState({ jobRun: a.run, jobPct: 4 }); if (a.wakes) this.transition('startet', 'bereit', (P.weckDauerSekunden || 6) * 1000); }
+        })) };
+    });
+
+    const jobStepMap = { Update:'Delta-Sequenzen einspielen', Backup:'Archiv schreiben', Queue:'Submissions senden' };
+    const job = s.jobRun ? { title: s.jobRun + '-Lauf läuft', started: '05:41', step: jobStepMap[s.jobRun],
+      pctLabel: s.jobPct + ' %', pctWidth: s.jobPct + '%',
+      detail: s.jobRun === 'Update' ? 'Datei ' + Math.max(1, Math.round(s.jobPct * 0.42)) + ' von 42 · Sequenz #1 742 884 · 318 402 Zeilen'
+        : s.jobRun === 'Backup' ? 'index/ → acoustid-2026-07-25.tar.zst · 7,4 GB geschrieben'
+        : Math.max(1, Math.round(s.queueN * s.jobPct / 100)) + ' von ' + s.queueN + ' Submissions gesendet' } : null;
+
+    let history = HISTORY.filter(r => (s.jobFilterType === 'alle' || r.type === s.jobFilterType) && (s.jobFilterResult === 'alle' || r.result === s.jobFilterResult));
+    if (s.historyEmpty) history = [];
+    const historyRows = history.map((r, i) => ({ key:r.start + r.type, type:r.type, start:r.start, dur:r.dur, rows:r.rows,
+      result: r.result === 'ok' ? 'ok' : 'fehlgeschlagen', color: r.result === 'ok' ? C.ok : C.err,
+      hasError: !!r.error, error: r.error,
+      expanded: s.expanded === r.start + r.type,
+      expandLabel: s.expanded === r.start + r.type ? 'Fehler ausblenden' : 'Fehler anzeigen',
+      onExpand: () => this.setState(p => ({ expanded: p.expanded === r.start + r.type ? null : r.start + r.type })) }));
+    const histFiltered = s.jobFilterType !== 'alle' || s.jobFilterResult !== 'alle';
+
+    // logs
+    const srcName = { waechter:'Wächter', api:'API', importer:'Importer' };
+    const q = s.logQuery.trim().toLowerCase();
+    const win = parseInt(s.logWindow, 10);
+    let logs = LOGS.filter(e => (s.logLevel === 'alle' || e.lv === s.logLevel) && (s.logSource === 'alle' || e.src === s.logSource) && (!q || e.m.toLowerCase().indexOf(q) >= 0) && ((AGE[e.d] != null ? AGE[e.d] : 999) < win));
+    if (s.logsEmpty) logs = [];
+    const PER = 10, pages = Math.max(1, Math.ceil(logs.length / PER));
+    const page = Math.min(s.logPage, pages - 1);
+    const logRows = logs.slice(page * PER, page * PER + PER).map((e, i) => ({ key:i, full:e.d + ' ' + e.t, level:e.lv, src:srcName[e.src], msg:e.m,
+      color: e.lv === 'error' ? C.err : e.lv === 'warn' ? C.warn : 'var(--txt-2)',
+      tint: e.lv === 'error' ? C.errT : e.lv === 'warn' ? C.warnT : 'transparent',
+      border: e.lv === 'error' ? C.errB : e.lv === 'warn' ? C.warnB : 'var(--line-2)',
+      rowBg: e.lv === 'error' ? 'var(--surface)' : 'transparent' }));
+    const counts = { alle: LOGS.length, info: LOGS.filter(e => e.lv === 'info').length, warn: LOGS.filter(e => e.lv === 'warn').length, error: LOGS.filter(e => e.lv === 'error').length };
+    const levelChips = [['alle','Alle','var(--txt-3)'],['info','Info','var(--txt-3)'],['warn','Warn',C.warn],['error','Error',C.err]].map(([v, t, dot]) => {
+      const on = s.logLevel === v;
+      return { key:v, t, n:counts[v], dot, onClick: () => this.setState({ logLevel: v, logPage: 0 }),
+        border: on ? 'var(--txt-4)' : 'var(--line-2)',
+        bg: on ? 'var(--line)' : 'transparent',
+        fg: on ? C.txt : 'var(--txt-2)' };
+    });
+    const logsFiltered = s.logLevel !== 'alle' || s.logSource !== 'alle' || q.length > 0 || s.logWindow !== '30';
+
+    // stats
+    const lookups = [980,1140,1210,860,1320,1405,1190,1030,1250,1380,1440,1120,1302,1284];
+    const hit = [71,73,74,72,76,77,75,78,79,77,80,78,79,78.4];
+    const wake = [4,3,5,2,3,6,4,3,4,5,3,2,4,3];
+    const dur = [12.4,13.1,11.8,14.2,13.6,12.9,13.4,12.1,15.0,12.9,15.0,2.2,13.7,14.4];
+    const durFills = dur.map(v => v < 5 ? C.err : C.acc);
+    const db = [58.2,58.6,59.0,59.3,59.7,60.1,60.4,60.9,61.2,61.6,62.0,62.0,62.7,63.1];
+    const hitL = this.line(hit, 60, 90), dbL = this.line(db, 55, 66);
+    const charts = [
+      { key:'lk', title:'Lookups pro Tag', range:'14 Tage', latest:'1 284', latestNote:'heute · Ø 1 208', isBar:true, isLine:false, bars:this.bars(lookups), maxLabel:'max 1 440', xFirst:DAYS[0], xMid:DAYS[7], xLast:DAYS[13] },
+      { key:'ch', title:'Cache-Hit-Quote', range:'14 Tage', latest:'78,4 %', latestNote:'heute · Ziel > 70 %', isBar:false, isLine:true, path:hitL.path, area:hitL.area, stroke:C.ok, areaFill:'oklch(0.73 0.13 155 / 0.13)', maxLabel:'90 %', xFirst:DAYS[0], xMid:DAYS[7], xLast:DAYS[13] },
+      { key:'wk', title:'Weckvorgänge pro Tag', range:'14 Tage', latest:'3', latestNote:'heute · davon 1 geplant', isBar:true, isLine:false, bars:this.bars(wake, wake.map(() => C.sleep)), maxLabel:'max 6', xFirst:DAYS[0], xMid:DAYS[7], xLast:DAYS[13] },
+      { key:'du', title:'Import-Dauer je Lauf', range:'14 Läufe', latest:'14 min 24 s', latestNote:'letzter Lauf · 1 Abbruch (rot)', isBar:true, isLine:false, bars:this.bars(dur, durFills), maxLabel:'max 15 min', xFirst:DAYS[0], xMid:DAYS[7], xLast:DAYS[13] },
+      { key:'db', title:'DB- und Index-Größe', range:'14 Läufe', latest:'63,1 GB', latestNote:'beim letzten Update erfasst', isBar:false, isLine:true, path:dbL.path, area:dbL.area, stroke:C.acc, areaFill:'oklch(0.72 0.11 240 / 0.13)', maxLabel:'66 GB', xFirst:DAYS[0], xMid:DAYS[7], xLast:DAYS[13] }
+    ];
+    const kpis = [
+      { key:'t', label:'Tracks gesamt', value:'34 812 004', sub:'Stand 25.07.2026' },
+      { key:'f', label:'Fingerprints', value:'71 204 883', sub:'Index 41,2 GB' },
+      { key:'s', label:'Submissions lokal', value:'63', sub:'41 weitergeleitet' },
+      { key:'d', label:'Datenstand', value:'#1 742 883', sub:'24.07.2026, 03:14' },
+      { key:'w', label:'Wachzeit 7 Tage', value:'4 h 51 m', sub:'2,9 % der Woche' }
+    ];
+
+    const pn = s.pwNew, pr = s.pwRep, pc = s.pwCur, T = s.pwTouched;
+    let score = 0;
+    if (pn.length >= 12) score++;
+    if (pn.length >= 16) score++;
+    if (/[a-z]/.test(pn) && /[A-Z]/.test(pn)) score++;
+    if (/[0-9]/.test(pn)) score++;
+    if (/[^A-Za-z0-9]/.test(pn)) score++;
+    const sLab = ['zu kurz','schwach','brauchbar','gut','stark','stark'][score];
+    const sCol = score <= 1 ? C.err : score <= 2 ? C.warn : C.ok;
+    const pwCurError = T && !pc ? 'Aktuelles Passwort erforderlich.' : null;
+    const pwNewError = T && pn.length < 12 ? 'Mindestens 12 Zeichen erforderlich.' : null;
+    const pwRepError = T && pr !== pn ? 'Die beiden Eingaben stimmen nicht überein.' : null;
+
+    // proto bar
+    const chip = on => ({ border: on ? 'var(--acc-line)' : 'var(--line)', bg: on ? 'var(--acc-tint)' : 'transparent', fg: on ? 'var(--acc-fg)' : 'var(--txt-3)' });
+    const protoStates = Object.keys(STATES).map(k => Object.assign({ key:k, t:STATES[k].label, onClick: () => { clearTimeout(this.tr); this.setState({ stack:k }); } }, chip(s.stack === k)));
+    const flagDefs = [['importRun','Import'],['backupRun','Backup'],['mbDown','MB down'],['diskLow','Platte knapp'],['lastRunFailed','Lauf fehlgeschlagen'],['keysEmpty','Keys leer'],['logsEmpty','Logs leer'],['historyEmpty','Historie leer']];
+    const protoFlags = flagDefs.map(([k, t]) => Object.assign({ key:k, t, onClick: () => this.setState(p => ({ [k]: !p[k] })) }, chip(!!s[k])));
+    protoFlags.push(Object.assign({ key:'q', t:'Queue ' + s.queueN, onClick: () => this.setState(p => ({ queueN: p.queueN > 0 ? 0 : 3 })) }, chip(s.queueN > 0)));
+    const loginDefs = [['normal','normal'],['fehler','Fehler'],['ratelimit','Rate-Limit'],['erststart','Erststart']];
+    const protoLogin = loginDefs.map(([k, t]) => Object.assign({ key:k, t, onClick: () => this.setState({ auth:false, loginMode:k }) }, chip(!s.auth && s.loginMode === k)));
+
+    return {
+      showLogin: !s.auth, showApp: s.auth,
+      pw: s.pw, setPw: ev => set('pw', ev.target.value),
+      loginError: s.loginMode === 'fehler', loginRateLimited: s.loginMode === 'ratelimit',
+      loginFirstRun: s.loginMode === 'erststart', loginAttempts: s.attempts,
+      loginBorder: s.loginMode === 'fehler' ? C.err : (s.loginMode === 'ratelimit' ? C.warnB : 'var(--line-3)'),
+      doLogin: ev => { ev.preventDefault(); if (s.loginMode === 'ratelimit') return; this.setState({ auth:true, pw:'', loginMode:'normal' }); },
+
+      nav, pageTitle: titles[s.screen][0], pagePath: titles[s.screen][1],
+      pollNote: polls ? 'aktualisiert vor ' + (s.tick % poll) + ' s · Polling ' + poll + ' s' : 'statische Seite · kein Polling',
+      st, sideBadges, hasSideBadges: sideBadges.length > 0,
+      goLogs: go('logs'), goJobs: go('jobs'), goStats: go('stats'), goConfig: go('config'),
+
+      isDash: s.screen === 'dash', isConfig: s.screen === 'config', isKeys: s.screen === 'keys',
+      isJobs: s.screen === 'jobs', isLogs: s.screen === 'logs', isStats: s.screen === 'stats',
+
+      canWake: s.stack === 'schlafend', canSleep: s.stack === 'bereit', canRestart: s.stack === 'fehler',
+      wakeDisabled: s.stack === 'bereit',
+      askWake: () => this.ask({ title:'Stack wecken?', body:'Der Wächter fährt Array und Container hoch. Bis Lookups direkt beantwortet werden, vergehen etwa 40 Sekunden.',
+        warn:'Diese Aktion weckt das Array. Es bleibt mindestens 10 Minuten wach (Weck-Haltezeit).', ok:'Wecken', danger:false,
+        run: () => { this.transition('startet', 'bereit', (P.weckDauerSekunden || 6) * 1000); this.notify('Weckvorgang gestartet.'); } }),
+      askSleep: () => this.ask({ title:'Stack jetzt schlafen legen?', body:'Alle Container werden gestoppt, danach darf das Array herunterfahren. Laufende Lookups werden zu Ende beantwortet.',
+        warn:'Der nächste Cache-Miss weckt das Array erneut — mit rund 40 Sekunden Verzögerung.', ok:'Schlafen legen', danger:false,
+        run: () => { this.transition('stoppt', 'schlafend', 4000); this.notify('Stack wird heruntergefahren.'); } }),
+      askRestart: () => this.ask({ title:'Stack neu starten?', body:'Alle Container werden hart gestoppt und neu gestartet. Der letzte Start ist mit einem I/O-Fehler auf /data/index gescheitert.',
+        warn:'Weckt das Array und stoppt den Stack. Bei erneutem Fehlschlag bleibt der Zustand „Fehler“.', ok:'Neu starten', danger:true,
+        run: () => { this.transition('startet', 'bereit', (P.weckDauerSekunden || 6) * 1000); this.notify('Neustart angestoßen.'); } }),
+      askLogout: () => this.ask({ title:'Abmelden?', body:'Die Session wird beendet. Laufende Jobs des Wächters laufen unabhängig davon weiter.', ok:'Abmelden', danger:false,
+        run: () => this.setState({ auth:false, loginMode:'normal' }) }),
+      askCancelJob: () => this.ask({ title:'Laufenden Job abbrechen?', body:'Der Lauf wird an der nächsten sicheren Stelle gestoppt. Bereits eingespielte Dateien bleiben erhalten, der Datenstand bleibt konsistent.',
+        warn:'Der Stack bleibt bis zum Ende der Weck-Haltezeit wach.', ok:'Job abbrechen', danger:true,
+        run: () => { this.setState({ jobRun:null, jobPct:0 }); this.notify('Job abgebrochen.'); } }),
+
+      lastRunOk: !s.lastRunFailed, lastRunFailed: s.lastRunFailed,
+      recentLogs, queueN: s.queueN, queueColor: s.queueN > 0 ? C.warn : 'var(--txt)',
+      diskFree: s.diskLow ? '412 GB / 3,6 TB' : '1,4 TB / 3,6 TB',
+      diskPct: s.diskLow ? '11%' : '39%',
+      diskColor: s.diskLow ? C.warn : 'var(--txt-2)',
+
+      configGroups,
+
+      keys, keyCount: s.keys.length, keysEmpty: s.keysEmpty || s.keys.length === 0,
+      keysPresent: !s.keysEmpty && s.keys.length > 0, authNone: s.cfg.authMode === 'none',
+      newKey: s.newKey, keyDialog: s.keyDialog, keyLabel: s.keyLabel,
+      setKeyLabel: ev => set('keyLabel', ev.target.value),
+      openKeyDialog: () => this.setState({ keyDialog:true, keyLabel:'' }),
+      closeKeyDialog: () => set('keyDialog', false),
+      createKey: ev => { ev.preventDefault(); const label = s.keyLabel.trim() || 'Unbenannt';
+        const plain = 'ao_k1_' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 10);
+        this.setState(p => ({ keyDialog:false, keysEmpty:false, newKey:{ label, plain },
+          keys: p.keys.concat([{ id: Date.now(), label, mask:'ao_k1_••••••••••' + plain.slice(-4), active:true, created:'25.07.2026', used:'—' }]) })); },
+      copyKey: () => { if (navigator.clipboard && s.newKey) navigator.clipboard.writeText(s.newKey.plain).catch(() => {}); this.notify('Key in die Zwischenablage kopiert.'); },
+      dismissKey: () => set('newKey', null),
+
+      jobActions, jobRunning: !!s.jobRun, job,
+      jobFilterType: s.jobFilterType, jobFilterResult: s.jobFilterResult,
+      setJobFilterType: ev => set('jobFilterType', ev.target.value),
+      setJobFilterResult: ev => set('jobFilterResult', ev.target.value),
+      history: historyRows, historyPresent: historyRows.length > 0, historyEmpty: historyRows.length === 0,
+      historyEmptyTitle: histFiltered ? 'Keine Läufe für diesen Filter' : 'Noch keine Läufe aufgezeichnet',
+      historyEmptyText: histFiltered ? 'Setze Typ oder Ergebnis zurück, um alle Läufe zu sehen.' : 'Der erste geplante Update-Lauf startet heute um 03:00. Bis dahin bleibt die Historie leer — das ist kein Fehler.',
+
+      logs: logRows, logsPresent: logRows.length > 0, logsEmpty: logRows.length === 0, logsFiltered,
+      logsEmptyTitle: logsFiltered ? 'Keine Ereignisse für diesen Filter' : 'Noch keine Ereignisse',
+      logsEmptyText: logsFiltered ? 'Kein Eintrag passt auf Level, Quelle und Suchtext.' : 'Der Wächter schreibt Ereignisse, sobald er startet, weckt oder importiert.',
+      logCountLabel: logs.length ? 'Einträge ' + (page * PER + 1) + '–' + (page * PER + logRows.length) + ' von ' + logs.length : '0 Einträge',
+      logPageLabel: 'Seite ' + (page + 1) + ' / ' + pages,
+      logAtStart: page === 0, logAtEnd: page >= pages - 1,
+      logPrevFg: page === 0 ? 'var(--line-3)' : 'var(--txt-1)',
+      logNextFg: page >= pages - 1 ? 'var(--line-3)' : 'var(--txt-1)',
+      logPrevCur: page === 0 ? 'not-allowed' : 'pointer',
+      logNextCur: page >= pages - 1 ? 'not-allowed' : 'pointer',
+      logPrev: () => this.setState(p => ({ logPage: Math.max(0, p.logPage - 1) })),
+      logNext: () => this.setState(p => ({ logPage: Math.min(pages - 1, p.logPage + 1) })),
+      logWindow: s.logWindow, setLogWindow: ev => this.setState({ logWindow: ev.target.value, logPage: 0 }),
+      logSource: s.logSource, setLogSource: ev => this.setState({ logSource: ev.target.value, logPage: 0 }),
+      logQuery: s.logQuery, setLogQuery: ev => this.setState({ logQuery: ev.target.value, logPage: 0 }),
+      levelChips, resetLogFilters: () => this.setState({ logLevel:'alle', logSource:'alle', logQuery:'', logWindow:'30', logPage:0, logsEmpty:false }),
+      toggleAutoRefresh: () => set('autoRefresh', !s.autoRefresh),
+      arLabel: s.autoRefresh ? 'an' : 'aus',
+      arColor: s.autoRefresh ? C.txt : 'var(--txt-3)',
+      arBorder: s.autoRefresh ? 'var(--line-3)' : 'var(--line-2)',
+      arTrack: s.autoRefresh ? C.acc : 'var(--line-2)',
+      arKnob: s.autoRefresh ? 'flex-end' : 'flex-start',
+
+      charts, kpis,
+
+      dialogOpen: !!s.dialog,
+      dlg: s.dialog ? Object.assign({}, s.dialog, {
+        okBorder: s.dialog.danger ? 'var(--err-line)' : 'var(--acc-line-2)',
+        okBg: s.dialog.danger ? 'var(--err-solid)' : 'var(--acc-solid)',
+        okFg: s.dialog.danger ? 'var(--on-err)' : 'var(--on-acc)' }) : {},
+      closeDialog: () => set('dialog', null),
+      confirmDialog: () => { const d = s.dialog; this.setState({ dialog:null }); if (d && d.run) d.run(); },
+
+      pwDialog: s.pwDialog, pwCur: pc, pwNew: pn, pwRep: pr,
+      setPwCur: ev => set('pwCur', ev.target.value),
+      setPwNew: ev => set('pwNew', ev.target.value),
+      setPwRep: ev => set('pwRep', ev.target.value),
+      pwCurError, pwNewError, pwRepError,
+      pwCurBorder: pwCurError ? C.err : 'var(--line-3)',
+      pwNewBorder: pwNewError ? C.err : 'var(--line-3)',
+      pwRepBorder: pwRepError ? C.err : 'var(--line-3)',
+      pwStrengthPct: (score / 5 * 100) + '%', pwStrengthColor: pn ? sCol : 'var(--line-2)',
+      pwStrengthLabel: pn ? sLab : '—',
+      closePwDialog: () => set('pwDialog', false),
+      submitPw: ev => { ev.preventDefault();
+        if (!pc || pn.length < 12 || pr !== pn) { set('pwTouched', true); return; }
+        this.setState({ pwDialog:false, auth:false, loginMode:'normal', pwCur:'', pwNew:'', pwRep:'', pwTouched:false });
+        this.notify('Passwort geändert — bitte neu anmelden.'); },
+
+      toastOpen: !!s.toast, toast: s.toast || {},
+      protoOpen: P.showPrototypeBar !== false, protoExpanded: s.protoExpanded,
+      protoChevron: s.protoExpanded ? '▾' : '▴',
+      toggleProto: () => set('protoExpanded', !s.protoExpanded),
+      themeOptions: [['light','Hell','Immer heller Modus'],['system','Auto','Folgt der Systemeinstellung'],['dark','Dunkel','Immer dunkler Modus']].map(([v,t,title]) => {
+        const on = s.theme === v;
+        return { key:v, t, title, onClick: () => this.setTheme(v),
+          bg: on ? 'var(--surface-2)' : 'transparent', fg: on ? 'var(--txt)' : 'var(--txt-4)' };
+      }),
+      protoStates, protoFlags, protoLogin
+    };
+  }
+}
+
+</script>
+</body>
+</html>
