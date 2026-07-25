@@ -1,0 +1,24 @@
+# API-Service: /v2/lookup, /v2/submit, /v2/lookup/batch, Index-Client, MB-Resolver.
+# Quellverzeichnis api/app/ (ARCHITECTURE §10), Import-Name: acoustid_api
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acoustid-offline-api"
+version = "0.0.1"
+description = "AcoustID-kompatibler API-Service von acoustid-offline"
+requires-python = ">=3.14"
+license = "MIT"
+dependencies = ["acoustid-offline-shared"]
+
+[tool.setuptools]
+# Neue Unterpakete unterhalb von app/ hier ergaenzen.
+packages = ["acoustid_api"]
+
+[tool.setuptools.package-dir]
+acoustid_api = "app"
+
+[tool.uv.sources]
+acoustid-offline-shared = { workspace = true }

@@ -1,0 +1,45 @@
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Virtuelle Umgebungen --------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Test- & Lint-Caches ---------------------------------------------------
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Secrets & lokale Konfiguration ---------------------------------------
+# .env enthaelt echte Zugaenge und wird nie committet (ARCHITECTURE §8.10);
+# .env.example dokumentiert den Variablensatz.
+.env
+.env.*
+!.env.example
+config.yaml
+
+# --- Betriebssystem & Editoren --------------------------------------------
+.DS_Store
+._*
+Thumbs.db
+.idea/
+.vscode/
+
+# --- AcoustID-Datenbestand -------------------------------------------------
+# Dump-Fixtures werden bewusst NICHT verteilt (Lizenz CC BY-SA 3.0, Groesse).
+# Beschaffung: tests/fixtures/fetch_fixtures.py
+# Details: tests/fixtures/acoustid-dumps/README.md
+tests/fixtures/acoustid-dumps/*.jsonl.gz
+*.jsonl.gz.part

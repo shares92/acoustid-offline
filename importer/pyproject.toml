@@ -1,0 +1,25 @@
+# Importer-Service (One-Shot-Job): Delta-Download, Parser, DB-Import,
+# Index-Feed, Backup. Quellverzeichnis importer/app/ (ARCHITECTURE §10),
+# Import-Name: acoustid_importer
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acoustid-offline-importer"
+version = "0.0.1"
+description = "Delta-Importer und Index-Feed von acoustid-offline"
+requires-python = ">=3.14"
+license = "MIT"
+dependencies = ["acoustid-offline-shared"]
+
+[tool.setuptools]
+# Neue Unterpakete unterhalb von app/ hier ergaenzen.
+packages = ["acoustid_importer"]
+
+[tool.setuptools.package-dir]
+acoustid_importer = "app"
+
+[tool.uv.sources]
+acoustid-offline-shared = { workspace = true }

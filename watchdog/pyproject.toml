@@ -1,0 +1,30 @@
+# Waechter (Dauerlaeufer auf dem Cache-Pool): Proxy mit Weck-Logik, Scheduler,
+# Admin-UI, Lookup-Cache, Notifications, Metrics.
+# Quellverzeichnis watchdog/app/ (ARCHITECTURE §10), Import-Name: acoustid_watchdog
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acoustid-offline-watchdog"
+version = "0.0.1"
+description = "Waechter (Proxy, Scheduler, Admin-UI) von acoustid-offline"
+requires-python = ">=3.14"
+license = "MIT"
+dependencies = ["acoustid-offline-shared"]
+
+[tool.setuptools]
+# Neue Unterpakete unterhalb von app/ hier ergaenzen.
+packages = ["acoustid_watchdog"]
+
+[tool.setuptools.package-dir]
+acoustid_watchdog = "app"
+
+# Admin-UI ohne Build-Schritt: Jinja2-Templates und statische Dateien
+# wandern als Paketdaten mit ins Wheel.
+[tool.setuptools.package-data]
+acoustid_watchdog = ["templates/**", "static/**"]
+
+[tool.uv.sources]
+acoustid-offline-shared = { workspace = true }

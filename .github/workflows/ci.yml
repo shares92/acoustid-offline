@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint & Tests (Python 3.14)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repo auschecken
+        uses: actions/checkout@v7
+
+      - name: uv einrichten
+        uses: astral-sh/setup-uv@v9
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Abhaengigkeiten installieren
+        run: uv sync --all-packages
+
+      - name: Lint (ruff check)
+        run: uv run ruff check --output-format=github .
+
+      - name: Format (ruff format --check)
+        run: uv run ruff format --check .
+
+      - name: Tests (pytest, alle Pakete)
+        run: uv run pytest
