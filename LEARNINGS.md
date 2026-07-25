@@ -286,3 +286,29 @@ keinen Durchsatz gebracht.
 Anwenden: Vor jedem Batch-Tuning eine kleine Messreihe (Durchsatz UND
 Speicher je Blockgröße); die Stellschraube dokumentieren (`batch_rows`,
 Default 1000) statt einen „optimierten" Magic Value einzubauen.
+
+## [Technik] Sitzungsweite GUCs statt persistenter Schalter für Bulk-Phasen
+
+Was: Der Bootstrap setzt `synchronous_commit=off` nur per `SET` in der
+eigenen Sitzung und stellt beim Verlassen den Vorher-Wert wieder her
+(nicht `RESET` — das ergäbe den Konfigurationswert, nicht den
+Sitzungszustand beim Betreten). Voraussetzung: autocommit + keine
+offene Transaktion, sonst rollt ein späterer Rollback das SET still weg.
+Warum: Stirbt der Prozess mitten im Bulk, erlöschen
+Sitzungseinstellungen von selbst — `ALTER SYSTEM` hätte eine
+Produktions-DB dauerhaft unsicher zurückgelassen.
+Anwenden: Unsichere Beschleuniger immer an die Lebensdauer der Sitzung
+binden; alles, was ein Absturz nicht zurücknimmt, gar nicht erst
+anfassen (fsync, full_page_writes).
+
+## [Technik] Nachlauf-Arbeitsvorräte bestimmen die Index-Reihenfolge im Bulk-Import
+
+Was: „Sekundärindizes erst nach dem Massenimport" kollidierte fast mit
+dem Index-Feed: dessen Arbeitsvorrat ist der Partialindex
+`fingerprint_idx_unindexed` — ohne ihn wäre jeder Feed-Batch ein
+Seq-Scan über den Vollbestand. Lösung: core → Import → indexes → Feed.
+Warum: Wer nur „Indizes zuletzt" denkt, übersieht Nachläufe, die selbst
+auf einen Index angewiesen sind, und bezahlt mit stundenlangen Scans.
+Anwenden: Vor dem Verschieben von Indizes ans Ende prüfen, welche
+Folgeschritte welchen Index als Arbeitsvorrat brauchen, und die
+Reihenfolge daran ausrichten.

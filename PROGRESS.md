@@ -3,21 +3,20 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–7 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (607 Tests).
-Warten auf Go für Phase 8. Phase-7-Nebenbefund für die
-Bootstrap-Planung: Fingerprint-Import lokal ~9,2 MB gz/s gemessen
-(Hochrechnung 414 GB ⇒ grob 12–13 h reine DB-Zeit; belastbar wird das
-erst im Probelauf Phase 8).
-Admin-UI (Phasen 23–27): Das Designpaket der Claude-Design-Session
-liegt seit 2026-07-25 vor und ist geprüft — README (Tokens, alle
-7 Views, Dialoge, Verhalten; alle §6-Entscheide beantwortet) und
-24 Screenshots vollständig, Handoff-Kopie identisch mit
-docs/DESIGN_HANDOFF.md. Defekt: Der HTML-Prototyp referenziert
-`prototype/support.js`, die Datei fehlt im Zip — der Prototyp rendert
-ohne sie nur uninitialisiertes Markup. Entscheid 2026-07-25: Der
-Betreiber lässt `support.js` aus der Design-Session nachliefern; bis
-dahin gelten README + Screenshots als Referenz.**
+**Status: Phasen 0–8 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (707 Tests).
+Warten auf Go für Phase 9. Offener DoD-Rest aus Phase 8: der Probelauf
+am echten Datenbestand (auf der Unraid-Hardware des Betreibers) steht
+aus — der Probelauf-Modus selbst ist gebaut und getestet; Referenz
+lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h reine DB-Zeit für
+414 GB. Exit-Codes und Report-Format: docs/importer-job.md.
+Admin-UI (Phasen 23–27): Designpaket vollständig und abgenommen —
+`support.js` wurde am 2026-07-25 nachgeliefert (Paket „Admin-UI-2"),
+Prototyp verifiziert (initialisiert sauber, Zustände per
+Prototyp-Steuerung durchschaltbar, Responsive-Breakpoint greift, keine
+Konsolenfehler). Der Design-Blocker ist damit aufgehoben; gebaut wird
+die UI weiterhin erst in ihren Phasen. Offen: ob das Designpaket ins
+Repo wandert (z. B. docs/design/).**
 
 ## Arbeitsregeln
 
@@ -235,22 +234,33 @@ Ziel: Erst-Import gemäß Phase-0-Strategie; Importer verhält sich als
 sauberer One-Shot-Job.
 
 Aufgaben:
-- [ ] Bootstrap-Pfad gemäß Phase-0-Entscheidung: Voll-Replay ab
-      2011-08-19, alle 7 Ströme, Bulk-Modus (Indizes/FKs nachziehen,
-      unsichere PG-Einstellungen nur währenddessen), Download-Prefetch
-      entkoppelt vom Import
-- [ ] Probelauf-Modus (begrenzter Zeitraum, z. B. `--end-date`) mit
-      Messung von Dauer, DB- und Index-Größe + Hochrechnung für die
-      Bootstrap-Doku (Betreiber-Entscheid 2026-07-25)
-- [ ] Plattenplatz-Guard: freier Platz ≥ `update.min_free_gb`, sonst
-      Abbruch mit klarem Ergebnis (Invariante §8.8)
-- [ ] One-Shot-Verhalten: definierte Exit-Codes + maschinenlesbares
-      Ergebnis-Reporting (Dateien/Zeilen/Fehler) für `update_run`
-- [ ] compose: importer-Service mit Profil `job`
+- [x] Bootstrap-Pfad: Guard → Gruppe `core` → Massenimport im
+      Bulk-Modus (nur `synchronous_commit=off`, sitzungsweit, garantiert
+      zurückgenommen) mit entkoppeltem Download-Prefetch → `CHECKPOINT`
+      → Gruppe `indexes` → erst danach Index-Feed (`job.py`, `bulk.py`,
+      `prefetch.py`)
+- [x] Probelauf-Modus: `--end-date` (letzter einzuschließender Tag) mit
+      Messung Dauer/DB-/Index-Größe und linearer Hochrechnung über
+      gz-Bytes im Report (`measure.py`, `report.project`)
+- [x] Plattenplatz-Guard: vor dem Lauf und alle 25 Dateien bzw. 2 GiB;
+      `min_free_gb` als GiB gelesen, `0` schaltet ab; Abbruch mit
+      Exit-Code 3 und intaktem Resume (`diskguard.py`)
+- [x] One-Shot-Verhalten: 9 Exit-Codes (bijektiv zu Ergebnissen, per
+      Test festgehalten), JSON-Report auf stdout oder atomar in Datei
+      (Schema `acoustid-offline/importer-run/1`); CLI
+      `python -m acoustid_importer`, SIGTERM/SIGINT → geordneter
+      Abbruch nach der laufenden Datei — Doku: docs/importer-job.md
+- [x] compose: importer-Service mit Profil `job` + importer/Dockerfile;
+      Container real gebaut und Guard-Abbruch im Container verifiziert
 
-Definition of Done: Bootstrap- und Guard-Tests grün; Exit-Codes und
-Report-Format dokumentiert; Probelauf am echten Datenbestand
-durchgeführt und Zeit-/Größen-Hochrechnung in der Bootstrap-Doku.
+Definition of Done: Bootstrap-/Guard-/Resume-Tests grün (100 neue
+Tests, 707 gesamt, inkl. Beobachtung „kein Sekundärindex während des
+Massenimports"); Exit-Codes und Report dokumentiert. **Offen: Probelauf
+am echten Datenbestand** (Unraid-Hardware; Hochrechnung bislang nur an
+einem Fixture-Tag verifiziert). Commit c915fb8. Hinweis für Phase 19:
+großzügiges Stop-Timeout setzen (SIGTERM wirkt erst nach der laufenden
+Tagesdatei; Dockers 10-s-Default führt sonst zu SIGKILL → sicheres
+Rollback, aber kein Code 8).
 
 ## Phase 9: API — /v2/lookup Kern
 

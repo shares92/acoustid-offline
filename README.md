@@ -74,6 +74,11 @@ uv run python tests/fixtures/fetch_fixtures.py
 
 Siehe [tests/fixtures/acoustid-dumps/README.md](tests/fixtures/acoustid-dumps/README.md).
 
+Der Importer läuft als One-Shot-Job (`docker compose --profile job run
+--rm importer`); Aufrufe, Exit-Codes und das Report-Format stehen in
+[docs/importer-job.md](docs/importer-job.md). Die vollständige
+Bootstrap-Anleitung folgt in Phase 29.
+
 ## Lizenz
 
 **Code:** MIT — siehe [LICENSE](LICENSE).

@@ -300,6 +300,16 @@ Fingerprint-Ströme (Buchführung gehört keinem Strom);
 `import_state.finished_at` per `clock_timestamp()` (Dauer messbar).
 Begründungen: DECISIONS „Phase-7-Import-Details".
 
+**Umsetzung (Phase 8):** `importer/app/job.py` (Gesamtlauf: Guard →
+`core` → Massenimport im Bulk-Modus mit Prefetch → `CHECKPOINT` →
+`indexes` → Index-Feed), `bulk.py` (Regel 6: ausschließlich
+`synchronous_commit=off`, sitzungsweit, Rücknahme auf den Vorher-Wert;
+`fsync`/`full_page_writes`/`ALTER SYSTEM` bewusst nie), `diskguard.py`
+(§8.8; misst das Dump-Verzeichnis — das PG-Datenverzeichnis ist aus dem
+Container nicht sichtbar), `prefetch.py`, `measure.py`, `report.py`
+(Exit-Codes + Report-Schema) und `__main__.py` (CLI). Details, Aufrufe
+und Report-Format: [docs/importer-job.md](docs/importer-job.md).
+
 **Weitere Tabellen (Spalten werden in ihren Phasen festgelegt):**
 | Tabelle | Inhalt |
 |---|---|
@@ -348,6 +358,9 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
   ohne Vektor bleiben im Vorrat; Vektoren ohne indexierbare Hashes
   gelten als erledigt (gezählt + geloggt). Jeder Batch mit
   `expected_version` abgesichert (zweiter Schreiber ⇒ lauter Abbruch).
+  Im Bootstrap läuft der Feed erst **nach** der Migrationsgruppe
+  `indexes` — ohne `fingerprint_idx_unindexed` wäre jeder Batch ein
+  Seq-Scan (Phase 8).
 
 ### 5.4 MusicBrainz-Query-Schicht (verifiziert in Phase 1)
 
@@ -405,7 +418,7 @@ Bootstrap (Pfade, Ports, DB-Zugänge).
 | `wake.hold_timeout_s` | `90` | Max. Haltezeit einer Anfrage beim Wecken |
 | `idle.timeout_min` | `15` | Auto-Stopp nach Inaktivität |
 | `update.time` | `04:00` | Täglicher Delta-Import (lokale Zeit) |
-| `update.min_free_gb` | `50` | Mindest-Plattenreserve vor Import |
+| `update.min_free_gb` | `50` | Mindest-Plattenreserve vor Import (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab; gemessen wird das Dump-Verzeichnis, Phase 8) |
 | `cache.enabled` | `true` | Lookup-Cache an/aus |
 | `cache.max_size_mb` | `512` | Obergrenze Lookup-Cache |
 | `ratelimit.per_ip_per_min` | `120` | Anfragen pro IP pro Minute |

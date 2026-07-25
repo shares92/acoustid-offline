@@ -528,3 +528,30 @@ Alternativen: Teil-Patches nur vorhandener Felder (verworfen —
 Reaktivierungs-Falle §5.1); `indexed_at` vor dem `_update` (verworfen —
 stiller Datenverlust); Erst-Import-Zeit in `imported_at` behalten
 (verworfen — widerspräche `src_day`-Semantik „letzte Anwendung").
+
+## 2026-07-25: Phase-8-Job-Details (Bulk-Sicherheit, Guard, Report)
+
+Entscheidung: (1) Bulk-Modus = ausschließlich `synchronous_commit=off`,
+als Sitzungseinstellung mit Rücknahme auf den *Vorher*-Wert (nicht
+`RESET`); `fsync`/`full_page_writes` und jedes `ALTER SYSTEM`/`ALTER
+DATABASE` sind tabu. Zusätzlich `maintenance_work_mem=1GB` nur für den
+Indexbau. (2) `update.min_free_gb` wird als GiB gelesen (strengere
+Lesart), `0` schaltet den Guard ab; gemessen wird das
+Dump-Verzeichnis. (3) Der Index-Feed läuft im Bootstrap erst nach der
+Gruppe `indexes`. (4) Eingespielte Tagesdateien werden gelöscht
+(`--keep-dumps` behält sie) — 414 GB aufzuheben wäre teuer und
+nutzlos. (5) `--end-date` benennt den letzten einzuschließenden Tag.
+(6) Report per Default als JSON auf stdout, Datei atomar
+(`.part`+Rename); 9 Exit-Codes bijektiv zu Ergebnissen (Test hält das
+fest). (7) Zwei Compose-Variablen bewusst ohne `AOFF_`-Präfix
+(`ACOUSTID_IMPORTER_IMAGE`, `ACOUSTID_WATCHDOG_DATA`), damit der
+`AOFF_`-Satz deckungsgleich mit shared/env.py bleibt (Test vorhanden).
+(8) importer/Dockerfile schon jetzt (Phase 29 übernimmt ihn für den
+Release-Build); config.yaml wird read-only unter `/watchdog` gemountet.
+Begründung: Die Sitzung ist das Sicherheitsnetz, das ein Prozesstod
+nicht aushebeln kann; Korruptionsrisiken (fsync) sind mit Resume nicht
+reparierbar und bleiben draußen; der Rest folgt „laut scheitern,
+maschinenlesbar berichten".
+Alternativen: `fsync=off` für mehr Durchsatz — verworfen (korruptes
+Cluster statt verlorener Schwanz-Transaktionen); persistente
+PG-Schalter — verworfen; Dumps behalten als Default — verworfen.
