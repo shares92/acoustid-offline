@@ -80,16 +80,24 @@ def env_settings() -> EnvSettings:
     return EnvSettings.from_env()
 
 
-def _fresh_connection(settings: EnvSettings, *, autocommit: bool) -> Iterator[psycopg.Connection]:
-    """Legt eine leere Datenbank an, migriert sie und raeumt sie danach ab."""
+def _fresh_connection(
+    settings: EnvSettings, *, autocommit: bool, migrate: bool = True
+) -> Iterator[psycopg.Connection]:
+    """Legt eine leere Datenbank an, migriert sie und raeumt sie danach ab.
+
+    Mit ``migrate=False`` bleibt sie voellig leer — so beginnt der Bootstrap
+    in Wirklichkeit, und nur so ist pruefbar, dass er die Gruppen ``core``
+    und ``indexes`` zur richtigen Zeit anwendet (Import-Regel 6).
+    """
     name = f"aoff_imp_{uuid4().hex[:12]}"
     admin_dsn = settings.db_dsn().get_secret_value()
     with psycopg.connect(admin_dsn, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     scratch_dsn = settings.model_copy(update={"db_name": name}).db_dsn().get_secret_value()
     try:
-        with psycopg.connect(scratch_dsn, autocommit=True) as setup:
-            apply(setup)
+        if migrate:
+            with psycopg.connect(scratch_dsn, autocommit=True) as setup:
+                apply(setup)
         with psycopg.connect(scratch_dsn, autocommit=autocommit) as connection:
             yield connection
     finally:
@@ -109,6 +117,12 @@ def db(env_settings: EnvSettings) -> Iterator[psycopg.Connection]:
 def service_db(env_settings: EnvSettings) -> Iterator[psycopg.Connection]:
     """Wie :func:`db`, aber ohne autocommit — so verbindet sich ein Service."""
     yield from _fresh_connection(env_settings, autocommit=False)
+
+
+@pytest.fixture
+def empty_db(env_settings: EnvSettings) -> Iterator[psycopg.Connection]:
+    """Leere Datenbank **ohne** Schema — der Ausgangspunkt des Bootstraps."""
+    yield from _fresh_connection(env_settings, autocommit=True, migrate=False)
 
 
 @pytest.fixture(scope="module")

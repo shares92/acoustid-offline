@@ -22,13 +22,21 @@ Importer pauschal absichern kann. Darunter trennen sich drei Welten:
 * **Index-Feed** (:class:`IndexFeedError`) — die Uebergabe neuer
   Fingerprints an den acoustid-index ist gescheitert. Transport- und
   Protokollfehler des Index bleiben ``FpIndexError`` aus dem shared-Paket.
+* **Job-Rumpf** (Phase 8) — :class:`DiskSpaceError` ist der kontrollierte
+  Abbruch des Plattenplatz-Guards (Invariante §8.8), :class:`BulkModeError`
+  meldet, dass die Bulk-Einstellungen des Bootstraps nicht gesetzt oder
+  nicht zurueckgenommen werden konnten.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 __all__ = [
+    "BulkModeError",
     "DbImportError",
     "DeltaNotFoundError",
+    "DiskSpaceError",
     "DownloadError",
     "GapError",
     "ImporterError",
@@ -80,6 +88,45 @@ class DbImportError(ImporterError):
 
 class IndexFeedError(ImporterError):
     """Der Index-Feed konnte nicht sauber durchlaufen (ARCHITECTURE §5.3)."""
+
+
+class DiskSpaceError(ImporterError):
+    """Der freie Plattenplatz unterschreitet ``update.min_free_gb`` (§8.8).
+
+    Kein Fehler im Sinne von „kaputt", sondern der **kontrollierte Abbruch**:
+    der Lauf hoert zwischen zwei Tagesdateien auf, ``import_state`` steht auf
+    der letzten vollstaendigen Datei, und der naechste Lauf setzt dort fort.
+
+    Args:
+        message: Meldung fuer Log und Report.
+        path: Das gemessene Verzeichnis.
+        free_bytes: Gemessener freier Platz; ``None``, wenn nicht messbar.
+        min_free_bytes: Geforderte Reserve in Byte.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: Path,
+        free_bytes: int | None,
+        min_free_bytes: int,
+    ) -> None:
+        super().__init__(message)
+        self.path = path
+        self.free_bytes = free_bytes
+        self.min_free_bytes = min_free_bytes
+
+
+class BulkModeError(ImporterError):
+    """Die Bulk-Einstellungen des Bootstraps sind nicht sauber fuehrbar.
+
+    Entweder verlangt der Bulk-Modus eine Verbindung, die er nicht bekommt
+    (Sitzungseinstellungen brauchen ``autocommit`` und keine offene
+    Transaktion — in einer zurueckgerollten Transaktion waere ein ``SET``
+    wieder weg), oder das Zuruecknehmen ist gescheitert. Beides ist laut zu
+    melden: unsichere Einstellungen duerfen den Lauf nicht ueberleben.
+    """
 
 
 class ParseError(ImporterError):

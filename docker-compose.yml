@@ -8,8 +8,9 @@
 # Werte kommen aus der .env im selben Verzeichnis (Vorlage: .env.example,
 # verbindliches Schema: shared/shared/env.py). Die .env wird nie committet.
 #
-# Stand Phase 5: `db` und `index`. Die uebrigen Dienste kommen in ihren Phasen
-# dazu (Platzhalter unten), damit hier keine ungetesteten Definitionen liegen.
+# Stand Phase 8: `db`, `index` und `importer` (Profil `job`). Die api kommt in
+# ihrer Phase dazu (Platzhalter unten), damit hier keine ungetesteten
+# Definitionen liegen.
 
 name: acoustid-offline
 
@@ -104,17 +105,82 @@ services:
       # Solange zaehlen Fehlversuche nicht; ein Treffer macht sofort gesund.
       start_period: 900s
 
+  importer:
+    # One-Shot-Job: Delta-Download, DB-Import, Index-Feed (ARCHITECTURE §5.2,
+    # §5.3). Laeuft NICHT bei `up` — er gehoert dem Profil `job` an und wird
+    # gezielt gestartet:
+    #
+    #   docker compose --profile job run --rm importer                  # taeglich
+    #   docker compose --profile job run --rm importer --mode bootstrap # Erst-Import
+    #   docker compose --profile job run --rm importer \
+    #     --mode bootstrap --end-date 2011-12-31 --report /data/dumps/probelauf.json
+    #
+    # Exit-Codes und Report-Format: docs/importer-job.md.
+    #
+    # Zwei Compose-Variablen bewusst OHNE `AOFF_`-Praefix (das ist der
+    # Variablensatz von shared/shared/env.py, und der Container bekaeme sie
+    # sonst als „unbekannt" gemeldet): ACOUSTID_IMPORTER_IMAGE waehlt ein
+    # anderes Image, ACOUSTID_WATCHDOG_DATA ein Host-Verzeichnis fuer die
+    # config.yaml des Waechters.
+    profiles: ["job"]
+    image: ${ACOUSTID_IMPORTER_IMAGE:-ghcr.io/shares92/acoustid-offline-importer:latest}
+    build:
+      context: .
+      dockerfile: importer/Dockerfile
+    container_name: acoustid-importer
+    # Ein Job wird nicht neugestartet: sein Exit-Code ist das Ergebnis, und
+    # der Waechter entscheidet, ob wiederholt wird (Invariante §8.4).
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      index:
+        # Bewusst `service_started`: der Healthcheck des Index prueft
+        # /<name>/_health und wird erst gruen, wenn der Index existiert —
+        # angelegt wird er von genau diesem Job (Phase-5-Vermerk).
+        condition: service_started
+    environment:
+      AOFF_DB_HOST: ${AOFF_DB_HOST:-acoustid-db}
+      AOFF_DB_PORT: ${AOFF_DB_PORT:-5432}
+      AOFF_DB_NAME: ${AOFF_DB_NAME:-acoustid}
+      AOFF_DB_USER: ${AOFF_DB_USER:-acoustid}
+      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:?AOFF_DB_PASSWORD fehlt - bitte in der .env setzen}
+      AOFF_INDEX_URL: ${AOFF_INDEX_URL:-http://acoustid-index:6081}
+      AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-main}
+      AOFF_DATA_DIR: /data
+      AOFF_DUMP_DIR: /data/dumps
+      # Die Laufzeit-Konfiguration gehoert dem Waechter und wird hier nur
+      # gelesen (`update.min_free_gb`, `index.query_hashes`) — deshalb ein
+      # eigener, read-only gemounteter Pfad. Fehlt die Datei, gelten die
+      # Defaults aus ARCHITECTURE §6.
+      AOFF_CONFIG_PATH: /watchdog/config.yaml
+      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
+    volumes:
+      # Arbeitsverzeichnis der Tagesdateien. Der Job loescht jede Datei nach
+      # dem Commit, es liegen also nur der Vorlauf und die aktuelle darin;
+      # trotzdem grosszuegig planen (eine Fingerprint-Tagesdatei der
+      # Fruehzeit hat mehrere GB) — der Plattenplatz-Guard misst genau hier
+      # (Invariante §8.8).
+      - dump-data:/data/dumps
+      # Datenverzeichnis des Waechters (Cache-Pool, docker-compose.watchdog.yml
+      # ab Phase 14). Ueber ACOUSTID_WATCHDOG_DATA auf einen Host-Pfad umstellbar.
+      - ${ACOUSTID_WATCHDOG_DATA:-watchdog-data}:/watchdog:ro
+
   # --- Platzhalter, kommen in ihren Phasen dazu ----------------------------
   #
   # api:       Phase 9  — eigenes Image, container_name acoustid-api,
   #            depends_on db+index (condition: service_healthy), kein ports:
   #            (der Waechter proxyt), Env aus .env.
-  # importer:  Phase 7  — One-Shot-Job, container_name acoustid-importer,
-  #            profiles: ["job"] (laeuft nicht bei `up`, sondern per
-  #            `compose run`), restart: "no", Dump-Volume AOFF_DUMP_DIR,
-  #            depends_on index mit condition: service_started (siehe oben).
 
 volumes:
   db-data:
   # Unraid: auf SSD-Cache-Pool, Share Prefer/Only: Cache (DECISIONS 2026-07-25)
   index-data:
+  # Arbeitsverzeichnis des Importers (Tagesdateien). Braucht Platz fuer den
+  # Prefetch-Vorlauf, nicht fuer die ganzen 414 GB — eingespielte Dateien
+  # werden geloescht (--keep-dumps haelt sie).
+  dump-data:
+  # Nur ein Platzhalter, solange der Waechter fehlt (Phase 14): dort entsteht
+  # das echte Datenverzeichnis auf dem Cache-Pool. Der Importer liest daraus
+  # ausschliesslich die config.yaml.
+  watchdog-data:
