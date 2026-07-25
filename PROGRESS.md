@@ -14,8 +14,9 @@ wurde; kein Index-Neuaufbau nötig. Offener DoD-Rest aus Phase 8: der
 Probelauf am echten Datenbestand (auf der Unraid-Hardware des
 Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
 getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
-reine DB-Zeit für 414 GB. Exit-Codes und Report-Format:
-docs/importer-job.md; Lookup-API: docs/api-lookup.md.
+reine DB-Zeit für 414 GB. Die Schritt-für-Schritt-Anleitung liegt
+seit 2026-07-25 vor: docs/probelauf-unraid.md. Exit-Codes und
+Report-Format: docs/importer-job.md; Lookup-API: docs/api-lookup.md.
 Admin-UI (Phasen 23–27): Designpaket vollständig und abgenommen —
 `support.js` wurde am 2026-07-25 nachgeliefert (Paket „Admin-UI-2"),
 Prototyp verifiziert (initialisiert sauber, Zustände per
@@ -263,7 +264,8 @@ Definition of Done: Bootstrap-/Guard-/Resume-Tests grün (100 neue
 Tests, 707 gesamt, inkl. Beobachtung „kein Sekundärindex während des
 Massenimports"); Exit-Codes und Report dokumentiert. **Offen: Probelauf
 am echten Datenbestand** (Unraid-Hardware; Hochrechnung bislang nur an
-einem Fixture-Tag verifiziert). Commit c915fb8. Hinweis für Phase 19:
+einem Fixture-Tag verifiziert; Anleitung: docs/probelauf-unraid.md).
+Commit c915fb8. Hinweis für Phase 19:
 großzügiges Stop-Timeout setzen (SIGTERM wirkt erst nach der laufenden
 Tagesdatei; Dockers 10-s-Default führt sonst zu SIGKILL → sicheres
 Rollback, aber kein Code 8).

@@ -76,7 +76,9 @@ Siehe [tests/fixtures/acoustid-dumps/README.md](tests/fixtures/acoustid-dumps/RE
 
 Der Importer läuft als One-Shot-Job (`docker compose --profile job run
 --rm importer`); Aufrufe, Exit-Codes und das Report-Format stehen in
-[docs/importer-job.md](docs/importer-job.md). Die vollständige
+[docs/importer-job.md](docs/importer-job.md). Für den Probelauf auf der
+Unraid-Referenzhardware gibt es eine eigene Anleitung:
+[docs/probelauf-unraid.md](docs/probelauf-unraid.md). Die vollständige
 Bootstrap-Anleitung folgt in Phase 29.
 
 ## Lizenz
