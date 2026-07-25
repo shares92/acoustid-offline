@@ -381,6 +381,12 @@ Aufgaben:
 Definition of Done: /status- und Erststart-Tests grün; Event-Log
 begrenzt korrekt.
 
+Hinweis (aus Phase 9): Der api-Container hat bewusst noch keinen
+Healthcheck-Endpunkt (§7 sieht keinen vor). Spätestens fürs
+Wake-on-request (Phase 15) braucht der Wächter eine
+Bereitschaftsprüfung der API — in dieser Phase mitentscheiden, ob dafür
+ein interner Endpunkt in die API kommt.
+
 ## Phase 15: Wächter — Proxy, Docker-Steuerung & Wecken
 
 Ziel: Kernstück On-Demand-Betrieb: Anfrage weckt den Stack.
@@ -461,6 +467,11 @@ Aufgaben:
 
 Definition of Done: Zyklus-Test grün; Historie korrekt; Stack schläft
 nach dem Lauf wieder.
+
+Hinweis (aus Phase 8): Beim Stoppen des Importer-Containers ein
+großzügiges Stop-Timeout setzen — SIGTERM wirkt erst nach der laufenden
+Tagesdatei; Dockers 10-s-Default führt zu SIGKILL (sicheres Rollback,
+aber der Lauf endet ohne den geordneten Exit-Code 8).
 
 ## Phase 20: Benachrichtigungen
 

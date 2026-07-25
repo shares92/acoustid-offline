@@ -687,6 +687,11 @@ Offene Punkte:
 15. Config-Flag für MBID-Redirect-Durchreichung (§5.4) hat noch keinen
     §6-Schlüssel — wird bei Bedarf in Phase 10 als Projekt-Ergänzung
     definiert (dann §6 + DECISIONS + Schema nachziehen).
+16. Der pg_acoustid-Test-Container (CI-Bit-Verifikation, Phase 9) baut
+    den Extension-Quelltext zur Bauzeit aus dem Upstream-Repo (letzter
+    Commit 2021, per SHA gepinnt). Verschwindet das Repo, bricht der
+    CI-Job — dann Quelltext-Tarball selbst spiegeln (lizenzrechtlich
+    nur privat halten, pg_acoustid hat keine Lizenzdatei).
 
 Risiken (Priorität aus dem Handoff):
 1. **Dump-Format/Bootstrap (hoch)** — größtes Projektrisiko, zuerst
