@@ -585,3 +585,42 @@ Alternativen: Deduplizieren vor dem Kappen (verworfen — messbar anderes
 Antwortverhalten als das Original); leere Liste bei Index-Ausfall
 (verworfen — maskiert Betriebsfehler); compare2 im api-Paket
 (verworfen — Domänenalgorithmus, nicht API-spezifisch).
+
+## 2026-07-25: Phase-10-MB-Details (Query-Schicht, meta, Degradation)
+
+Entscheidung: (1) Die MB-Schicht liegt in `shared/shared/mb/` (nicht
+im api-Paket), weil der Wächter in Phase 25 den MB-Verbindungstest
+braucht (`MbClient.check_connection()` liegt dafür bereit); Treiber ist
+psycopg3 + psycopg_pool — die SQLAlchemy-Formulierungen des
+Phase-1-Berichts beschreiben die Referenz, kein SQLAlchemy/mbdata im
+Projekt. (2) Neuer Config-Schlüssel `mb.keep_submitted_mbid` (bool,
+Default `false`): standardmäßig trägt die Antwort die **kanonische**
+MBID aus der Redirect-Auflösung; `true` reicht die eingereichte durch.
+(3) Fehlerbild ⇒ HTTP: `MbUnavailable` UND `MbSchemaMismatch`
+degradieren zu 200 ohne Metadaten (§8.7); `MbQueryError` ⇒ 5/500.
+SQLSTATE-Zuordnung: fehlende Tabelle/Spalte/Rechte/Schema ⇒ Mismatch
+(Dauerzustand → degradieren), `statement_timeout` ⇒ Unavailable, Rest
+⇒ QueryError. (4) Der Circuit-Breaker zählt Erreichbarkeit, nicht
+Korrektheit (`MbQueryError` zählt nicht; Mismatch zählt); bei bekanntem
+Selfcheck-Mismatch wird gar nicht erst abgefragt. (5) meta-Präzedenz
+ist die Wahl des **Wurzelzweigs** (if/elif-Kette wie
+`inject_metadata` im Original-Quelltext, an diesem belegt) — die
+übrigen Schlüsselwörter wirken als Detail-Modifikatoren im gewählten
+Zweig. (6) Metadaten werden einmal je Anfrage über eine gemeinsame
+`track_id`-Zuordnung injiziert (Original-Verhalten); `recordingids`
+nutzt die Index-Only-Existenzprüfung statt der Vollabfrage.
+(7) Betriebswerte als dokumentierte Konstanten statt Config: Breaker
+3 Fehler/30 s/30 s, Zeilenlimit 5000 + Truncation-Flag, connect 2 s,
+statement 2000 ms, Pool max 4, Staleness 36 h/168 h, erwartete
+Schema-Sequenz 31. (8) `sources` (track_mbid.submission_count) und
+`usermeta` (meta/track_meta) kommen vollständig aus dem Delta-Bestand.
+Begründung: ein Treiber im Projekt; §8.7 verlangt Degradation nur für
+Nichterreichbarkeit — ein dauerhaft passendes Schema ist dem
+gleichgestellt, echte Abfragefehler dürfen nicht leise verschwinden;
+Kompatibilität dort, wo Clients sie messen (Präzedenz, compress-/
+m2-Eigenheiten bug-für-bug, tabelliert in docs/api-lookup.md).
+Alternativen: SQLAlchemy-Schicht (verworfen — neue Abhängigkeit ohne
+Mehrwert); Schema-Mismatch als 500 (verworfen — degradierter Betrieb
+ist das dokumentierte Verhalten bei kaputtem Spiegel); Config-Schlüssel
+für Breaker/Timeouts (verworfen — ohne Messwerte vom echten Spiegel
+wären es Scheinstellschrauben).

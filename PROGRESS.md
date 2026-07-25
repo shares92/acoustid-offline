@@ -3,14 +3,18 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–9 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (894 Tests, drei
+**Status: Phasen 0–10 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (1048 Tests, drei
 Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation pg_acoustid).
-Warten auf Go für Phase 10. Wichtigster Phase-9-Befund: `extract_query`
-aus Phase 5 war fehlerhaft (Startoffset zeigte in eine
-Stille-bereinigte Kopie statt in den Rohvektor) — von der neuen
-CI-Bit-Verifikation aufgedeckt und behoben, BEVOR je etwas indexiert
-wurde; kein Index-Neuaufbau nötig. Offener DoD-Rest aus Phase 8: der
+Warten auf Go für Phase 11. Phase 10 in Kürze: MB-Query-Schicht als
+`shared/shared/mb/` (einzige Datei mit MB-Tabellennamen ist
+`queries.py` — als Test verankert; psycopg3 + eigener Pool,
+Circuit-Breaker, Selfcheck, Staleness-Schwellen), volle
+`meta`-Grammatik inkl. m2/compress bug-für-bug, Online-Redirect-
+Auflösung (kanonische MBID; Flag `mb.keep_submitted_mbid`),
+degradierter Betrieb nach §8.7; `sources`/`usermeta` sind vollständig
+aus dem Delta-Bestand abbildbar — nichts musste entfallen. Kein
+HOCH-Finding im Bestand. Offener DoD-Rest aus Phase 8: der
 Probelauf am echten Datenbestand (auf der Unraid-Hardware des
 Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
 getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
@@ -312,15 +316,28 @@ vom Original in docs/api-lookup.md tabelliert (u. a. Indexfehler ⇒
 Ziel: Metadaten aus der lokalen MB-Postgres, mit degradiertem Betrieb.
 
 Aufgaben:
-- [ ] Gekapselte Read-only-Query-Schicht (Tabellen aus Phase 1),
-      `mb.dsn`-Anbindung
-- [ ] `meta`-Parameter gemäß Original (u. a. `recordings`,
-      `releasegroups`, `compress`)
-- [ ] Degradierter Betrieb bei MB-Ausfall: UUIDs + MBIDs ohne Metadaten,
-      kein Fehler, Ereignis geloggt (Invariante §8.7)
-- [ ] Tests mit MB-Testdaten (Mini-Schema-Fixture) + Ausfall-Test
+- [x] Gekapselte Read-only-Query-Schicht: `shared/shared/mb/` (in
+      shared — Phase 25 braucht den MB-Verbindungstest); `queries.py`
+      als einzige Datei mit MB-Tabellennamen (Grep-Regel als Test),
+      11 Batch-Abfragen nach Phase-1-Bericht, psycopg3 + psycopg_pool,
+      Circuit-Breaker, Selfcheck beim Start (lazy nachgeholt),
+      Staleness WARN > 36 h / CRIT > 7 d
+- [x] `meta`-Parameter gemäß Original: volle Grammatik, Präzedenz =
+      Wurzelzweig-Kette wie `inject_metadata` (am Original-Quelltext
+      belegt), `sources`/`usermeta` aus eigener DB, `compress`/`m2`
+      bug-für-bug; Online-Redirect-Auflösung bei Misses → kanonische
+      MBID (neuer Schlüssel `mb.keep_submitted_mbid`, Default `false`)
+- [x] Degradierter Betrieb (§8.7): `MbUnavailable` UND
+      `MbSchemaMismatch` ⇒ 200 ohne Metadaten + WARNING;
+      `MbQueryError` ⇒ 5/500 (nicht degradieren)
+- [x] Tests: MB-Mini-Schema-Fixture (17 Tabellen + `release_event`-
+      View, synthetische Daten) gegen echtes PG 18, Ausfall-,
+      Selfcheck-Mismatch- und Truncation-Tests; 154 neue Tests
 
-Definition of Done: meta-Lookup liefert Metadaten; MB-down-Test grün.
+Definition of Done: erfüllt 2026-07-25 — 1048 Tests grün (Integration
+lokal + CI); MB-down-Test grün; bewusste Abweichungen vom Original in
+docs/api-lookup.md tabelliert. Detailentscheide in DECISIONS
+(„Phase-10-MB-Details"). Commits a467064 + ea008a6.
 
 ## Phase 11: API — /v2/submit (off/local)
 

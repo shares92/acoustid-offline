@@ -397,7 +397,10 @@ Details: [docs/research/phase1-mb-schema.md](docs/research/phase1-mb-schema.md).
   bisher nur additiv → Risiko niedrig); Selfcheck beim Start.
 - **Redirect-Auflösung:** nicht gefundene Recording-MBIDs werden
   online gegen `recording_gid_redirect` aufgelöst (Antwort trägt die
-  kanonische MBID; Config-Flag zum Durchreichen der eingereichten).
+  kanonische MBID; Config-Flag `mb.keep_submitted_mbid` zum
+  Durchreichen der eingereichten). Umgesetzt seit Phase 10 in
+  `shared/shared/mb/` (Choreografie in `metadata.py`, Antwortaufbau in
+  `api/app/meta.py`).
 - **Degradierter Betrieb:** `MbUnavailable` (Connect/Timeout/Pool) ⇒
   Antwort ohne Metadaten, HTTP 200; Circuit-Breaker;
   `statement_timeout` ~2 s; `connect_timeout` 2 s; eigener kleiner
@@ -454,6 +457,7 @@ Bootstrap (Pfade, Ports, DB-Zugänge).
 |---|---|---|
 | `index.query_hashes` | `120` | Query-Hashes je Fingerprint im Suchindex; RAM-abhängig pro Host einstellbar (z. B. 80 bei wenig RAM). Änderung erfordert Index-Neuaufbau; Empfehlungstabelle entsteht aus dem Probelauf (Phase 8) |
 | `auth.allow_known_client_keys` | `false` | `apikey`-Modus: fest einkodierte Keys bekannter Drittclients (Picard `v8pQ6oyB`, beets `1vOwZtEn`) zulassen — bewusst default aus, da öffentlich bekannt |
+| `mb.keep_submitted_mbid` | `false` | Redirect-Auflösung (§5.4): `false` = Antwort trägt die kanonische MBID, `true` = die eingereichte wird durchgereicht (Phase 10) |
 
 **Feste Werte:**
 - **Port:** Wächter lauscht auf einem Port (default `8080`) für API-Proxy
@@ -524,11 +528,11 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
 
 ### Umsetzungsstand
 
-`GET/POST /v2/lookup` ohne `meta` steht seit Phase 9 (`api/app/`,
-Parameter/Formate/Fehlercodes und bewusste Abweichungen vom Original:
-[docs/api-lookup.md](docs/api-lookup.md)). `meta`/MB-Resolver folgt in
-Phase 10, Submit in 11/12, Batch-Endpoint + `/v2/submission_status`
-in 13.
+`GET/POST /v2/lookup` steht seit Phase 9 vollständig, seit Phase 10
+**inklusive `meta`** (MB-Resolver `shared/shared/mb/` + `api/app/meta.py`;
+volle Grammatik mit Original-Präzedenz, degradierter Betrieb nach §8.7,
+Abweichungen tabelliert in [docs/api-lookup.md](docs/api-lookup.md)).
+Submit folgt in 11/12, Batch-Endpoint + `/v2/submission_status` in 13.
 
 ### Durchsetzungsort Auth & Rate-Limit
 API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**

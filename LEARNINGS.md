@@ -23,6 +23,13 @@ merkt es erst in der Integration.
 Anwenden: API-Verträge immer aus Code + Tests der Referenz belegen;
 Doku nur als Einstieg. Abweichungen Doku↔Code explizit dokumentieren
 und im Zweifel code-treu implementieren.
+Folgefund (Phase 10): Auch die EIGENEN Recherche-Berichte sind
+Interpretationen — der Berichtssatz „genau ein Zweig" zur
+meta-Präzedenz war ohne den Original-Quelltext missverständlich (er
+meint die Wahl des Wurzelzweigs, nicht den Ausschluss der
+Detail-Modifikatoren). Bei paritätskritischen Entscheiden den
+Referenz-Quelltext neben den Bericht legen, nicht nur den Bericht
+lesen.
 Folgefund (Phase 5): Auch Code-Recherche ersetzt keinen Praxistest —
 erst der Lauf gegen den echten Server zeigte u. a. Kurzfeldnamen auch
 für Requests, stilles Deckeln von limit/timeout, `{"e": …}`-Fehlerrümpfe
@@ -357,3 +364,32 @@ Warum: Scheinbare „Bit-Abweichungen" in Toleranz-losen Vergleichen
 entpuppen sich sonst als Artefakt der Textausgabe.
 Anwenden: Bei Paritäts-/Bit-Tests gegen DB-Funktionen Rückgabetypen
 prüfen und float-Spalten explizit auf float8 heben.
+
+## [Technik] Fehler-Übersetzung idempotent halten — eigene Fehler vor dem generischen except
+
+Was: Der MB-Client übersetzte in `session()` bereits übersetzte
+`MbError` ein zweites Mal durch `translate_error` — aus einem
+degradierbaren `MbSchemaMismatch` wurde so fälschlich `MbQueryError`
+(⇒ 500 statt degradierter 200). Gefangen hat es erst der
+Integrationstest gegen die echte Fixture mit fehlender Spalte, kein
+Unit-Test. Fix: `except MbError: raise` VOR dem generischen
+`except Exception`.
+Warum: Übersetzungsschichten mit generischem except fangen die eigenen
+Produkte wieder ein; der Fehler ist unsichtbar, solange Tests nur eine
+Übersetzungsebene durchlaufen.
+Anwenden: Wo Fremd-Exceptions in eine eigene Hierarchie übersetzt
+werden, die eigene Basisklasse immer zuerst und unverändert
+durchreichen; einen Test schreiben, der den Fehler durch ALLE Schichten
+laufen lässt (hier: kaputtes Schema → HTTP-Antwort).
+
+## [Bug] uv-Interpreter kennt auf macOS keine System-CA-Zertifikate
+
+Was: `fetch_fixtures.py` scheiterte im frischen Worktree an
+SSL-Verifikationsfehlern — der uv-verwaltete Python bringt kein
+CA-Bundle mit und liest den macOS-Schlüsselbund nicht. Abhilfe:
+`SSL_CERT_FILE=/etc/ssl/cert.pem` setzen (oder certifi verwenden).
+Warum: Der Fehler sieht nach kaputtem Netz oder kaputtem Server aus
+und kostet Suchzeit, obwohl es eine Interpreter-Eigenheit ist.
+Anwenden: Bei HTTPS-Skripten, die mit uv-Python laufen, auf macOS
+`SSL_CERT_FILE` setzen oder im Skript certifi als Verify-Quelle
+angeben; die Abhilfe in der Test-Doku vermerken.
