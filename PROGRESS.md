@@ -3,13 +3,12 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–4 abgeschlossen (2026-07-25); 5-Phasen-Doku-Sweep
-nach Phase 4 durchgeführt. Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (202 Tests, davon
-33 Integration gegen echtes Postgres 18). Warten auf Go für Phase 5.
-Phasen 23–27 (Admin-UI) sind blockiert, bis das Ergebnis der
-Claude-Design-Session vorliegt; Design-Entscheidungen werden nicht
-vorweggenommen.**
+**Status: Phasen 0–5 abgeschlossen (2026-07-25). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (347 Tests, davon
+51 Integration gegen echtes Postgres 18 + echtes acoustid-index-Image).
+Warten auf Go für Phase 6. Phasen 23–27 (Admin-UI) sind blockiert, bis
+das Ergebnis der Claude-Design-Session vorliegt; Design-Entscheidungen
+werden nicht vorweggenommen.**
 
 ## Arbeitsregeln
 
@@ -151,16 +150,21 @@ anweisungsgleich. Commit 1f294c4.
 Ziel: acoustid-index läuft per Compose und ist aus Python ansprechbar.
 
 Aufgaben:
-- [ ] compose: index-Service (`ghcr.io/acoustid/acoustid-index` per
-      Digest, UID 6081, kein ports:, Healthcheck mit langer
-      start_period, Volume-Hinweis „Prefer/Only: Cache")
-- [ ] shared-Client: msgpack-API (`_update` atomar mit
-      expected_version, `_search` mit timeout/limit), Query-Extraktion
-      (`index.query_hashes`, Maske, Silence-Filter, Dedup, unsigned),
-      Fehlerbehandlung/Timeouts (Timeout = HTTP 500!)
-- [ ] Integrationstest: Fixture-Fingerprint einfügen und wiederfinden
+- [x] compose: index-Service per Digest gepinnt (main @ 2025-10-27),
+      UID 6081, kein ports:, wget-Spider-Healthcheck auf
+      `/<name>/_health` (start_period 900 s), Volume-Hinweis Cache-Pool
+- [x] shared-Client `shared/shared/fpindex/` (query/wire/client/errors,
+      msgpack-Kurzform auch für Requests, client-seitige Validierung
+      statt stiller Server-Deckelung, eigene Fehlerhierarchie);
+      `extract_query` als pure Funktion; neu: `AOFF_INDEX_NAME`
+- [x] 145 neue Tests; 18 Integrationstests mit echten
+      Fixture-Vektoren gegen das echte Image (lokal + CI)
 
-Definition of Done: Compose-Integrationstest gegen echtes Index-Image grün.
+Definition of Done: erfüllt 2026-07-25 — Integrationstests lokal und
+in CI grün; 12 empirische Befunde als Addendum im Forschungsbericht.
+Commit 620aa5a. Wichtig für Phase 7/9: Dienst wird erst nach
+`ensure_index()` healthy → importer hängt mit `service_started`,
+api mit `service_healthy` ab.
 
 ## Phase 6: Importer — Download & Parser
 

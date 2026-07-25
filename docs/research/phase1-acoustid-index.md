@@ -205,6 +205,42 @@ Array).
    `FINGERPRINT_MAX_LENGTH_DIFF 7`, max. 10 Ergebnisse je Query;
    Kandidaten 10 (fast) / 20 (gründlich).
 
+## Addendum: Empirische Befunde aus Phase 5 (2026-07-25)
+
+Beim Bau des Index-Clients gegen das echte Image (Digest `c27a9926…`,
+main @ 2025-10-27) verifiziert:
+
+1. **Kurzfeldnamen gelten auch für Requests** (`{"c": …}`, PUT: `e`/`g`);
+   der Server akzeptiert beide Formen, wir senden kurz.
+2. **`GET /:index` existiert**: `{v, m, s}` (Version, Metadaten,
+   Statistik) — Statistik-Felder in Langform (`min_doc_id`,
+   `max_doc_id`, `num_segments`, `num_docs`).
+3. **Fehlerrümpfe:** `{"e": "<Kennung>"}` — u. a. `InvalidFormat`,
+   `MissingStructFields`, `IndexNotFound`, `VersionMismatch`,
+   `InvalidIndexName`, `InvalidCharacter`, `Timeout`.
+4. **`limit` wird still auf 100 gedeckelt** (0 → 1); `timeout`
+   außerhalb 1…10000 wird kommentarlos angenommen → Client validiert
+   selbst vor dem Senden.
+5. **Such-Timeout → HTTP 500 `{"e":"Timeout"}`** real reproduziert,
+   kein Teilergebnis (bestätigt).
+6. `GET /:index/_health` bei unbekanntem Index: nackte 404 ohne Rumpf.
+7. **Content-Type-Falle bestätigt**; `Accept` steuert das
+   Antwortformat, ohne `Accept` antwortet der Server msgpack.
+8. **Indexnamen-Regeln:** `[A-Za-z0-9][A-Za-z0-9_-]*`; Verstöße →
+   `InvalidIndexName`/`InvalidCharacter`.
+9. **Tombstones zählen in `num_docs` mit** — keine Zahl lebender
+   Dokumente (relevant für Index↔Postgres-Abgleiche).
+10. **Metadaten-Update ohne Changes erlaubt** und erhöht die Version —
+    als Fortschrittsmarke für den Import nutzbar.
+11. `_snapshot` liefert `application/x-tar` (Backup-Weg bestätigt).
+12. Bestätigt: doppelte ID im Batch → letzter gewinnt; Version startet
+    bei 0, +1 je `_update`; `DELETE /:index` → `{"d": true}`.
+13. **Image ist amd64-only** und hängt auf Apple Silicon unter
+    qemu-Emulation still (Prozess ohne Listen-Socket); mit
+    colima `--vz-rosetta` läuft es. Healthcheck-Werkzeuglage im Image:
+    nur `wget` (kein curl/nc/python3); `fpindex` hat keinen
+    Check-Modus (unbekanntes Argument → Illegal instruction).
+
 ## Offene Punkte
 
 1. `ng`-Umstieg: beobachten; wire-kompatibel, aber Index-Neuaufbau

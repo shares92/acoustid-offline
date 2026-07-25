@@ -23,6 +23,12 @@ merkt es erst in der Integration.
 Anwenden: API-Verträge immer aus Code + Tests der Referenz belegen;
 Doku nur als Einstieg. Abweichungen Doku↔Code explizit dokumentieren
 und im Zweifel code-treu implementieren.
+Folgefund (Phase 5): Auch Code-Recherche ersetzt keinen Praxistest —
+erst der Lauf gegen den echten Server zeigte u. a. Kurzfeldnamen auch
+für Requests, stilles Deckeln von limit/timeout, `{"e": …}`-Fehlerrümpfe
+und Indexnamen-Regeln. Vor der Integration einen empirischen
+Abgleichslauf einplanen und die Befunde als Addendum an den
+Recherche-Bericht hängen.
 
 ## [Technik] Auch offizieller Referenzcode kann defekt sein
 
@@ -62,6 +68,20 @@ Anwenden: Bei verteilbarer Software jeden RAM-/Disk-relevanten
 Stellhebel konfigurierbar machen, Default + Empfehlungstabelle
 dokumentieren — und dazuschreiben, was eine Änderung kostet (hier:
 Index-Neuaufbau).
+
+## [Technik] amd64-only-Images hängen unter qemu-Emulation still
+
+Was: Das acoustid-index-Image (nur linux/amd64) startet auf Apple
+Silicon unter colima-Default (qemu-binfmt) einen Prozess, der nie den
+Listen-Socket öffnet und nichts loggt — kein Fehler, nur Hängen. Mit
+`colima start --vz-rosetta` läuft es einwandfrei. Auf amd64-Hosts
+(Unraid, CI) irrelevant.
+Warum: „Container läuft" heißt unter Emulation nicht „Programm
+funktioniert"; das Symptom (stilles Hängen) führt in stundenlanges
+Fehlersuchen an der falschen Stelle.
+Anwenden: Bei Fremd-Images zuerst die Architektur prüfen (`docker
+manifest inspect`); auf ARM-Macs Rosetta-Modus aktivieren; in
+Test-Doku festhalten, welche lokale VM-Konfiguration nötig ist.
 
 ## [Technik] Postgres-18-Image ändert das Volume-Layout
 

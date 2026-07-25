@@ -309,6 +309,13 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
   Timeout-Antworten sind HTTP 500; `GET /_metrics` (Prometheus);
   Backup via `GET /:index/_snapshot` (tar, ohne Oplog) oder
   Dateikopie im Stillstand.
+- **Umsetzung (Phase 5):** Client in `shared/shared/fpindex/`
+  (query/wire/client/errors); Indexname via Bootstrap-Variable
+  `AOFF_INDEX_NAME` (Default `main`). Compose-Healthcheck prüft
+  `/<name>/_health` und wird erst nach `ensure_index()` gesund —
+  importer hängt mit `service_started` ab, api mit `service_healthy`.
+  Empirische API-Befunde: Addendum in
+  docs/research/phase1-acoustid-index.md.
 
 ### 5.4 MusicBrainz-Query-Schicht (verifiziert in Phase 1)
 

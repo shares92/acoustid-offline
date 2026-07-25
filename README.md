@@ -17,9 +17,9 @@ Ziele (ARCHITECTURE.md §1):
 
 ## Status
 
-**In Entwicklung — Phase 2 von 29** (Repo-Grundgerüst & CI). Der Stack ist
-noch nicht lauffähig: es gibt bisher nur die Projektstruktur, das Tooling und
-die CI. Phasenplan und Fortschritt: [PROGRESS.md](PROGRESS.md).
+**In Entwicklung** — der Stack ist noch nicht lauffähig. Aktueller
+Stand, Phasenplan und Fortschritt: [PROGRESS.md](PROGRESS.md)
+(Statuszeile ganz oben).
 
 Eine Setup-Anleitung (Unraid und generisch, Bootstrap des Datenbestands)
 folgt in späteren Phasen, sobald Compose-Dateien und Images existieren.

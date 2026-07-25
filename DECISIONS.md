@@ -5,6 +5,25 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-07-25: Index-Client — Bootstrap-Name, Healthcheck-Semantik, strikte Client-Validierung
+
+Entscheidung: (a) Der Indexname kommt als Bootstrap-Variable
+`AOFF_INDEX_NAME` (Default `main`) — der Container-Healthcheck braucht
+ihn, und dort existiert keine config.yaml. (b) Der Compose-Healthcheck
+prüft `/<name>/_health` (wget --spider; einziges HTTP-Tool im Image) —
+der Dienst wird damit bewusst erst nach `ensure_index()` gesund:
+Schreiber/Anleger (importer) hängen mit `condition: service_started`
+ab, reine Leser (api) mit `service_healthy`. (c) Der Client validiert
+`limit` (1–100), `timeout_ms` (1–10000), u32-Hashes und die
+16-MiB-Grenze selbst, weil der Server Ausreißer teils still deckelt
+statt abzulehnen.
+Begründung: Empirische Befunde aus Phase 5 (siehe Addendum in
+docs/research/phase1-acoustid-index.md); stilles Deckeln erzeugt
+schwer diagnostizierbare Abweichungen.
+Alternativen: Indexname in config.yaml (im Healthcheck nicht
+verfügbar), Healthcheck nur auf `/_health` (prüft nichts), Serverwerte
+ungeprüft durchreichen — verworfen.
+
 ## 2026-07-25: DB-Migrationen — eigener Runner, zwei Gruppen, lz4 in core
 
 Entscheidung: Eigener schlanker Migrations-Runner in `shared/shared/db/`
