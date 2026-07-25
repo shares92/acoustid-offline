@@ -38,7 +38,10 @@ FULL_CONFIG = {
         },
     },
     "backup": {"dir": "/mnt/backup", "time": "05:30"},
-    "mb": {"dsn": "postgresql://acoustid_ro:dsn-geheim@mb/musicbrainz"},
+    "mb": {
+        "dsn": "postgresql://acoustid_ro:dsn-geheim@mb/musicbrainz",
+        "keep_submitted_mbid": True,
+    },
     "index": {"query_hashes": 80},
 }
 

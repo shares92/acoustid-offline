@@ -298,6 +298,13 @@ class MbConfig(_Section):
     """
 
     dsn: SecretStr = SecretStr("")
+    #: Projekt-Ergaenzung (Phase 10): Wird eine eingereichte Recording-MBID
+    #: ueber `recording_gid_redirect` aufgeloest, traegt die Antwort per
+    #: Default die **kanonische** MBID — das ist die Angabe, mit der ein
+    #: Client in MusicBrainz weiterarbeiten kann. `true` reicht stattdessen
+    #: die eingereichte MBID durch (fuer Bestaende, die nach der alten MBID
+    #: schluesseln und den Wert wiedererkennen muessen).
+    keep_submitted_mbid: bool = False
 
     @property
     def configured(self) -> bool:

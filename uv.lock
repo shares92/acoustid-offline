@@ -86,6 +86,7 @@ dependencies = [
     { name = "httpx" },
     { name = "msgpack" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
@@ -95,6 +96,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "msgpack", specifier = ">=1.2.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "psycopg-pool", specifier = ">=3.2.7" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]

@@ -17,6 +17,10 @@ dependencies = [
     # Postgres-Treiber (Phase 4). Binary-Extra: fertige Wheels inkl. libpq,
     # damit weder Build-Tools noch libpq-dev in die Service-Images muessen.
     "psycopg[binary]>=3.3.4",
+    # Eigener kleiner Pool der MB-Query-Schicht (Phase 10, §5.4). Er liegt
+    # in shared, weil der Waechter in Phase 25 denselben Verbindungstest
+    # braucht wie der API-Dienst.
+    "psycopg-pool>=3.2.7",
     # Index-Client (Phase 5): HTTP gegen den acoustid-index. httpx bringt
     # Connection-Pooling, saubere Timeouts und eine Async-Variante mit
     # derselben API — der spaetere Async-Wrapper braucht keine neue Bibliothek.
@@ -30,7 +34,7 @@ dependencies = [
 [tool.setuptools]
 # Neue Unterpakete hier ergaenzen (kein Auto-Discovery, damit die Wheels
 # der Service-Images reproduzierbar bleiben).
-packages = ["shared", "shared.db", "shared.fingerprint", "shared.fpindex"]
+packages = ["shared", "shared.db", "shared.fingerprint", "shared.fpindex", "shared.mb"]
 
 [tool.setuptools.package-data]
 # Die Migrations-SQL wird mit ausgeliefert; ohne sie findet der Runner

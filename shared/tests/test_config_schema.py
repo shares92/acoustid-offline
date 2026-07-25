@@ -48,7 +48,7 @@ EXPECTED_DEFAULTS: dict[str, Any] = {
         "dir": "",
         "time": "04:45",
     },
-    "mb": {"dsn": ""},
+    "mb": {"dsn": "", "keep_submitted_mbid": False},
     "index": {"query_hashes": 120},
 }
 
