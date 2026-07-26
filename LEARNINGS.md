@@ -288,6 +288,11 @@ Warum: Wer überall vorsorglich castet, verrauscht die Statements; wer
 den Array-Fall vergisst, bekommt treiberabhängige Typfehler.
 Anwenden: Parameter unkonvertiert lassen, Casts gezielt nur an Stellen
 ohne Spaltenkontext setzen; bei Treiberwechsel den Array-Fall testen.
+Folgefund (Phase 12): Auch `%(p)s IS NULL` ist so eine Stelle ohne
+Spaltenkontext — echtes Postgres antwortet mit `AmbiguousParameter`,
+erst `%(p)s::integer[] IS NULL` läuft. Attrappen-Tests (FakeDb) zeigen
+das nicht; jede neue SQL-Anweisung braucht mindestens einen
+Integrationstest gegen echtes Postgres.
 
 ## [Technik] Batchgröße erst messen, dann tunen — hier zählt sie nur für den Speicher
 

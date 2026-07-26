@@ -582,9 +582,11 @@ volle Grammatik mit Original-Präzedenz, degradierter Betrieb nach §8.7,
 Abweichungen tabelliert in [docs/api-lookup.md](docs/api-lookup.md)).
 Seit Phase 11 steht `GET/POST /v2/submit` in den Modi `off`/`local`
 (`api/app/submit.py`; `local_submission` §5.2, reservierter
-Doc-ID-Bereich §5.3, Vertrag und Abweichungen:
-[docs/api-submit.md](docs/api-submit.md)). Upstream-Forwarding folgt
-in Phase 12, Batch-Endpoint + `/v2/submission_status` in 13.
+Doc-ID-Bereich §5.3), seit Phase 12 auch `local+upstream`
+(`api/app/upstream.py`: Erstversuch in der Anfrage, Queue-Drain für
+den Update-Lauf, Drossel ≤ 3 req/s, 7-Fehler-Grenze §8.9; Vertrag und
+Abweichungen: [docs/api-submit.md](docs/api-submit.md)).
+Batch-Endpoint + `/v2/submission_status` folgen in Phase 13.
 
 ### Durchsetzungsort Auth & Rate-Limit
 API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**

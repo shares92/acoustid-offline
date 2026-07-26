@@ -3,21 +3,23 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–11 abgeschlossen (2026-07-26). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (1178 Tests, drei
+**Status: Phasen 0–12 abgeschlossen (2026-07-26). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (1264 Tests, drei
 Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation pg_acoustid).
-Warten auf Go für Phase 12. Phase 11 in Kürze: `GET/POST /v2/submit`
-(Modi `off`/`local`), Tabelle `local_submission` (DDL jetzt in §5.2;
-eine Zeile je MBID, Gruppierung über `local_track_id`), Statusmaschine
-`new` → `indexed` synchron im Request, Auffindbarkeit über den
-reservierten Doc-ID-Bereich `[2^31, 2^32-1]` im Suchindex.
-HOCH-Finding dabei: die Dokument-IDs des acoustid-index sind **u32**
-(nicht u64, wie der Client annahm) — empirisch verifiziert, Client
-korrigiert, Befund im Index-Bericht (Addendum 14). Vorgemerkt für
-Phase 19: Submit während des Update-Laufs kann den Index-Feed am
-`expected_version`-Guard scheitern lassen (Hinweis dort). Phase 10
-davor: MB-Query-Schicht `shared/shared/mb/`, volle `meta`-Grammatik
-bug-für-bug, `mb.keep_submitted_mbid`, degradierter Betrieb §8.7. Offener DoD-Rest aus Phase 8: der
+Warten auf Go für Phase 13. Phase 12 in Kürze: Modus `local+upstream`
+(`api/app/upstream.py`) — erster Weiterleitungsversuch in der
+Submit-Anfrage (max. 10 Gruppen, ein HTTP-Versuch, wirft nie),
+Wiederholungen über `drain_queue` (Abnehmer Phase 19; Drossel
+≤ 3 req/s prozessweit, Backoff 1→30 s, zwei Fehlerklassen),
+7-Fehler-Grenze mit ERROR-Ereignis `upstream_forward_gave_up`
+(Abnehmer Phase 20) + manuellem `retry_forward`; nur https, Key
+maskiert, `user`-Key unverändert durchgereicht. Getestet
+ausschließlich gegen Mock-Upstream — der erste Lauf gegen den echten
+Dienst ist für Phase 28 vorgemerkt. Phase 11 davor: `/v2/submit`
+(off/local), `local_submission`, Doc-ID-Bereich `[2^31, 2^32-1]`
+(u32-HOCH-Finding, Addendum 14); Phase-19-Vormerkung
+Submit↔Feed-Guard. Phase 10: MB-Query-Schicht, volle meta-Grammatik,
+degradierter Betrieb §8.7. Offener DoD-Rest aus Phase 8: der
 Probelauf am echten Datenbestand (auf der Unraid-Hardware des
 Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
 getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
@@ -378,14 +380,29 @@ docs/api-submit.md; Detailentscheide in DECISIONS
 Ziel: Modus `local+upstream` inkl. robuster Fehler-Queue.
 
 Aufgaben:
-- [ ] Weiterleitung an api.acoustid.org mit `upstream_app_key`
-      (Format aus Phase 1)
-- [ ] Statuspfade `forwarded`/`forward_failed`; Retry beim nächsten
-      Update-Lauf; nach 7 Fehlversuchen Ereignis für Notification +
-      manueller Retry-Hook (Invariante §8.9)
-- [ ] Tests mit Mock-Upstream: Erfolg, Fehler, Retry, 7-Fehler-Grenze
+- [x] Weiterleitung an api.acoustid.org (`api/app/upstream.py`):
+      Original-Wire-Format, `client` = eigener `upstream_app_key`
+      (maskiert in jeder Fehlermeldung), `user` = Client-Key
+      unverändert, Fingerprint aus dem Vektor neu kodiert
+      (bit-verifizierter Encoder), nur https; eine Anfrage je
+      Einreichungsgruppe (`local_track_id`, mehrfaches `mbid.0`)
+- [x] Statuspfade: nur `indexed` → `forwarded`/`forward_failed`
+      (attempts zählt Läufe, nicht HTTP-Versuche); erster Versuch in
+      der Submit-Anfrage (max. 10 Gruppen, ein Versuch, wirft nie),
+      Wiederholung über `drain_queue` (max. 500, 5 Versuche, Backoff
+      1→30 s, Drossel ≤ 3 req/s prozessweit); Transportfehler
+      pausieren den Lauf, Inhaltsfehler nur die Gruppe; ab dem
+      7. Fehlversuch ERROR-Ereignis `upstream_forward_gave_up` +
+      manueller `retry_forward`-Hook (§8.9)
+- [x] Tests mit Mock-Upstream (httpx-MockTransport + injizierbare
+      Uhr, keine echten Anfragen): Erfolg, Fehlerklassen, Retry,
+      7-Fehler-Grenze, Retry-Hook, Drossel/Backoff deterministisch,
+      Modus-Matrix; 86 neue Tests (72 Unit, 10 Integration, 4 HTTP)
 
-Definition of Done: Alle Pfade getestet; Queue-Verhalten dokumentiert.
+Definition of Done: erfüllt 2026-07-26 — 1264 Tests grün (lokal + CI);
+Queue-Verhalten dokumentiert in docs/api-submit.md (inkl. 8 neuer
+Abweichungen). Keine neue Migration nötig. Detailentscheide in
+DECISIONS („Phase-12-Upstream-Details"). Commit 657ee14.
 
 ## Phase 13: API — /v2/lookup/batch & /v2/submission_status
 
@@ -519,6 +536,13 @@ intakt — DECISIONS „Phase-7-Import-Details" Punkt 7). In dieser Phase
 entscheiden: Submits während des Laufs im Wächter zurückstellen ODER
 den Feed ohne Guard fahren.
 
+Hinweis (aus Phase 12): Die beiden Aufrufpunkte für den Update-Lauf
+sind `drain_queue(connection, service, limit=…, max_attempts=…)` und
+`retry_forward(connection, service, local_track_ids=…)`
+(`api/app/upstream.py`; `MAX_FORWARD_ATTEMPTS` exportiert). Beide
+werfen bewusst durch, damit der Lauf Fehler sieht — anders als der
+Anfragepfad.
+
 ## Phase 20: Benachrichtigungen
 
 Ziel: ntfy/Webhook und SMTP, einzeln schaltbar.
@@ -533,6 +557,10 @@ Aufgaben:
 
 Definition of Done: Alle vier Ereignisse feuern in Tests auf beiden
 Kanälen; Testnachricht-Funktion vorhanden.
+
+Hinweis (aus Phase 12): Der Auslöser für „Upstream-Submit dauerhaft
+fehlgeschlagen" ist das ERROR-Ereignis `upstream_forward_gave_up`
+(Felder `local_track_id`, `forward_attempts`, `forward_error`).
 
 ## Phase 21: Backup-Job
 
@@ -613,6 +641,11 @@ Aufgaben:
 Definition of Done: Roundtrip UI → config.yaml → UI fehlerfrei; alle
 §6-Schlüssel erreichbar; Sicht-Check bestanden.
 
+Hinweis (aus Phase 12): Beim Umschalten `local` → `local+upstream` am
+Schalter anzeigen, dass der nächste Warteschlangenlauf den gesamten
+bisher nur lokalen Bestand nachschiebt (500 Gruppen je Lauf,
+≤ 3 req/s).
+
 ## Phase 26: Admin-UI — API-Keys & Jobs
 
 Ziel: Key-Verwaltung und manuelle Job-Steuerung.
@@ -665,6 +698,12 @@ Aufgaben:
 
 Definition of Done: E2E-Suite grün; mindestens ein Drittclient
 verifiziert; DroppedNeedle-Test durchgeführt oder terminiert.
+
+Hinweis (aus Phase 12): Erster echter Upstream-Lauf gehört hierher —
+Application-Key registrieren (acoustid.org/new-application, sofort
+aktiv) und mit EINER Einreichung beginnen; unbestätigt sind die exakte
+Fehlerantwort bei ungültigem Key und das Verhalten oberhalb von
+3 req/s (docs/api-submit.md, offene Punkte).
 
 ## Phase 29: Release, README & Unraid-Template
 

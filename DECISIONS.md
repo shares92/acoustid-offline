@@ -662,3 +662,42 @@ Alternativen: Ablage in track/fingerprint mit reservierten IDs
 Wächter fürs Aufwecken); asynchroner Index-Worker (verworfen —
 kollidiert mit dem Schlaf-Zyklus, Phase 16). Vormerkung Phase 19:
 Submit↔Feed-Konflikt am `expected_version`-Guard (PROGRESS-Hinweis).
+
+## 2026-07-26: Phase-12-Upstream-Details (Zeitpunkt, Bündelung, Queue)
+
+Entscheidung: (1) **Weiterleitung zweistufig:** erster Versuch in der
+Submit-Anfrage (`forward_after_submit`: nur die Gruppen dieser
+Anfrage, max. 10, EIN HTTP-Versuch ohne Backoff, wirft nie),
+Wiederholungen im Warteschlangenlauf (`drain_queue`: max. 500 Gruppen,
+5 Versuche mit Backoff 1→2→4→8→16→30 s). §8.9 sagt „erneut versucht"
+— der Erstversuch gehört in die Anfrage, sonst läge alles bis zum
+Nachtlauf still (der Stack schläft dazwischen); Hintergrund-Worker
+bleiben ausgeschlossen (Phase-11-Entscheid). (2) **Eine Anfrage je
+Einreichungsgruppe** (`local_track_id`, alle MBIDs als mehrfaches
+`mbid.0`) — Gruppen können verschiedene `user`-Keys tragen, und
+Erfolg/Fehlschlag bleibt eindeutig der Gruppe zugeordnet.
+(3) **`forward_attempts` zählt Läufe**, nicht HTTP-Versuche — sonst
+wäre die 7-Grenze nach einem Drain-Lauf erreicht. (4) **Zwei
+Fehlerklassen:** Transport (Netz/Timeout/408/429/5xx) ⇒ Lauf pausiert,
+Zähler unberührt; inhaltlich (4xx/Fehlerpayload) ⇒ nur die Gruppe
+scheitert. (5) **Drossel prozessweit** (Weiterleiter hängt am
+ApiService): Schloss + monotone Uhr, harte ⅓-s-Treppe über Threads
+hinweg. (6) **Upstream-Submission-IDs nur im Log-Ereignis**, nicht
+persistiert — Phase 13 beantwortet ausschließlich lokale IDs; eine
+Spalte wäre eine Migration ohne Abnehmer. (7) **Nur `indexed` wird
+weitergeleitet** (eine Statusspalte; `new` darf „Index kennt sie
+nicht" nicht verlieren); Fingerprint wird aus dem Vektor **neu
+kodiert** (bit-verifizierter Encoder). (8) `submitted_by` leer ⇒
+Fehlschlag ohne Anfrage (fremden Key raten wäre Zweckentfremdung);
+Application-Key wird in jeder Fehlermeldung maskiert; nur https.
+Begründung: Zweckbindung und Drosselvorgaben aus dem
+Phase-1-Bericht sind Nutzungsregeln des fremden Dienstes —
+Verstöße gefährden die Instanz (Key-Sperre); lokale Wahrheit
+(gespeichert+indexiert) darf nie an Upstream-Fehlern hängen.
+Alternativen: Weiterleitung nur im Nachtlauf (verworfen — Latenz ohne
+Not); Bündelung über Gruppen hinweg (verworfen — user-Key-Konflikt,
+unklare Fehlerzuordnung); Upstream-IDs in eigener Spalte (verworfen —
+kein Abnehmer); HTTP-Versuche zählen (verworfen — 7-Grenze nach einem
+Lauf erreicht). Vormerkung Phase 28: erster echter Lauf gegen
+api.acoustid.org mit registriertem Key, mit einer Einreichung
+beginnen.
