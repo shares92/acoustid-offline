@@ -161,12 +161,25 @@ def test_the_error_names_the_document() -> None:
         update_request("main", [Insert(doc_id=5, hashes=[-1])])
 
 
-@pytest.mark.parametrize("doc_id", [-1, 2**64])
-def test_document_ids_outside_u64_are_rejected(doc_id: int) -> None:
-    with pytest.raises(ValueError, match="ausserhalb von u64"):
+@pytest.mark.parametrize("doc_id", [-1, 2**32, 2**40, 2**64])
+def test_document_ids_outside_u32_are_rejected(doc_id: int) -> None:
+    """Dokument-IDs sind **u32** — empirisch geprueft (Phase 11).
+
+    Der Server quittiert alles ab 2^32 mit HTTP 400 `IntegerOverflow`, und
+    zwar fuer den ganzen Batch. Auf dieser Grenze steht der reservierte
+    Bereich fuer lokale Einreichungen: [2^31, 2^32-1].
+    """
+    with pytest.raises(ValueError, match="ausserhalb von u32"):
         update_request("main", [Delete(doc_id=doc_id)])
-    with pytest.raises(ValueError, match="ausserhalb von u64"):
+    with pytest.raises(ValueError, match="ausserhalb von u32"):
         delete_doc_request("main", doc_id)
+
+
+@pytest.mark.parametrize("doc_id", [0, 2**31, 2**32 - 1])
+def test_document_ids_inside_u32_are_accepted(doc_id: int) -> None:
+    assert unpack(update_request("main", [Delete(doc_id=doc_id)]).body) == {
+        "c": [{"d": {"i": doc_id}}]
+    }
 
 
 def test_u32_boundaries_are_accepted() -> None:

@@ -310,6 +310,37 @@ def test_the_server_rejects_values_outside_u32_before_we_send_them(
         index.update([Insert(doc_id=1, hashes=fingerprints[0].vector)])
 
 
+@pytest.mark.parametrize("doc_id", [2**31, 2**32 - 1])
+def test_document_ids_up_to_the_u32_maximum_survive_a_round_trip(
+    index: FpIndexClient, fingerprints: list[Fingerprint], doc_id: int
+) -> None:
+    """Der reservierte Bereich fuer lokale Einreichungen, am echten Server.
+
+    Die Grenze ist nicht dokumentiert; sie stammt aus dieser Messung
+    (Phase 11). Wichtig ist nicht nur, dass der Server die ID annimmt,
+    sondern dass er sie **unveraendert** zurueckgibt: ein stiller Ueberlauf
+    auf 32 Bit wuerde lokale Einreichungen auf importierte Fingerprints
+    legen.
+    """
+    query = fingerprints[0].query()
+    index.update([Insert(doc_id=doc_id, hashes=query)])
+    assert [hit.doc_id for hit in index.search(query, limit=40)] == [doc_id]
+
+
+def test_the_server_refuses_document_ids_above_u32(index: FpIndexClient) -> None:
+    """Gegenprobe zur Client-Pruefung: der Server sagt `IntegerOverflow`.
+
+    Der Client faengt das schon vorher ab — deshalb wird hier bewusst am
+    Client vorbei gesendet.
+    """
+    from shared.fpindex import wire
+
+    body = wire._pack({"c": [{"i": {"i": 2**32, "h": [16, 32, 48]}}]})
+    status, content = index._send(wire.WireRequest("POST", f"/{index.index_name}/_update", body))
+    assert status == 400
+    assert wire.decode_body(content) == {"e": "IntegerOverflow"}
+
+
 def test_the_search_timeout_becomes_a_search_timeout_error(
     index: FpIndexClient, fingerprints: list[Fingerprint]
 ) -> None:

@@ -105,7 +105,13 @@ MAX_SEARCH_LIMIT: Final = 100
 #: Dokumentierte Obergrenze von ``timeout`` in Millisekunden.
 MAX_SEARCH_TIMEOUT_MS: Final = 10_000
 
-_MAX_DOC_ID: Final = 0xFFFFFFFFFFFFFFFF  # u64
+#: Groesste Dokument-ID, die der Server annimmt. **u32, nicht u64** —
+#: empirisch gegen das gepinnte Image geprueft (Phase 11): 2^31 und 2^32-1
+#: werden angenommen und unveraendert wiedergefunden, ab 2^32 antwortet der
+#: Server mit HTTP 400 ``IntegerOverflow``. Kein stiller Ueberlauf, aber auch
+#: kein Platz oberhalb von u32: der reservierte Bereich fuer lokale
+#: Einreichungen liegt deshalb in [2^31, 2^32-1] (docs/api-submit.md).
+_MAX_DOC_ID: Final = UINT32_MASK
 _MAX_HASH: Final = UINT32_MASK
 
 # Zulaessige Indexnamen (empirisch: Punkt, Leerzeichen, fuehrender
@@ -317,7 +323,10 @@ def search_request(
 
 def _check_doc_id(doc_id: int) -> int:
     if not 0 <= doc_id <= _MAX_DOC_ID:
-        raise ValueError(f"Dokument-ID {doc_id} liegt ausserhalb von u64")
+        raise ValueError(
+            f"Dokument-ID {doc_id} liegt ausserhalb von u32 — der Server quittiert "
+            "das mit HTTP 400 IntegerOverflow fuer den ganzen Batch"
+        )
     return doc_id
 
 
