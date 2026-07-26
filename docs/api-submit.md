@@ -1,7 +1,8 @@
-# API-Dienst: `/v2/submit` (Phasen 11 + 12)
+# API-Dienst: `/v2/submit` und `/v2/submission_status` (Phasen 11–13)
 
-Referenz zum Submit-Endpunkt des Containers `acoustid-api`. Vertrag und
-Begründungen: ARCHITECTURE §5.2, §5.3, §6, §7 und §8.9 sowie
+Referenz zum Submit-Endpunkt des Containers `acoustid-api` und zu seiner
+Statusabfrage. Vertrag und Begründungen: ARCHITECTURE §5.2, §5.3, §6, §7 und
+§8.9 sowie
 [docs/research/phase1-api-formate.md](research/phase1-api-formate.md) und
 [docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md).
 Der Lookup steht in [docs/api-lookup.md](api-lookup.md).
@@ -10,7 +11,9 @@ Der Lookup steht in [docs/api-lookup.md](api-lookup.md).
 `local+upstream` samt Weiterleitung an api.acoustid.org, Statuspfaden
 `forwarded`/`forward_failed`, Warteschlange und Retry-Hook (Phase 12,
 Abschnitt [Upstream-Weiterleitung](#upstream-weiterleitung-localupstream)).
-`/v2/submission_status` folgt in Phase 13.
+Seit Phase 13 beantwortet
+[`/v2/submission_status`](#getpost-v2submission_status-phase-13) die vergebenen
+Submission-IDs.
 
 ## Modi (`submit.mode`, ARCHITECTURE §6)
 
@@ -91,6 +94,8 @@ Parameter im Voraus.
   `.N`-Suffix eingereicht hat. (Die Original-Doku zeigt hier fälschlich eine
   Zahl; maßgeblich ist der Code.)
 - `id` ist die Submission-ID aus `local_submission.id` — je MBID eine eigene.
+  Genau diese IDs beantwortet
+  [`/v2/submission_status`](#getpost-v2submission_status-phase-13).
 - Wurde alles still verworfen, kommt `{"status": "ok", "submissions": []}`.
 
 Fehler im üblichen Format; 19 Codes mit festem HTTP-Status
@@ -329,12 +334,79 @@ Die Antwort von api.acoustid.org enthält eigene Submission-IDs. Sie landen
 **nur im Log** (`upstream_submission_ids`), nicht in der Datenbank:
 
 - Sie in eine Spalte neben die lokalen IDs zu legen, wäre ein Datenmodellfehler
-  — `/v2/submission_status` (Phase 13) beantwortet ausschliesslich **lokale**
-  IDs, und ein vermischter Bestand wäre nicht mehr auseinanderzuhalten.
+  — `/v2/submission_status` beantwortet ausschliesslich **lokale** IDs, und ein
+  vermischter Bestand wäre nicht mehr auseinanderzuhalten.
 - Eine eigene Spalte wäre eine Migration ohne Abnehmer: die IDs sind nur gegen
   das `/v2/submission_status` des Originals etwas wert, und diese Instanz
   fragt dort nichts nach.
 - Nachvollziehbar bleiben sie über das Log-Ereignis.
+
+## `GET/POST /v2/submission_status` (Phase 13)
+
+Der kleine Bruder des Submit: wer eingereicht hat, bekam Submission-IDs und
+die Auskunft `pending`; hier fragt er später nach. Der Endpunkt heißt
+**`/v2/submission_status`** — nicht `/v2/submit/status`; das ist die
+Handoff-Korrektur aus der Phase-1-Recherche (ARCHITECTURE §7,
+Kompatibilitätsvertrag).
+
+`GET` und `POST` sind gleichwertig; Parameter aus Query-String **und**
+Formular-Rumpf, gzip und die 1-MiB-Grenze wie überall.
+
+| Name | Pflicht | Bedeutung |
+|---|---|---|
+| `client` | ja | Application-Key; nur auf Anwesenheit geprüft. |
+| `id` | ja | Submission-ID aus der Submit-Antwort. **Mehrfach erlaubt**, höchstens 100 je Anfrage. |
+| `format` | nein | `json` (Default), `jsonp`, `xml`. |
+| `jsoncallback` | nein | Funktionsname für `jsonp`. |
+| `clientversion` | nein | Nur fürs Log. |
+
+Ein `user` kommt hier **nicht** vor — der Endpunkt gehört zum Submit, kennt
+aber keinen Benutzer (Phase-1-Bericht).
+
+### Antwort
+
+Je angefragter ID ein Eintrag, in Anfragereihenfolge:
+
+```json
+{"status": "ok", "submissions": [
+  {"id": 17, "status": "imported", "result": {"id": "<acoustid>"}},
+  {"id": 18, "status": "pending"}
+]}
+```
+
+`result` steht nur bei `imported` und trägt die AcoustID der Einreichung
+(`local_submission.local_track_gid`) — dieselbe UUID, die der Lookup
+ausliefert.
+
+### Abbildung auf die Statusmaschine
+
+`local_submission.status` hat vier Werte (ARCHITECTURE §5.2), die Antwort
+kennt zwei:
+
+| Status in der DB | Antwort | Warum |
+|---|---|---|
+| `new` | `pending` | Gespeichert, aber der Suchindex kennt sie noch nicht — sie ist **noch nicht auffindbar**. Genau das heißt „wird noch verarbeitet". |
+| `indexed` | `imported` + `result.id` | Ab hier liefert der Lookup sie aus. Das ist lokal exakt das, was `imported` upstream bedeutet: die Einreichung hat eine AcoustID und ist nachschlagbar. |
+| `forwarded` | `imported` + `result.id` | Wie `indexed`; die Weiterleitung ändert am lokalen Ergebnis nichts. |
+| `forward_failed` | `imported` + `result.id` | Ebenfalls: die Einreichung ist **lokal** fertig und auffindbar. Nur der Weg nach api.acoustid.org scheiterte — eine Sache des Betreibers (Warteschlange, §8.9), nicht des Clients. Sie hier `pending` zu nennen, ließe Clients ewig weiterfragen, obwohl alles erledigt ist. |
+| unbekannte / fremde ID | `pending` | Vertrag des Originals: **nie 404**. Eine Instanz, die auf jede fremde ID mit 404 antwortet, verrät zugleich, welche IDs es gibt. |
+
+**Beantwortet werden ausschließlich lokale IDs.** Die Submission-IDs, die
+api.acoustid.org bei der Weiterleitung vergibt, stehen nur im Log und nicht in
+der Datenbank (siehe [unten](#die-submission-ids-des-originals-werden-nicht-gespeichert));
+ein vermischter Bestand wäre nicht auseinanderzuhalten.
+
+### Entscheidungen und Abweichungen
+
+| Punkt | Festlegung | Grund |
+|---|---|---|
+| `id`-Obergrenze | **100** je Anfrage ⇒ Fehler 19 / HTTP 413 | Das Original nennt keine Grenze; ohne eine wäre der Endpunkt ein billiger Verstärker (eine Anfrage, beliebig viele Antwortzeilen). 100 ist derselbe Wert wie das Track-Query-Limit des Lookups und das Batch-Limit — und für echte Clients folgenlos: Picard und beets benutzen den Endpunkt gar nicht. Gezählt werden die **geschickten** Werte, nicht die lesbaren: die Grenze ist Missbrauchsschutz, kein Qualitätsurteil. |
+| Reihenfolge und Wiederholungen | Antwort in Anfragereihenfolge, ein Eintrag **je angefragtem Wert** (auch doppelt) | Beantwortet wird, was gefragt wurde; das ist die vorhersagbarste Zuordnung für den Client. Die Datenbank wird trotzdem nur **einmal** befragt (entdoppelte ID-Liste, ein `SELECT`). |
+| Unlesbare oder nicht-positive `id` | still übersprungen | Die weiche Zahlenlesart dieser API (`duration=abc` gilt ebenfalls als „nicht angegeben"). Bleibt danach keine ID übrig, ist das derselbe Fall wie „gar keine geschickt": Fehler 2. |
+| `id.N`-Suffixe | **nicht** unterstützt | Der Phase-1-Bericht nennt für diesen Endpunkt ausdrücklich nur mehrfaches `id`; ein Suffixprotokoll hier zu erfinden wäre unbelegt. |
+| `submit.mode = off` | Der Endpunkt antwortet trotzdem | Er liest nur. Wer den Submit abschaltet, soll weiterhin erfahren, was aus früheren Einreichungen geworden ist. |
+| `forward_failed` ⇒ `imported` | siehe Tabelle oben | Der Client fragt nach **seiner** Einreichung, nicht nach dem Betriebszustand der Upstream-Queue. |
+| Fehler 18 („fingerprint not found") | wird hier nie erzeugt | Unbekannte IDs bleiben `pending` — Vertrag des Originals. |
 
 ## Wirkung im Lookup
 
@@ -394,7 +466,8 @@ Der Wächter verwirft ab Phase 17 daraufhin seinen Lookup-Cache (Invariante
 
 ```bash
 uv run pytest api/tests/test_submit_params.py api/tests/test_submit_http.py \
-              api/tests/test_submit_range.py api/tests/test_upstream.py  # ohne Dienste
+              api/tests/test_submit_range.py api/tests/test_upstream.py \
+              api/tests/test_status_http.py                              # ohne Dienste
 
 docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
 AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
@@ -432,6 +505,8 @@ Zahlenreihe einklagbar, gewartet wird nie.
 | Bündelung upstream | ein Client bündelt viele Aufnahmen je Anfrage | **eine** Anfrage je Einreichungsgruppe | Verschiedene Gruppen können verschiedene `user`-Keys tragen; je Gruppe eine Anfrage hält die Statuszuordnung eindeutig. |
 | Upstream-Submission-IDs | (die eigenen IDs sind die Antwort) | nur im Log, nicht in der Datenbank | Kein Vermischen mit den lokalen IDs, die `/v2/submission_status` beantwortet; eine eigene Spalte hätte keinen Abnehmer. |
 | Fehler bei der Weiterleitung | — | HTTP 200 `pending`, Zeile wird `forward_failed` | Lokal gespeichert ist die Wahrheit; ein Fehlercode brächte Clients zum erneuten Senden ⇒ Dubletten. |
+| `/v2/submission_status`: `imported` (Phase 13) | „von der Warteschlange des Servers verarbeitet" | „bei uns indexiert" (`indexed`, `forwarded`, `forward_failed`) | Lokal ist genau das der Moment, ab dem der Lookup die Einreichung ausliefert — dieselbe Zusage in unserer Architektur. |
+| `/v2/submission_status`: Anzahl `id` | keine dokumentierte Grenze | höchstens 100 ⇒ Fehler 19 / HTTP 413 | Missbrauchsschutz; derselbe Wert wie Track-Query- und Batch-Limit, für echte Clients folgenlos. |
 
 ## Offene Punkte
 

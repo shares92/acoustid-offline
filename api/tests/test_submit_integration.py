@@ -620,3 +620,114 @@ def test_outside_the_upstream_mode_the_drain_does_nothing(
     assert [row[3] for row in rows(db)] == ["indexed"]
     assert drain_queue(db, service).empty
     assert upstream.count == 0
+
+
+# --- /v2/submission_status (Phase 13) ---------------------------------------
+#
+# Der Endpunkt beantwortet **lokale** Submission-IDs (DECISIONS
+# „Phase-12-Upstream-Details", Punkt 6) und liest dafuer echtes SQL gegen
+# `local_submission` — inklusive des `bigint`-Casts, den die HTTP-Tests mit
+# ihrer Attrappe nicht pruefen koennen.
+
+
+def status(client: TestClient, *ids: int, **extra: str) -> dict[str, Any]:
+    response = client.get(
+        "/v2/submission_status",
+        params=[
+            ("client", "testkey"),
+            *[("id", str(item)) for item in ids],
+            *extra.items(),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_a_submission_is_pending_before_and_imported_after_indexing(
+    db: psycopg.Connection,
+    pool: ConnectionPool,
+    index: FpIndexClient,
+    samples: list[Sample],
+) -> None:
+    """Der E2E-Weg der Phase 13: Submit -> `pending` -> indexiert -> `imported`."""
+    broken = ApiService(pool, FpIndexClient("http://127.0.0.1:1", "tot"), Config())
+    broken.open()
+    with TestClient(create_app(broken)) as client:
+        submission_id = submit(client, samples[0])["submissions"][0]["id"]
+        assert [row[3] for row in rows(db)] == ["new"]
+        assert status(client, submission_id)["submissions"] == [
+            {"id": submission_id, "status": "pending"}
+        ]
+
+    healthy = ApiService(pool, index, Config())
+    healthy.open()
+    with TestClient(create_app(healthy)) as client:
+        # Erst der Nachtrag der naechsten Anfrage bringt sie in den Index …
+        submit(client, samples[1], mbid=OTHER_MBID)
+        assert [row[3] for row in rows(db)] == ["indexed", "indexed"]
+        answer = status(client, submission_id)["submissions"][0]
+
+    assert answer["status"] == "imported"
+    # … und `result.id` ist genau die AcoustID, die der Lookup ausliefert.
+    assert answer["result"] == {"id": rows(db)[0][2]}
+
+
+def test_the_answer_survives_the_upstream_states(
+    db: psycopg.Connection,
+    pool: ConnectionPool,
+    index: FpIndexClient,
+    upstream: MockUpstream,
+    samples: list[Sample],
+) -> None:
+    """`forwarded` und `forward_failed` bleiben `imported` — beide sind lokal fertig."""
+    service = upstream_service(pool, index, upstream)
+    with TestClient(create_app(service)) as client:
+        first = submit(client, samples[0])["submissions"][0]["id"]
+        assert [row[3] for row in rows(db)] == ["forwarded"]
+
+        upstream.responses.append(error_response(3, "invalid fingerprint"))
+        second = submit(client, samples[1], mbid=OTHER_MBID)["submissions"][0]["id"]
+        assert {row[3] for row in rows(db)} == {"forwarded", "forward_failed"}
+
+        answers = status(client, first, second)["submissions"]
+
+    assert [entry["status"] for entry in answers] == ["imported", "imported"]
+    assert all("result" in entry for entry in answers)
+
+
+def test_every_mbid_gets_its_own_answerable_id(
+    db: psycopg.Connection, client: TestClient, samples: list[Sample]
+) -> None:
+    """Je MBID eine Submission-ID — und jede ist einzeln abfragbar."""
+    payload = submit(client, samples[0])
+    extra = client.post(
+        "/v2/submit",
+        content="&".join(
+            [
+                "client=testkey",
+                "user=usertestkey",
+                f"fingerprint={samples[1].encoded()}",
+                f"duration={samples[1].length}",
+                f"mbid={MBID}",
+                f"mbid={OTHER_MBID}",
+            ]
+        ),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    ).json()
+
+    ids = [payload["submissions"][0]["id"], *[item["id"] for item in extra["submissions"]]]
+    assert len(ids) == 3
+    answers = status(client, *ids)["submissions"]
+    assert [entry["id"] for entry in answers] == ids
+    assert {entry["status"] for entry in answers} == {"imported"}
+    # Die beiden MBID-Zeilen derselben Aufnahme teilen sich die AcoustID.
+    assert answers[1]["result"] == answers[2]["result"]
+    assert answers[0]["result"] != answers[1]["result"]
+
+
+def test_unknown_ids_stay_pending_against_real_sql(
+    client: TestClient, samples: list[Sample]
+) -> None:
+    known = submit(client, samples[0])["submissions"][0]["id"]
+    answers = status(client, known, 987654321)["submissions"]
+    assert [entry["status"] for entry in answers] == ["imported", "pending"]

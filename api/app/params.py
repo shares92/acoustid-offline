@@ -26,6 +26,16 @@ Anwesenheit geprueft, nie auf Gueltigkeit. Die Key-Pruefung ist Sache des
 Waechters (ARCHITECTURE §7 „Durchsetzungsort Auth & Rate-Limit"); einen
 Benutzerbestand hat diese Instanz gar nicht, Fehler 6 kann hier also nie
 entstehen.
+
+Seit Phase 13 kommen zwei weitere Einstiege dazu, die beide **nicht** vom
+Original stammen bzw. eine eigene Transportform haben:
+
+* :func:`parse_lookup_batch` liest den **JSON-Rumpf** von
+  ``POST /v2/lookup/batch`` (ARCHITECTURE §7 „Eigene Endpoints"). Dort gilt
+  die Lookup-Regel „kaputte Teilanfrage still ueberspringen" gerade **nicht**:
+  jeder Eintrag bekommt seine eigene Antwort, ein Fehler bleibt beim Eintrag.
+* :func:`parse_submission_status` liest ``/v2/submission_status`` — dieselbe
+  Formular-Welt wie Lookup und Submit, nur mit mehrfachem ``id``.
 """
 
 from __future__ import annotations
@@ -36,6 +46,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from acoustid_api.errors import (
+    AcoustidError,
     InvalidBitrateError,
     InvalidDurationError,
     InvalidFingerprintError,
@@ -52,14 +63,19 @@ from shared.fingerprint import FingerprintDecodeError, decode_fingerprint
 __all__ = [
     "DEFAULT_MAX_DURATION_DIFF",
     "MAX_ALLOWED_DURATION_DIFF",
+    "MAX_BATCH_QUERIES",
     "MAX_FINGERPRINT_QUERIES",
+    "MAX_STATUS_IDS",
     "MAX_SUBMIT_DURATION",
     "MAX_TRACK_NUMBER",
     "MAX_TRACK_QUERIES",
+    "BatchEntry",
+    "BatchParams",
     "FingerprintQuery",
     "LookupParams",
     "RequestValues",
     "Submission",
+    "SubmissionStatusParams",
     "SubmitParams",
     "TrackQuery",
     "iter_suffixes",
@@ -67,6 +83,9 @@ __all__ = [
     "normalise_track_number",
     "parse_format",
     "parse_lookup",
+    "parse_lookup_batch",
+    "parse_meta",
+    "parse_submission_status",
     "parse_submit",
 ]
 
@@ -81,6 +100,15 @@ MAX_FINGERPRINT_QUERIES: Final = 20
 
 #: Hoechstzahl Track-Teilanfragen je Request (sonst Fehler 19/413).
 MAX_TRACK_QUERIES: Final = 100
+
+#: Hoechstzahl Eintraege je ``POST /v2/lookup/batch`` — der feste Wert aus
+#: ARCHITECTURE §6 („Batch-Limit"). Darueber Fehler 19 / HTTP 413.
+MAX_BATCH_QUERIES: Final = 100
+
+#: Hoechstzahl ``id``-Werte je ``/v2/submission_status``-Anfrage. Das Original
+#: nennt keine Grenze; sie steht hier als Missbrauchsschutz und ist bewusst
+#: derselbe Wert wie :data:`MAX_TRACK_QUERIES` und :data:`MAX_BATCH_QUERIES`.
+MAX_STATUS_IDS: Final = 100
 
 #: Groesster zulaessiger Wert von ``duration.N`` beim Submit (Original:
 #: ``0x7FFF``). Darueber (und bei ``0``) kommt Fehler 8.
@@ -195,6 +223,62 @@ class LookupParams:
 
 
 @dataclass(frozen=True, slots=True)
+class BatchEntry:
+    """Ein Eintrag aus ``POST /v2/lookup/batch`` — geprueft **oder** gescheitert.
+
+    Genau eines von beidem ist gesetzt: entweder :attr:`query` (dann laesst
+    sich der Eintrag beantworten) oder :attr:`error` (dann steht seine
+    Fehlerantwort schon fest). Der Fehler wird bewusst **mitgetragen** statt
+    geworfen: die Antwort ist ein Array in Anfragereihenfolge, und ein
+    kaputter Eintrag darf die uebrigen nicht reissen (DoD Phase 13).
+
+    Attributes:
+        index: Position im Anfrage-Array (0-basiert). Steht auch in der
+            Antwort — die Reihenfolge ist zwar zugesichert, aber ein
+            mitgeliefertes Ordnungsmerkmal macht sie fuer den Client
+            nachpruefbar.
+        meta: ``meta``-Werte dieses Eintrags, bereits zerlegt.
+        max_duration_diff: Laengentoleranz dieses Eintrags.
+    """
+
+    index: int
+    query: FingerprintQuery | TrackQuery | None = None
+    meta: tuple[str, ...] = ()
+    max_duration_diff: int = DEFAULT_MAX_DURATION_DIFF
+    error: AcoustidError | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class BatchParams:
+    """Vollstaendig gelesenes Ergebnis von ``POST /v2/lookup/batch``.
+
+    Anders als bei :class:`LookupParams` fehlt hier ``response_format``: der
+    Endpunkt antwortet ausschliesslich in JSON (siehe
+    :func:`parse_lookup_batch`).
+    """
+
+    client: str
+    entries: tuple[BatchEntry, ...]
+    client_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionStatusParams:
+    """Vollstaendig geprueftes Ergebnis von ``/v2/submission_status``.
+
+    Attributes:
+        ids: Die angefragten Submission-IDs **in Anfragereihenfolge**, samt
+            Wiederholungen. Je angefragtem Wert entsteht ein Antworteintrag;
+            das Original beantwortet ebenfalls, was gefragt wurde.
+    """
+
+    response_format: ResponseFormat
+    client: str
+    ids: tuple[int, ...]
+    client_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Submission:
     """Eine eingereichte Aufnahme aus ``/v2/submit`` (eine Teilanfrage).
 
@@ -285,8 +369,12 @@ def iter_suffixes(names: Iterable[str], *prefixes: str) -> list[str]:
     return [f".{number}" if number != -1 else "" for number in sorted(found)]
 
 
-def _parse_meta(raw: str | None) -> tuple[str, ...]:
-    """``meta`` in seine Einzelwerte zerlegen (inkl. der numerischen Kurzform)."""
+def parse_meta(raw: str | None) -> tuple[str, ...]:
+    """``meta`` in seine Einzelwerte zerlegen (inkl. der numerischen Kurzform).
+
+    Oeffentlich, weil der Batch-Endpunkt dieselbe Grammatik liest — nur aus
+    einem JSON-Feld statt aus einem Formularwert.
+    """
     if not raw or raw == "0":
         return ()
     if raw == "1":
@@ -398,7 +486,7 @@ def parse_lookup(values: RequestValues) -> LookupParams:
         queries=tuple(queries),
         batch=batch,
         max_duration_diff=max_duration_diff,
-        meta=_parse_meta(values.get("meta")),
+        meta=parse_meta(values.get("meta")),
         client_version=values.get("clientversion"),
     )
     _check_limits(params)
@@ -412,6 +500,218 @@ def _check_limits(params: LookupParams) -> None:
     tracks = len(selected) - fingerprints
     if fingerprints > MAX_FINGERPRINT_QUERIES or tracks > MAX_TRACK_QUERIES:
         raise RequestTooLargeError()
+
+
+# --- POST /v2/lookup/batch (eigener Endpunkt, Phase 13) ---------------------
+
+
+def _scalar(value: object) -> str | None:
+    """Einen JSON-Wert als Parameterwert lesen — oder gar nicht.
+
+    Der Batch-Rumpf ist JSON und traegt damit echte Typen; die Pruefungen des
+    Lookups arbeiten aber auf Zeichenketten. Uebersetzt werden deshalb genau
+    die Typen, die als Parameterwert ueberhaupt Sinn ergeben: Zeichenketten
+    und Zahlen. ``true``/``false``, ``null``, Listen und Objekte sind an
+    dieser Stelle kein Wert, sondern ein Fehler des Clients — sie gelten als
+    „nicht angegeben" und laufen damit in dieselbe Fehlermeldung wie ein
+    fehlender Parameter.
+
+    Ganzzahlige Fliesskommazahlen (``241.0``, so serialisieren manche
+    Sprachen jede Zahl) werden als Ganzzahl gelesen.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
+    return None
+
+
+def _meta_value(value: object, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """``meta`` eines Batch-Eintrags lesen — Zeichenkette **oder** Liste.
+
+    Die Zeichenkette ist die Form des Originals (getrennt an Whitespace,
+    numerische Kurzform inklusive); die Liste ist die Form, die ein
+    JSON-Client von sich aus schreiben wuerde. Beide sind zugelassen, weil
+    dieser Endpunkt kein Original-Vorbild hat und ein JSON-Array hier die
+    natuerlichere Schreibweise ist.
+    """
+    if value is None:
+        return default
+    if isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, str) and item)
+    return parse_meta(_scalar(value))
+
+
+def _entry_duration_diff(values: RequestValues, default: int) -> int:
+    """``maxdurationdiff`` eines Eintrags (1…30), sonst der Vorgabewert."""
+    found = values.get_int("maxdurationdiff")
+    if found is None:
+        return default
+    if not 1 <= found <= MAX_ALLOWED_DURATION_DIFF:
+        raise InvalidMaxDurationDiffError("maxdurationdiff")
+    return found
+
+
+def _parse_batch_entry(
+    index: int, raw: object, *, meta: tuple[str, ...], max_duration_diff: int
+) -> BatchEntry:
+    """Einen Eintrag lesen — ein Fehler bleibt **beim Eintrag**.
+
+    Geprueft wird mit denselben Regeln wie eine Teilanfrage des Lookups
+    (:func:`_parse_query`): derselbe Pflichtsatz, dieselben Fehlercodes,
+    dieselben Meldungstexte. Der Umweg ueber :class:`RequestValues` ist
+    Absicht — er haelt genau **eine** Stelle im Code, die entscheidet, was
+    eine gueltige Teilanfrage ist.
+    """
+    if not isinstance(raw, dict):
+        # Kein Objekt: es gibt nicht einmal einen Parameternamen, ueber den
+        # man sich beschweren koennte. Der Pflichtparameter des Lookups ist
+        # `fingerprint` — dieselbe Meldung wie bei einem leeren Objekt.
+        return BatchEntry(index=index, error=MissingParameterError("fingerprint"))
+
+    values = RequestValues(
+        query=[
+            (name, text)
+            for name, value in raw.items()
+            if isinstance(name, str) and (text := _scalar(value)) is not None
+        ]
+    )
+    try:
+        query = _parse_query(values, "")
+        diff = _entry_duration_diff(values, max_duration_diff)
+    except AcoustidError as error:
+        return BatchEntry(index=index, error=error)
+    return BatchEntry(
+        index=index,
+        query=query,
+        meta=_meta_value(raw.get("meta"), meta),
+        max_duration_diff=diff,
+    )
+
+
+def parse_lookup_batch(payload: object, values: RequestValues | None = None) -> BatchParams:
+    """Liest den JSON-Rumpf von ``POST /v2/lookup/batch``.
+
+    Der Rumpf ist ein **Objekt** mit dem Pflichtfeld ``queries``::
+
+        {"client": "…", "meta": "recordings sources",
+         "queries": [{"fingerprint": "…", "duration": 241}, …]}
+
+    ``client``, ``clientversion``, ``meta`` und ``maxdurationdiff`` gelten
+    fuer die ganze Anfrage; ``meta`` und ``maxdurationdiff`` darf jeder
+    Eintrag ueberschreiben. ``client`` und ``clientversion`` duerfen auch im
+    Query-String stehen — dann gewinnt der Query-String, wie ueberall in
+    dieser API.
+
+    Args:
+        payload: Der geparste JSON-Rumpf (``None``, wenn er fehlte oder
+            unlesbar war).
+        values: Der Query-String der Anfrage, falls vorhanden.
+
+    Returns:
+        Die Anfrage mit **je Eintrag** entweder einer Teilanfrage oder
+        einem Fehler. Eintragsfehler werden nicht geworfen — sie werden
+        mitgetragen und einzeln beantwortet.
+
+    Raises:
+        MissingParameterError: ``client`` oder ``queries`` fehlt (oder der
+            Rumpf ist kein Objekt bzw. ``queries`` keine Liste).
+        RequestTooLargeError: Mehr als :data:`MAX_BATCH_QUERIES` Eintraege.
+        InvalidMaxDurationDiffError: Das anfrageweite ``maxdurationdiff``
+            liegt ausserhalb von 1…30.
+    """
+    envelope = payload if isinstance(payload, dict) else {}
+
+    client = (values.get("client") if values is not None else None) or _scalar(
+        envelope.get("client")
+    )
+    if not client:
+        raise MissingParameterError("client")
+
+    queries = envelope.get("queries")
+    if not isinstance(queries, list):
+        # Fehlt, ist ein nacktes Array oder etwas anderes: in allen Faellen
+        # fehlt das vereinbarte Feld.
+        raise MissingParameterError("queries")
+    if len(queries) > MAX_BATCH_QUERIES:
+        raise RequestTooLargeError()
+
+    # Derselbe Weg wie beim Eintrag: erst zur Zeichenkette, dann durch die
+    # Pruefung, die auch der Lookup benutzt.
+    diff = _scalar(envelope.get("maxdurationdiff"))
+    max_duration_diff = _entry_duration_diff(
+        RequestValues([("maxdurationdiff", diff)] if diff is not None else []),
+        DEFAULT_MAX_DURATION_DIFF,
+    )
+    meta = _meta_value(envelope.get("meta"))
+
+    client_version = (values.get("clientversion") if values is not None else None) or _scalar(
+        envelope.get("clientversion")
+    )
+    return BatchParams(
+        client=client,
+        entries=tuple(
+            _parse_batch_entry(index, item, meta=meta, max_duration_diff=max_duration_diff)
+            for index, item in enumerate(queries)
+        ),
+        client_version=client_version,
+    )
+
+
+# --- /v2/submission_status --------------------------------------------------
+
+
+def parse_submission_status(values: RequestValues) -> SubmissionStatusParams:
+    """Liest und prueft alle Parameter von ``/v2/submission_status``.
+
+    Parameter laut Phase-1-Bericht: ``format``, ``client``, ``clientversion``
+    und **mehrfaches** ``id`` (Ganzzahlen). Ein ``user`` kommt hier nicht vor —
+    der Endpunkt gehoert zwar zum Submit, kennt aber keinen Benutzer.
+
+    Unlesbare und nicht-positive ``id``-Werte werden **still uebersprungen**
+    (die weiche Zahlenlesart dieser API). Bleibt danach keine ID uebrig, ist
+    das derselbe Fall wie „gar keine geschickt": Fehler 2.
+
+    Raises:
+        MissingParameterError: ``client`` fehlt, oder es bleibt keine
+            lesbare ``id`` uebrig.
+        RequestTooLargeError: Mehr als :data:`MAX_STATUS_IDS` ``id``-Werte.
+    """
+    response_format = parse_format(values)
+
+    client = values.get("client")
+    if not client:
+        raise MissingParameterError("client")
+
+    raw = values.get_all("id")
+    if not raw:
+        raise MissingParameterError("id")
+    # Gezaehlt wird, was der Client geschickt hat — nicht, was davon lesbar
+    # war: die Grenze ist ein Missbrauchsschutz, kein Qualitaetsurteil.
+    if len(raw) > MAX_STATUS_IDS:
+        raise RequestTooLargeError()
+
+    ids: list[int] = []
+    for item in raw:
+        try:
+            number = int(item)
+        except ValueError:
+            continue
+        if number > 0:
+            ids.append(number)
+    if not ids:
+        raise MissingParameterError("id")
+
+    return SubmissionStatusParams(
+        response_format=response_format,
+        client=client,
+        ids=tuple(ids),
+        client_version=values.get("clientversion"),
+    )
 
 
 # --- /v2/submit -------------------------------------------------------------

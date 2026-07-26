@@ -4,7 +4,9 @@ Hier sitzt alles, was mit dem Transport zu tun hat, und nichts weiter:
 
 * **``GET`` und ``POST`` auf derselben Route.** Parameter kommen aus dem
   Query-String **und** aus einem ``application/x-www-form-urlencoded``-Rumpf
-  (kein JSON-Rumpf — das Original kennt keinen).
+  (kein JSON-Rumpf — das Original kennt keinen). Die einzige Ausnahme ist der
+  **eigene** Batch-Endpunkt: er hat kein Original-Vorbild und liest deshalb
+  einen JSON-Rumpf (:mod:`acoustid_api.batch`).
 * **gzip-Rumpf.** ``Content-Encoding: gzip`` wird entpackt; pyacoustid
   (beets) schickt so.
 * **1-MiB-Grenze** auf dem Rumpf, **vor und nach** dem Entpacken. Ein
@@ -24,12 +26,23 @@ Rescoring sind synchron und laufen deshalb ueber
 ``run_in_threadpool``. So blockiert ein laufendes Rescoring nicht den
 Event-Loop, und es bleibt bei genau einer (synchronen) Implementierung.
 
-Zwei Routen liegen hier: ``/v2/lookup`` (Phase 9/10) und ``/v2/submit``
-(Phase 11). Beide gibt es als ``GET`` **und** ``POST``.
+Vier Routen liegen hier:
+
+===========================  ==========  =====================================
+``/v2/lookup``               GET + POST  Phasen 9/10
+``/v2/submit``               GET + POST  Phasen 11/12
+``/v2/lookup/batch``         POST        Phase 13, eigener Endpunkt, JSON-Rumpf
+``/v2/submission_status``    GET + POST  Phase 13
+===========================  ==========  =====================================
+
+Der Batch ist die einzige Route ohne ``GET``: er lebt von seinem Rumpf, und
+ein ``GET`` mit Rumpf ist kein sinnvoller Vertrag. Er ist zugleich die
+einzige, die **immer** JSON antwortet — ``format`` bleibt dort ohne Wirkung.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import zlib
 from collections.abc import AsyncIterator, Callable
@@ -40,18 +53,24 @@ from urllib.parse import parse_qsl
 from fastapi import FastAPI, Request, Response
 from starlette.concurrency import run_in_threadpool
 
+from acoustid_api.batch import handle_lookup_batch
 from acoustid_api.errors import AcoustidError, InternalError, RequestTooLargeError, error_payload
 from acoustid_api.formats import ResponseFormat
 from acoustid_api.lookup import handle_lookup
 from acoustid_api.params import (
+    BatchParams,
     LookupParams,
     RequestValues,
+    SubmissionStatusParams,
     SubmitParams,
     parse_format,
     parse_lookup,
+    parse_lookup_batch,
+    parse_submission_status,
     parse_submit,
 )
 from acoustid_api.service import ApiService
+from acoustid_api.status import handle_submission_status
 from acoustid_api.submit import check_mode, handle_submit
 from shared import setup_logging
 from shared.env import EnvSettings
@@ -126,6 +145,14 @@ def create_app(service: ApiService | None = None) -> FastAPI:
     async def submit(request: Request) -> Response:
         return await _submit(request)
 
+    @app.api_route("/v2/lookup/batch", methods=["POST"])
+    async def lookup_batch(request: Request) -> Response:
+        return await _lookup_batch(request)
+
+    @app.api_route("/v2/submission_status", methods=["GET", "POST"])
+    async def submission_status(request: Request) -> Response:
+        return await _submission_status(request)
+
     return app
 
 
@@ -175,6 +202,60 @@ async def _submit(request: Request) -> Response:
     return _render(response_format, {"status": "ok", **data}, 200)
 
 
+async def _lookup_batch(request: Request) -> Response:
+    """Ein Batch-Lookup von der Leitung bis zur fertigen Antwort.
+
+    Der eigene Endpunkt (ARCHITECTURE §7) und damit die einzige Route mit
+    JSON-Rumpf. Zwei Dinge unterscheiden ihn vom Lookup:
+
+    * **Immer JSON.** ``format`` wird gar nicht erst gelesen — ein
+      JSON-Endpunkt, der auf Wunsch XML antwortet, waere ein zweiter Vertrag
+      ohne Abnehmer, und die gemischte ok/error-Liste haette in XML keinen
+      sinnvollen Elementnamen.
+    * **Teilfehler bleiben im Rumpf.** Was ein einzelner Eintrag falsch
+      macht, steht als Fehlerobjekt an seiner Stelle; die Antwort bleibt
+      HTTP 200. Nur was der ganzen Anfrage fehlt, wird zur Fehlerantwort mit
+      ihrem HTTP-Status (:mod:`acoustid_api.batch`).
+    """
+    response_format = ResponseFormat()
+    try:
+        payload = await _read_json(request)
+        values = RequestValues(parse_qsl(request.url.query, keep_blank_values=True))
+        params = parse_lookup_batch(payload, values)
+        service: ApiService = request.app.state.service
+        data = await run_in_threadpool(_run_batch, service, params)
+    except AcoustidError as error:
+        return _render(response_format, error_payload(error), error.http_status)
+    except Exception:
+        _LOG.exception("Unbehandelter Fehler im Batch-Lookup")
+        error = InternalError()
+        return _render(response_format, error_payload(error), error.http_status)
+    return _render(response_format, {"status": "ok", **data}, 200)
+
+
+async def _submission_status(request: Request) -> Response:
+    """Eine Statusabfrage von der Leitung bis zur fertigen Antwort.
+
+    Bewusst **ohne** Modus-Pruefung: der Endpunkt liest nur. Wer den Submit
+    auf ``off`` gestellt hat, soll trotzdem erfahren, was aus frueheren
+    Einreichungen geworden ist.
+    """
+    response_format = ResponseFormat()
+    try:
+        values = await _read_values(request)
+        response_format = parse_format(values)
+        params = parse_submission_status(values)
+        service: ApiService = request.app.state.service
+        data = await run_in_threadpool(_run_status, service, params)
+    except AcoustidError as error:
+        return _render(response_format, error_payload(error), error.http_status)
+    except Exception:
+        _LOG.exception("Unbehandelter Fehler in der Statusabfrage")
+        error = InternalError()
+        return _render(response_format, error_payload(error), error.http_status)
+    return _render(response_format, {"status": "ok", **data}, 200)
+
+
 def _run_lookup(service: ApiService, params: LookupParams) -> dict[str, Any]:
     """Synchroner Teil: Verbindung ziehen, Pipeline laufen lassen."""
     with service.pool.connection() as connection:
@@ -185,6 +266,18 @@ def _run_submit(service: ApiService, params: SubmitParams) -> dict[str, Any]:
     """Synchroner Teil: Verbindung ziehen, speichern, indexieren."""
     with service.pool.connection() as connection:
         return handle_submit(connection, service, params)
+
+
+def _run_batch(service: ApiService, params: BatchParams) -> dict[str, Any]:
+    """Synchroner Teil: eine Verbindung fuer den ganzen Batch."""
+    with service.pool.connection() as connection:
+        return handle_lookup_batch(connection, service, params)
+
+
+def _run_status(service: ApiService, params: SubmissionStatusParams) -> dict[str, Any]:
+    """Synchroner Teil: eine Abfrage fuer alle IDs."""
+    with service.pool.connection() as connection:
+        return handle_submission_status(connection, params)
 
 
 def _render(response_format: ResponseFormat, data: dict[str, Any], status_code: int) -> Response:
@@ -212,15 +305,43 @@ async def _read_values(request: Request) -> RequestValues:
     return RequestValues(query, form)
 
 
-async def _read_body(request: Request) -> bytes:
-    """Rumpf lesen, Groesse begrenzen, bei Bedarf entpacken."""
+async def _read_json(request: Request) -> object:
+    """Den JSON-Rumpf des Batch-Endpunkts lesen (Groesse und gzip wie sonst).
+
+    Ein unlesbarer Rumpf gilt — wie ein kaputter gzip-Rumpf an den anderen
+    Routen — als **leer**: die Fehlertabelle der API kennt keinen Code fuer
+    „kaputter Rumpf", und der Aufrufer scheitert anschliessend am fehlenden
+    Pflichtfeld (Fehler 2). Der Grund steht im Log.
+
+    Anders als bei den Formular-Routen wird der ``Content-Type`` **nicht**
+    geprueft: der Rumpf ist der Vertrag, nicht sein Etikett. Ein Client, der
+    JSON ohne Kopfzeile schickt, wird trotzdem beantwortet.
+    """
+    body = await _read_body(request, form_only=False)
+    if not body:
+        return None
+    try:
+        return json.loads(body)
+    except ValueError as exc:
+        _LOG.warning("JSON-Rumpf nicht lesbar", extra={"error": str(exc)})
+        return None
+
+
+async def _read_body(request: Request, *, form_only: bool = True) -> bytes:
+    """Rumpf lesen, Groesse begrenzen, bei Bedarf entpacken.
+
+    Args:
+        form_only: Nur einen Formular-Rumpf lesen (die Vorgabe der
+            Original-Routen). ``False`` liest jeden Rumpf — das braucht der
+            eigene Batch-Endpunkt mit seinem JSON.
+    """
     declared = request.headers.get("content-length")
     if declared is not None and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
         raise RequestTooLargeError()
 
     media_type = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
-    if media_type and media_type != _FORM_TYPE:
-        # Multipart und JSON-Rumpf kennt das Original an dieser Route nicht;
+    if form_only and media_type and media_type != _FORM_TYPE:
+        # Multipart und JSON-Rumpf kennt das Original an diesen Routen nicht;
         # der Query-String bleibt trotzdem gueltig.
         _LOG.debug("Rumpf ignoriert", extra={"content_type": media_type})
         return b""

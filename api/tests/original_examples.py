@@ -17,6 +17,9 @@ __all__ = [
     "ERROR_TABLE",
     "LOOKUP_BATCH_EXAMPLE",
     "LOOKUP_OK_EXAMPLE",
+    "SUBMISSION_STATUS_IMPORTED_EXAMPLE",
+    "SUBMISSION_STATUS_PARAMETERS",
+    "SUBMISSION_STATUS_PENDING_EXAMPLE",
     "SUBMIT_OK_EXAMPLE",
     "SUBMIT_PARAMETERS",
 ]
@@ -59,6 +62,28 @@ SUBMIT_PARAMETERS: Final[tuple[tuple[str, bool], ...]] = (
     ("puid", False),
     ("foreignid", False),
 )
+
+#: „`/v2/submission_status`: Parameter `format`, `client`, `clientversion`,
+#: `id` (mehrfach, int; **kein** `user`)."
+SUBMISSION_STATUS_PARAMETERS: Final[tuple[str, ...]] = (
+    "format",
+    "client",
+    "clientversion",
+    "id",
+)
+
+#: „Antwort je ID `"pending"` oder `"imported"` + `result.id` (Track-GID).
+#: Unbekannte IDs bleiben still `"pending"`, nie 404." — die Huelle ist die
+#: des Submit (`submissions[]` mit `id` und `status`).
+SUBMISSION_STATUS_PENDING_EXAMPLE: Final[dict[str, Any]] = {
+    "status": "ok",
+    "submissions": [{"id": 1, "status": "pending"}],
+}
+
+SUBMISSION_STATUS_IMPORTED_EXAMPLE: Final[dict[str, Any]] = {
+    "status": "ok",
+    "submissions": [{"id": 1, "status": "imported", "result": {"id": "<track-gid>"}}],
+}
 
 #: Abschnitt „Fehlerformat" des Forschungsberichts.
 ERROR_EXAMPLE: Final[dict[str, Any]] = {

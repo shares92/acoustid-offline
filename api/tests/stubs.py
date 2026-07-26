@@ -230,6 +230,8 @@ class FakeDb:
             return self._forward_queue(params)
         if statement.startswith("SELECT local_track_id, mbid::text"):
             return self._forward_mbids(params)
+        if statement.startswith("SELECT id, status, local_track_gid"):
+            return self._states(params)
         return None
 
     def _insert(self, params: Any) -> Sequence[tuple[Any, ...]]:
@@ -334,6 +336,14 @@ class FakeDb:
             if row["local_track_id"] in params["ids"] and row.get("mbid")
         ]
 
+    def _states(self, params: Any) -> Sequence[tuple[Any, ...]]:
+        """``/v2/submission_status`` (Phase 13): Zeile, nicht Gruppe."""
+        return [
+            (row["id"], row["status"], row["local_track_gid"])
+            for row in self.rows
+            if row["id"] in params["ids"]
+        ]
+
     # --- Sicht auf die Zeilen ----------------------------------------------
 
     def _group(self, local_track_id: int) -> list[dict[str, Any]]:
@@ -368,6 +378,7 @@ class FakeDb:
         row = {
             "id": self._row_ids,
             "local_track_id": fields.get("local_track_id", self._row_ids),
+            "local_track_gid": fields.get("local_track_gid", uuid4()),
             "status": "indexed",
             "fingerprint": fields.get("fingerprint", [1, 2, 3]),
             "length": fields.get("length", 241),

@@ -20,6 +20,13 @@ Teilanfragen auf, teilen sich ihre Trefferobjekte einen Eintrag in der
 Zuordnung ``track_id -> Objekte`` und bekommen dieselben Metadaten — das
 spart Roundtrips zur MusicBrainz-Datenbank und ist zugleich das Verhalten
 des Originals.
+
+Zwei Bausteine dieses Moduls sind oeffentlich, weil der eigene
+Batch-Endpunkt (:mod:`acoustid_api.batch`, Phase 13) sie ebenfalls braucht:
+:func:`run_query` beantwortet **eine** Teilanfrage, :func:`build_results`
+uebersetzt Treffer in die Antwortstruktur und merkt sie fuer ``meta`` vor.
+So gibt es weiterhin genau eine Stelle, die weiss, wie ein Trefferobjekt
+aussieht.
 """
 
 from __future__ import annotations
@@ -37,7 +44,7 @@ from acoustid_api.store import resolve_track_gid
 if TYPE_CHECKING:  # pragma: no cover - nur fuer die Typpruefung
     from acoustid_api.service import ApiService
 
-__all__ = ["TRACK_QUERY_SCORE", "handle_lookup"]
+__all__ = ["TRACK_QUERY_SCORE", "build_results", "handle_lookup", "run_query"]
 
 _LOG = logging.getLogger(__name__)
 
@@ -66,13 +73,16 @@ def handle_lookup(
             Spiegel erreichbar war.
     """
     queries = params.selected()
-    all_matches = [_run(connection, service.matcher, query, params) for query in queries]
+    all_matches = [
+        run_query(connection, service.matcher, query, max_duration_diff=params.max_duration_diff)
+        for query in queries
+    ]
 
     # Track-ID -> alle Trefferobjekte dieser AcoustID in dieser Anfrage.
     # Bewusst ueber alle Teilanfragen hinweg (Original-Verhalten): derselbe
     # Treffer in zwei Teilanfragen kostet nur einen MB-Roundtrip.
     result_map: dict[int, list[dict[str, Any]]] = {}
-    all_results = [_results(matches, result_map) for matches in all_matches]
+    all_results = [build_results(matches, result_map) for matches in all_matches]
 
     if params.meta and result_map:
         inject_metadata(
@@ -93,13 +103,18 @@ def handle_lookup(
     return {"results": all_results[0] if all_results else []}
 
 
-def _run(
+def run_query(
     connection: psycopg.Connection,
     matcher: Matcher,
     query: FingerprintQuery | TrackQuery,
-    params: LookupParams,
+    *,
+    max_duration_diff: int,
 ) -> list[Match]:
-    """Eine einzelne Teilanfrage beantworten."""
+    """Eine einzelne Teilanfrage beantworten.
+
+    Raises:
+        ServiceUnavailableError: Der Suchindex war nicht ansprechbar.
+    """
     if isinstance(query, TrackQuery):
         target = resolve_track_gid(connection, query.track_gid)
         if target is None:
@@ -110,11 +125,11 @@ def _run(
         connection,
         query.hashes,
         query.duration,
-        max_duration_diff=params.max_duration_diff,
+        max_duration_diff=max_duration_diff,
     )
 
 
-def _results(
+def build_results(
     matches: list[Match], result_map: dict[int, list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
     """Treffer in die Antwortstruktur uebersetzen und fuer ``meta`` merken.

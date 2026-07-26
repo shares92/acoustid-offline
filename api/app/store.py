@@ -85,9 +85,11 @@ __all__ = [
     "MetaRow",
     "PendingSubmission",
     "StoredSubmission",
+    "SubmissionState",
     "load_candidates",
     "load_forward_queue",
     "load_pending_submissions",
+    "load_submission_states",
     "lookup_mbids",
     "lookup_meta",
     "lookup_meta_ids",
@@ -162,6 +164,25 @@ class PendingSubmission:
 
     local_track_id: int
     hashes: Sequence[int]
+
+
+@dataclass(frozen=True, slots=True)
+class SubmissionState:
+    """Der Zustand **einer** Submission-Zeile (``/v2/submission_status``).
+
+    Gemeint ist die Zeile, nicht die Gruppe: die Antwort des Endpunkts
+    beantwortet genau die IDs, die ``/v2/submit`` vergeben hat — und das ist
+    je MBID eine.
+
+    Attributes:
+        status: Wert aus :class:`shared.models.SubmissionStatus`.
+        local_track_gid: Die ausgelieferte AcoustID der Einreichung; sie wird
+            zu ``result.id`` der Antwort.
+    """
+
+    submission_id: int
+    status: str
+    local_track_gid: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,6 +377,15 @@ UPDATE local_submission
    SET status = 'indexed', indexed_at = now()
  WHERE local_track_id = ANY(%(ids)s::integer[])
    AND status = 'new'
+"""
+
+# `bigint[]`, nicht `integer[]`: `local_submission.id` ist ein `bigserial`.
+# Fremde oder erfundene IDs fehlen im Ergebnis — der Aufrufer beantwortet sie
+# still mit `pending` (nie 404, Phase-1-Vertrag).
+_SUBMISSION_STATES_SQL: Final = """
+SELECT id, status, local_track_gid
+FROM local_submission
+WHERE id = ANY(%(ids)s::bigint[])
 """
 
 # --- Upstream-Warteschlange (Phase 12) --------------------------------------
@@ -732,6 +762,31 @@ def mark_submissions_indexed(
     if not local_track_ids:
         return
     connection.execute(_MARK_INDEXED_SQL, {"ids": sorted(set(local_track_ids))})
+
+
+def load_submission_states(
+    connection: psycopg.Connection, submission_ids: Sequence[int]
+) -> dict[int, SubmissionState]:
+    """Status und AcoustID zu Submission-IDs (``/v2/submission_status``).
+
+    Args:
+        connection: Verbindung zur AcoustID-Postgres.
+        submission_ids: Die angefragten ``local_submission.id``.
+
+    Returns:
+        Abbildung ID -> Zustand. **Unbekannte IDs fehlen** — sie werden nicht
+        etwa als Fehler gemeldet: der Endpunkt beantwortet sie still mit
+        ``pending``, und ein 404 gibt es dort nie.
+    """
+    if not submission_ids:
+        return {}
+    rows = connection.execute(
+        _SUBMISSION_STATES_SQL, {"ids": sorted(set(submission_ids))}
+    ).fetchall()
+    return {
+        row[0]: SubmissionState(submission_id=row[0], status=row[1], local_track_gid=row[2])
+        for row in rows
+    }
 
 
 # --- Upstream-Warteschlange (Phase 12) --------------------------------------

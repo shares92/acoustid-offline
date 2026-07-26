@@ -1,14 +1,16 @@
-# API-Dienst: `/v2/lookup` (Phasen 9 und 10)
+# API-Dienst: `/v2/lookup` und `/v2/lookup/batch` (Phasen 9, 10 und 13)
 
-Referenz zum Lookup-Endpunkt des Containers `acoustid-api`. Vertrag und
-Begründungen: ARCHITECTURE §5.3, §5.4 und §7 sowie
-[docs/research/phase1-api-formate.md](research/phase1-api-formate.md),
+Referenz zu den beiden Lookup-Endpunkten des Containers `acoustid-api`.
+Vertrag und Begründungen: ARCHITECTURE §5.3, §5.4, §6 („Batch-Limit") und §7
+sowie [docs/research/phase1-api-formate.md](research/phase1-api-formate.md),
 [docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md)
 und [docs/research/phase1-mb-schema.md](research/phase1-mb-schema.md).
 
 **Stand:** Lookup **mit** `meta` (Metadaten aus der
-MusicBrainz-Spiegel-Datenbank, Phase 10). `/v2/submit` folgt in Phase 11/12,
-`/v2/lookup/batch` und `/v2/submission_status` in Phase 13.
+MusicBrainz-Spiegel-Datenbank, Phase 10); seit Phase 13 zusätzlich der eigene
+Endpunkt [`POST /v2/lookup/batch`](#post-v2lookupbatch-eigener-endpunkt-phase-13).
+`/v2/submit` und `/v2/submission_status` stehen in
+[docs/api-submit.md](api-submit.md).
 
 ## Betrieb
 
@@ -168,6 +170,128 @@ Eigenheiten des Originals, die hier bewusst nachgebildet sind:
 - `usermeta`-Künstler stehen als nackte Zeichenketten in `artists[]`, nicht
   als `{"id": …, "name": …}`.
 
+## `POST /v2/lookup/batch` (eigener Endpunkt, Phase 13)
+
+Der einzige eigene Endpunkt der API (ARCHITECTURE §7 „Eigene Endpoints") —
+api.acoustid.org kennt ihn nicht. Es gibt hier also **kein Original**, das
+bug-für-bug nachzubauen wäre; maßgeblich ist der eigene Lookup-Vertrag: in
+jedem Eintrag gelten dieselbe Grammatik, dieselbe Prüfreihenfolge und
+dieselbe Fehlertabelle.
+
+**Wozu.** Diese Instanz schläft im Normalfall. Wer 300 Dateien taggt, weckt
+sie über das Original-Batchprotokoll (max. 20 Fingerprints je Anfrage)
+fünfzehnmal — über diesen Endpunkt dreimal. Eine Anfrage, ein Weckvorgang,
+ein Bündel MusicBrainz-Abfragen.
+
+### Anfrage
+
+`POST` (kein `GET` — der Endpunkt lebt von seinem Rumpf).
+`Content-Type: application/json`; `Content-Encoding: gzip` wird entpackt;
+Rumpfgrenze 1 MiB vor und nach dem Entpacken (darüber Fehler 19 / HTTP 413).
+
+```json
+{
+  "client": "…",
+  "meta": "recordings sources",
+  "queries": [
+    {"fingerprint": "AQABz…", "duration": 241},
+    {"fingerprint": "AQADt…", "duration": 180, "maxdurationdiff": 30},
+    {"trackid": "b81f83ee-4da4-11e0-9ed8-0025225356f3", "meta": "releases"}
+  ]
+}
+```
+
+Feld der Hülle:
+
+| Name | Pflicht | Bedeutung |
+|---|---|---|
+| `queries` | ja | Array der Einträge, **höchstens 100** (ARCHITECTURE §6). Leeres Array ist erlaubt. |
+| `client` | ja | Application-Key; nur auf Anwesenheit geprüft. Darf stattdessen im Query-String stehen — dann gewinnt der Query-String. |
+| `meta` | nein | Vorgabewert für alle Einträge. |
+| `maxdurationdiff` | nein | Vorgabewert für alle Einträge, 1…30 (Default 7). |
+| `clientversion` | nein | Nur fürs Log; ebenfalls aus dem Query-String lesbar. |
+
+Je Eintrag:
+
+| Name | Pflicht | Bedeutung |
+|---|---|---|
+| `fingerprint` | ja¹ | Komprimierter Chromaprint, wie beim Lookup. |
+| `duration` | ja¹ | Länge in Sekunden; Zahl **oder** Zahl als Zeichenkette. |
+| `trackid` | ja¹ | Statt Fingerprint: AcoustID direkt nachschlagen (Score 1.0). |
+| `meta` | nein | Überschreibt den Wert der Hülle. Zeichenkette wie im Original (`"recordings sources"`, auch die Kurzform `0`/`1`/`2`) **oder** JSON-Array (`["recordings", "sources"]`). |
+| `maxdurationdiff` | nein | Überschreibt den Wert der Hülle. |
+
+¹ Je Eintrag entweder `trackid` **oder** `fingerprint` + `duration`.
+
+`true`/`false`, `null`, Objekte und Arrays sind an Stellen, wo ein einzelner
+Wert erwartet wird, kein Wert — sie gelten als „nicht angegeben" und führen
+in dieselbe Meldung wie ein fehlender Parameter.
+
+### Antwort
+
+Immer HTTP 200 und immer JSON, sofern die **Anfrage** in Ordnung war. Das
+Array steht in Anfragereihenfolge; jeder Eintrag ist eine vollständige
+AcoustID-Antwort und trägt zusätzlich seine Position als `index`:
+
+```json
+{"status": "ok", "responses": [
+  {"index": 0, "status": "ok", "results": [{"id": "<acoustid>", "score": 0.98}]},
+  {"index": 1, "status": "error", "error": {"code": 3, "message": "invalid fingerprint"}}
+]}
+```
+
+**Teilfehler reißen die anderen Einträge nicht** (DoD Phase 13). Alles, was
+ein Eintrag selbst falsch machen kann, wird zu seinem eigenen Fehlerobjekt;
+die Gesamtantwort bleibt HTTP 200. Ein anderer Status würde Clients die ganze
+Antwort verwerfen lassen — und Picard-artige Clients zum erneuten Senden
+bringen.
+
+Was dagegen der **Anfrage** fehlt, beendet sie ganz, im gewohnten
+Fehlerformat mit dem gewohnten HTTP-Status:
+
+| Lage | Antwort |
+|---|---|
+| `client` fehlt | 2 / 400 |
+| Rumpf ist kein Objekt, `queries` fehlt oder ist keine Liste, Rumpf unlesbar/leer | 2 / 400 (`missing required parameter "queries"`) |
+| `maxdurationdiff` der Hülle außerhalb 1…30 | 11 / 400 |
+| mehr als 100 Einträge | 19 / 413 |
+| Rumpf > 1 MiB (auch entpackt) | 19 / 413 |
+| Suchindex antwortet nicht | 13 / 503 |
+| MusicBrainz-Abfrage scheitert trotz stehender Verbindung | 5 / 500 |
+
+Die letzten beiden sind Absicht: **gemeinsame Betriebsmittel gehören der
+Anfrage, nicht einem Eintrag.** Fällt der Index aus, kann kein einziger
+Eintrag beantwortet werden; hundert Einträge mit Code 13 wären dieselbe
+Information in schlechter Verpackung, und der 503 ist zugleich das Signal, auf
+das Clients und der Wächter reagieren.
+
+### `meta` im Batch — ein Bündel statt hundert
+
+Die Einträge werden nach ihrem ausgewerteten `meta`-Plan gruppiert; je Plan
+läuft die Metadaten-Auflösung **einmal** über die Trefferobjekte aller
+Einträge dieser Gruppe. Schicken alle Einträge dasselbe `meta` — der
+Normalfall —, kostet die ganze Anfrage genau ein Bündel MB-Abfragen. Dieselbe
+AcoustID in mehreren Einträgen kostet nichts extra: ihre Trefferobjekte
+teilen sich einen Eintrag in der Zuordnung `track_id → Objekte`, genau wie im
+Original-Batchprotokoll.
+
+### Entscheidungen und Abweichungen
+
+| Punkt | Festlegung | Grund |
+|---|---|---|
+| Rumpfform | Objekt `{"queries": [...]}`, **kein** nacktes Array | ARCHITECTURE §7 spricht von einem Array; die Hülle trägt dasselbe Array und lässt zusätzlich anfrageweite Felder zu (`client`, `meta`, `maxdurationdiff` — und künftige, ohne den Vertrag zu brechen). Ein nacktes Array antwortet mit Fehler 2 und nennt das fehlende Feld. |
+| Antwortform | `responses[]`, je Eintrag eine vollständige AcoustID-Antwort (`status` + `results`/`error`) | Der Client kann jeden Eintrag mit demselben Code auswerten wie eine Einzelantwort. Ein gemischtes Array aus Trefferlisten und Fehlerobjekten ohne `status` wäre nicht unterscheidbar. |
+| `index` je Eintrag | Position im Anfrage-Array (0-basiert), immer gesetzt | Die Reihenfolge ist zugesichert; der Index macht sie nachprüfbar und erlaubt Zuordnung auch nach Umsortieren im Client. **Nicht** zu verwechseln mit dem `index` des Original-Batchprotokolls (dort die `.N`-Suffixnummer, `null` erlaubt). |
+| HTTP-Status bei Teilfehlern | 200 | Siehe oben. |
+| Grenze 100 | Fehler **19** / HTTP 413 | Derselbe Code wie bei zu vielen Teilanfragen im Lookup und bei zu großem Rumpf; Picard verkleinert genau darauf seine Pakete. Die beiden Grenzen widersprechen sich nicht: echte Fingerprints aus dem Tages-Delta sind base64 im Median 3,5 KB groß (p95 3,9 KB), 100 Einträge ergeben also rund 350 KiB. Erst bei ungewöhnlich langen Aufnahmen (Ausreißer bis ~9,5 KB) kann stattdessen die Rumpfgrenze zuerst greifen — mit demselben Code. `Content-Encoding: gzip` verschafft zusätzlich Luft. |
+| Leeres `queries` | HTTP 200, `"responses": []` | Eine wohlgeformte Anfrage ohne Arbeit. Ein Fehler würde einen Client bestrafen, der seine eigene Liste leer gefiltert hat. |
+| `format` | **wird nicht ausgewertet**; die Antwort ist immer JSON | Ein JSON-Endpunkt, der auf Wunsch XML antwortet, wäre ein zweiter Vertrag ohne Abnehmer; die gemischte ok/error-Liste hätte in XML keinen sinnvollen Elementnamen, und `jsonp` ist ein Browser-GET-Behelf. Auch `format=xml` bleibt hier folgenlos (kein Fehler 1). |
+| `client` | Pflicht, nur auf Anwesenheit geprüft | Wie beim Lookup; die Key-Prüfung macht der Wächter (§7). |
+| Methode | nur `POST`; `GET` ⇒ HTTP 405 | Ein `GET` mit Pflicht-Rumpf ist kein Vertrag. Der 405 kommt von FastAPI und trägt **nicht** das AcoustID-Fehlerformat — die einzige Antwort der API, für die das gilt. |
+| Unlesbarer JSON-Rumpf | gilt als leerer Rumpf, `WARNING` im Log, danach Fehler 2 | Dieselbe Regel wie beim kaputten gzip-Rumpf (Phase 9): die 19er-Tabelle kennt keinen Code für „kaputter Rumpf". |
+| `Content-Type` | wird **nicht** erzwungen | Der Rumpf ist der Vertrag, nicht sein Etikett. (An den Formular-Routen wird weiterhin gefiltert — dort gibt der Query-String der Anfrage noch Sinn.) |
+| Dubletten im Batch | werden einzeln gesucht, nicht zusammengefasst | Die Suche ist billig gegenüber dem Weckvorgang; `meta` wird ohnehin gebündelt. Ein Zusammenfassen würde die Reihenfolge-Zusicherung verkomplizieren, ohne einen realen Fall zu bedienen. |
+
 ## Anbindung der MusicBrainz-Datenbank
 
 Der Zugriff läuft über einen **eigenen kleinen Pool** (`shared/shared/mb/`),
@@ -263,6 +387,12 @@ docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db i
 AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
   uv run pytest api/tests --integration=require
 ```
+
+Der Batch-Endpunkt liegt in `api/tests/test_batch_http.py` (ohne Dienste) und
+im Abschnitt „Eigener Batch-Endpunkt" von
+`api/tests/test_lookup_integration.py` — dort auch der Nachweis, dass **eine**
+Anfrage sowohl Delta-Bestand als auch lokale Einreichungen findet (beide
+Dokument-ID-Bereiche, ARCHITECTURE §5.3).
 
 Die `meta`-Integrationstests brauchen **nur Postgres**: sie schlagen über
 `trackid` nach und fassen den Suchindex nicht an. Das MusicBrainz-Schema

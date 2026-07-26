@@ -370,6 +370,114 @@ def test_the_original_batch_protocol_answers_every_part(
     assert payload["fingerprints"][1]["results"][0]["id"] == str(gid_two)
 
 
+# --- Eigener Batch-Endpunkt (Phase 13) -------------------------------------
+
+
+def lookup_batch(client: TestClient, queries: list[dict], **envelope: object) -> dict:
+    """Ein Batch, wie ihn ein Client schickt (POST, JSON-Rumpf)."""
+    response = client.post(
+        "/v2/lookup/batch",
+        json={"client": "testkey", "queries": queries, **envelope},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def query(sample: Sample, **extra: object) -> dict:
+    return {"fingerprint": sample.encoded(), "duration": sample.length, **extra}
+
+
+def test_the_batch_endpoint_answers_every_entry_in_order(
+    db: psycopg.Connection, index: FpIndexClient, client: TestClient, samples: list[Sample]
+) -> None:
+    first, second, unknown = samples[0], samples[1], samples[2]
+    gid_one = seed(
+        db, index, fingerprint_id=1, track_id=1, vector=first.vector, length=first.length
+    )
+    gid_two = seed(
+        db, index, fingerprint_id=2, track_id=2, vector=second.vector, length=second.length
+    )
+
+    payload = lookup_batch(client, [query(second), query(unknown), query(first)])
+    responses = payload["responses"]
+
+    assert [entry["index"] for entry in responses] == [0, 1, 2]
+    assert [entry["status"] for entry in responses] == ["ok", "ok", "ok"]
+    assert [item["id"] for item in responses[0]["results"]] == [str(gid_two)]
+    assert responses[1]["results"] == []
+    assert [item["id"] for item in responses[2]["results"]] == [str(gid_one)]
+
+
+def test_the_batch_endpoint_finds_delta_stock_and_a_local_submission(
+    db: psycopg.Connection, index: FpIndexClient, client: TestClient, samples: list[Sample]
+) -> None:
+    """Beide Dokument-ID-Bereiche in **einer** Anfrage (ARCHITECTURE §5.3)."""
+    imported, submitted = samples[0], samples[1]
+    delta_gid = seed(
+        db, index, fingerprint_id=1, track_id=1, vector=imported.vector, length=imported.length
+    )
+    response = client.post(
+        "/v2/submit",
+        data={
+            "client": "testkey",
+            "user": "usertestkey",
+            "fingerprint": submitted.encoded(),
+            "duration": str(submitted.length),
+            "mbid": "b81f83ee-4da4-11e0-9ed8-0025225356f3",
+        },
+    )
+    assert response.status_code == 200, response.text
+    local_gid = db.execute("SELECT local_track_gid::text FROM local_submission").fetchall()[0][0]
+
+    payload = lookup_batch(client, [query(imported), query(submitted)])
+    responses = payload["responses"]
+    assert [item["id"] for item in responses[0]["results"]] == [str(delta_gid)]
+    assert [item["id"] for item in responses[1]["results"]] == [local_gid]
+
+
+def test_a_broken_entry_does_not_stop_the_real_pipeline(
+    db: psycopg.Connection, index: FpIndexClient, client: TestClient, samples: list[Sample]
+) -> None:
+    sample = samples[0]
+    gid = seed(db, index, fingerprint_id=1, track_id=1, vector=sample.vector, length=sample.length)
+    responses = lookup_batch(
+        client,
+        [query(sample), {"fingerprint": "kaputt!!", "duration": 241}, query(sample)],
+    )["responses"]
+
+    assert [entry["status"] for entry in responses] == ["ok", "error", "ok"]
+    assert responses[1]["error"]["code"] == 3
+    assert [item["id"] for item in responses[0]["results"]] == [str(gid)]
+    assert [item["id"] for item in responses[2]["results"]] == [str(gid)]
+
+
+def test_meta_in_the_batch_comes_from_the_own_database(
+    db: psycopg.Connection, index: FpIndexClient, client: TestClient, samples: list[Sample]
+) -> None:
+    """Ohne MusicBrainz-Spiegel (§8.7): MBIDs und ``sources`` bleiben."""
+    sample = samples[0]
+    mbid = uuid4()
+    seed(db, index, fingerprint_id=1, track_id=1, vector=sample.vector, length=sample.length)
+    db.execute(
+        "INSERT INTO track_mbid (id, track_id, mbid, submission_count, disabled, created, "
+        "src_day) VALUES (%s, %s, %s, %s, false, %s, %s)",
+        (1, 1, mbid, 9, STAMP, DAY),
+    )
+    responses = lookup_batch(client, [query(sample)], meta="recordings sources")["responses"]
+    assert responses[0]["results"][0]["recordings"] == [{"id": str(mbid), "sources": 9}]
+
+
+def test_the_batch_limit_holds_against_the_real_app(
+    client: TestClient, samples: list[Sample]
+) -> None:
+    response = client.post(
+        "/v2/lookup/batch",
+        json={"client": "testkey", "queries": [query(samples[0])] * 101},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == 19
+
+
 # --- Rows ohne Vektor ------------------------------------------------------
 
 
