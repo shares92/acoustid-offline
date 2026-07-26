@@ -42,6 +42,13 @@ TABLES = (
     "import_state",
 )
 
+#: Tabelle der eigenen Einreichungen (Phase 11). Getrennt von :data:`TABLES`,
+#: weil sie nicht aus dem Dump stammt und deshalb weder `src_day` noch
+#: `imported_at` traegt.
+LOCAL_TABLE = "local_submission"
+
+ALL_TABLES = (*TABLES, LOCAL_TABLE)
+
 #: Spalten je Tabelle: (Name, Typ laut format_type, nullable) — ARCHITECTURE §5.2.
 EXPECTED_COLUMNS: dict[str, tuple[tuple[str, str, bool], ...]] = {
     "track": (
@@ -118,6 +125,35 @@ EXPECTED_COLUMNS: dict[str, tuple[tuple[str, str, bool], ...]] = {
         ("started_at", "timestamp with time zone", False),
         ("finished_at", "timestamp with time zone", True),
     ),
+    # Phase 11: alle Felder des Submit-Vertrags plus Buchfuehrung.
+    "local_submission": (
+        ("id", "bigint", False),
+        ("local_track_id", "integer", False),
+        ("local_track_gid", "uuid", False),
+        ("status", "text", False),
+        ("fingerprint", "integer[]", False),
+        ("length", "integer", False),
+        ("bitrate", "integer", True),
+        ("fileformat", "character varying", True),
+        ("mbid", "uuid", True),
+        ("puid", "uuid", True),
+        ("foreignid", "character varying", True),
+        ("track", "character varying", True),
+        ("artist", "character varying", True),
+        ("album", "character varying", True),
+        ("album_artist", "character varying", True),
+        ("track_no", "integer", True),
+        ("disc_no", "integer", True),
+        ("year", "integer", True),
+        ("client", "character varying", True),
+        ("client_version", "character varying", True),
+        ("submitted_by", "character varying", True),
+        ("created", "timestamp with time zone", False),
+        ("indexed_at", "timestamp with time zone", True),
+        ("forwarded_at", "timestamp with time zone", True),
+        ("forward_attempts", "integer", False),
+        ("forward_error", "text", True),
+    ),
 }
 
 EXPECTED_PRIMARY_KEYS = {
@@ -128,6 +164,7 @@ EXPECTED_PRIMARY_KEYS = {
     "track_meta": "PRIMARY KEY (id)",
     "track_puid": "PRIMARY KEY (id)",
     "import_state": "PRIMARY KEY (stream, day)",
+    "local_submission": "PRIMARY KEY (id)",
 }
 
 EXPECTED_INDEXES = {
@@ -143,6 +180,12 @@ EXPECTED_INDEXES = {
     "track_meta": {"track_meta_pkey", "track_meta_idx_track_id"},
     "track_puid": {"track_puid_pkey"},
     "import_state": {"import_state_pkey"},
+    "local_submission": {
+        "local_submission_pkey",
+        "local_submission_idx_unindexed",
+        "local_submission_idx_track_id",
+        "local_submission_idx_track_gid",
+    },
 }
 
 
@@ -226,15 +269,15 @@ def test_all_documented_tables_exist(migrated: Scratch) -> None:
     rows = migrated.conn.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
     ).fetchall()
-    assert {row[0] for row in rows} == {*TABLES, BOOKKEEPING_TABLE}
+    assert {row[0] for row in rows} == {*ALL_TABLES, BOOKKEEPING_TABLE}
 
 
-@pytest.mark.parametrize("table", TABLES)
+@pytest.mark.parametrize("table", ALL_TABLES)
 def test_columns_match_architecture(migrated: Scratch, table: str) -> None:
     assert _columns(migrated.conn, table) == list(EXPECTED_COLUMNS[table])
 
 
-@pytest.mark.parametrize("table", TABLES)
+@pytest.mark.parametrize("table", ALL_TABLES)
 def test_primary_keys_match_architecture(migrated: Scratch, table: str) -> None:
     rows = migrated.conn.execute(
         "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
@@ -261,10 +304,14 @@ def test_bookkeeping_defaults_are_set(migrated: Scratch) -> None:
         **{(table, "imported_at"): "now()" for table in TABLES if table != "import_state"},
         ("track_mbid", "disabled"): "false",
         ("import_state", "started_at"): "now()",
+        ("local_submission", "id"): "nextval('local_submission_id_seq'::regclass)",
+        ("local_submission", "status"): "'new'::text",
+        ("local_submission", "created"): "now()",
+        ("local_submission", "forward_attempts"): "0",
     }
 
 
-@pytest.mark.parametrize("table", TABLES)
+@pytest.mark.parametrize("table", ALL_TABLES)
 def test_indexes_match_architecture(migrated: Scratch, table: str) -> None:
     assert set(_indexes(migrated.conn, table)) == EXPECTED_INDEXES[table]
 
@@ -284,14 +331,41 @@ def test_partial_index_predicates_are_kept(migrated: Scratch) -> None:
     assert "WHERE" not in fingerprint["fingerprint_idx_track_id"]
 
 
-def test_fingerprint_vector_is_lz4_compressed(migrated: Scratch) -> None:
+@pytest.mark.parametrize("table", ["fingerprint", LOCAL_TABLE])
+def test_fingerprint_vector_is_lz4_compressed(migrated: Scratch, table: str) -> None:
     """`l` = lz4; `p` waere pglz, leer der Server-Default."""
     row = migrated.conn.execute(
         "SELECT attcompression FROM pg_attribute "
-        "WHERE attrelid = 'fingerprint'::regclass AND attname = 'fingerprint'"
+        "WHERE attrelid = %s::regclass AND attname = 'fingerprint'",
+        (table,),
     ).fetchone()
     assert row is not None
     assert row[0] == "l"
+
+
+def test_the_status_domain_is_enforced(migrated: Scratch) -> None:
+    """Ein unbekannter Status ist ein Datenbankfehler, kein Tippfehler im Code."""
+    with migrated.conn.transaction(force_rollback=True):
+        migrated.conn.execute(
+            "INSERT INTO local_submission (local_track_id, local_track_gid, fingerprint, "
+            "length, status) VALUES (1, gen_random_uuid(), ARRAY[1,2,3], 200, 'indexed')"
+        )
+        with pytest.raises(psycopg.errors.CheckViolation):
+            migrated.conn.execute(
+                "INSERT INTO local_submission (local_track_id, local_track_gid, fingerprint, "
+                "length, status) VALUES (2, gen_random_uuid(), ARRAY[1,2,3], 200, 'quatsch')"
+            )
+
+
+def test_the_local_track_id_sequence_cannot_leave_the_reserved_range(migrated: Scratch) -> None:
+    """Dokument-ID = 2^31 + `local_track_id`, und der Index nimmt nur u32."""
+    row = migrated.conn.execute(
+        "SELECT seqmax, seqcycle FROM pg_sequence "
+        "WHERE seqrelid = 'local_submission_track_id_seq'::regclass"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == 2**31 - 1
+    assert row[1] is False
 
 
 def test_schema_has_no_foreign_keys(migrated: Scratch) -> None:
@@ -346,8 +420,8 @@ def test_core_group_leaves_the_secondary_indexes_out(empty: Scratch) -> None:
     tables = empty.conn.execute(
         "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
     ).fetchall()
-    assert {row[0] for row in tables} == {*TABLES, BOOKKEEPING_TABLE}
-    for table in TABLES:
+    assert {row[0] for row in tables} == {*ALL_TABLES, BOOKKEEPING_TABLE}
+    for table in ALL_TABLES:
         assert set(_indexes(empty.conn, table)) == {f"{table}_pkey"}
     assert [item.version for item in pending(empty.conn)] == [
         item.version for item in migrations([INDEXES])

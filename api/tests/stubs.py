@@ -12,17 +12,19 @@ je nach Sammelreihenfolge im falschen Paket landen.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 from uuid import UUID, uuid4
 
 from acoustid_api.matching import Match
 from shared.config import Config
+from shared.fpindex import Change
 
 __all__ = [
     "StubConnection",
     "StubCursor",
+    "StubIndex",
     "StubMatcher",
     "StubPool",
     "StubService",
@@ -49,15 +51,34 @@ class StubConnection:
     Reicht fuer die HTTP-Tests: dort geht es nie um SQL, sondern um das, was
     davor und danach passiert. Die echten Abfragen pruefen die
     Integrationstests.
+
+    Wer doch einzelne Anweisungen unterscheiden muss — der Submit schreibt und
+    braucht IDs zurueck —, gibt einen ``handler`` mit: er bekommt Anweisung und
+    Parameter und liefert Zeilen (oder ``None``, dann gelten die
+    Vorgabezeilen).
     """
 
-    def __init__(self, rows: Sequence[tuple[Any, ...]] = ()) -> None:
+    def __init__(
+        self,
+        rows: Sequence[tuple[Any, ...]] = (),
+        handler: Callable[[str, Any], Sequence[tuple[Any, ...]] | None] | None = None,
+    ) -> None:
         self.rows = list(rows)
         self.queries: list[str] = []
+        self.handler = handler
 
     def execute(self, query: Any, params: Any = None) -> StubCursor:
         self.queries.append(str(query))
+        if self.handler is not None:
+            handled = self.handler(str(query), params)
+            if handled is not None:
+                return StubCursor(handled)
         return StubCursor(self.rows)
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Der Submit schreibt in einer Transaktion — hier ohne Wirkung."""
+        yield
 
 
 class StubPool:
@@ -100,6 +121,39 @@ class StubMatcher:
         return list(self.matches)
 
 
+class StubIndex:
+    """Index-Attrappe: nimmt Batches entgegen oder wirft.
+
+    ``batches`` haelt fest, was geschickt wurde — so laesst sich pruefen, dass
+    die Dokument-ID aus dem reservierten Bereich stammt und die Hashes der
+    Query-Extraktion entsprechen.
+    """
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.batches: list[list[Change]] = []
+        self.error = error
+
+    def update(
+        self,
+        changes: Any,
+        *,
+        metadata: Mapping[str, str] | None = None,
+        expected_version: int | None = None,
+    ) -> int:
+        if self.error is not None:
+            raise self.error
+        self.batches.append(list(changes))
+        return len(self.batches)
+
+    @property
+    def doc_ids(self) -> list[int]:
+        """Alle je geschickten Dokument-IDs, in Reihenfolge."""
+        return [change.doc_id for batch in self.batches for change in batch]
+
+    def close(self) -> None:
+        pass
+
+
 class StubService:
     """Steht an der Stelle von :class:`acoustid_api.service.ApiService`."""
 
@@ -109,11 +163,14 @@ class StubService:
         connection: StubConnection | None = None,
         mb: Any = None,
         config: Config | None = None,
+        index: StubIndex | None = None,
     ) -> None:
         self.matcher = matcher or StubMatcher()
         self.connection = connection or StubConnection()
         self.pool = StubPool(self.connection)
         self.config = config or Config()
+        #: Suchindex; der Submit traegt seine Einreichungen dort nach.
+        self.index = index or StubIndex()
         #: MusicBrainz-Client; ``None`` = nicht konfiguriert, also der
         #: degradierte Betrieb aus Invariante §8.7.
         self.mb = mb

@@ -17,6 +17,7 @@ from shared.db import (
     normalise_groups,
 )
 from shared.db.__main__ import main
+from shared.models import SubmissionStatus
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,15 +29,17 @@ CORE_VERSIONS = (
     "0005_track_meta.sql",
     "0006_track_puid.sql",
     "0007_import_state.sql",
+    "0008_local_submission.sql",
 )
 INDEX_VERSIONS = (
     "0101_track.sql",
     "0102_fingerprint.sql",
     "0103_track_mbid.sql",
     "0104_track_meta.sql",
+    "0105_local_submission.sql",
 )
 
-#: Die sieben Zieltabellen aus ARCHITECTURE §5.2.
+#: Die sieben Zieltabellen aus ARCHITECTURE §5.2 (plus `import_state`).
 TABLES = (
     "track",
     "fingerprint",
@@ -46,6 +49,14 @@ TABLES = (
     "track_puid",
     "import_state",
 )
+
+#: Tabelle der eigenen Einreichungen (ARCHITECTURE §5.2 „Weitere Tabellen",
+#: Spalten seit Phase 11). Steht bewusst getrennt: sie stammt nicht aus dem
+#: Dump, und ihr DDL wandert erst mit dem Doku-Sweep der Phase in den
+#: SQL-Block von §5.2.
+LOCAL_TABLE = "local_submission"
+
+ALL_TABLES = (*TABLES, LOCAL_TABLE)
 
 
 def statements_of(sql_text: str) -> list[str]:
@@ -109,7 +120,15 @@ def test_unknown_group_is_rejected_by_name() -> None:
 
 
 def test_schema_matches_architecture_word_for_word() -> None:
-    """Das DDL aus ARCHITECTURE §5.2 ist verbindlich — Anweisung fuer Anweisung."""
+    """Das DDL aus ARCHITECTURE §5.2 ist verbindlich — Anweisung fuer Anweisung.
+
+    Die einzige zugelassene Abweichung ist ``local_submission``: §5.2 fuehrt
+    die Tabelle bisher nur in „Weitere Tabellen" (Spalten werden in ihrer
+    Phase festgelegt), das DDL wandert mit dem Doku-Sweep der Phase 11 in den
+    SQL-Block. Sobald es dort steht, ist die Differenz leer und dieser Test
+    zieht wieder ohne Ausnahme — deshalb wird sie **berechnet** und nicht
+    einfach uebersprungen.
+    """
     architecture = (REPO_ROOT / "ARCHITECTURE.md").read_text(encoding="utf-8")
     block = re.search(r"```sql\n(.*?)```", architecture, flags=re.DOTALL)
     assert block is not None, "ARCHITECTURE.md enthaelt keinen SQL-Block"
@@ -118,7 +137,10 @@ def test_schema_matches_architecture_word_for_word() -> None:
     packaged = sorted(
         statement for item in migrations() for statement in statements_of(item.statements)
     )
-    assert packaged == documented
+    missing = [statement for statement in documented if statement not in packaged]
+    extra = [statement for statement in packaged if statement not in documented]
+    assert missing == []
+    assert all(LOCAL_TABLE in statement for statement in extra), extra
 
 
 def test_every_table_is_created_exactly_once() -> None:
@@ -128,12 +150,42 @@ def test_every_table_is_created_exactly_once() -> None:
         for statement in statements_of(item.statements)
         if (match := re.match(r"CREATE TABLE (\w+)", statement))
     ]
-    assert sorted(created) == sorted(TABLES)
+    assert sorted(created) == sorted(ALL_TABLES)
 
 
-def test_local_submission_is_not_created_yet() -> None:
-    """Die Spalten werden erst in Phase 11 festgelegt (ARCHITECTURE §5.2)."""
-    assert "local_submission" not in "".join(item.statements for item in migrations())
+def test_local_submission_carries_the_full_status_domain() -> None:
+    """`new` -> `indexed` -> `forwarded` | `forward_failed` (§5.2, §8.9).
+
+    Die Uebergaenge ab `forwarded` baut erst Phase 12 — die Domaene steht
+    aber schon jetzt vollstaendig in der Tabelle, sonst braeuchte Phase 12
+    eine Schema-Migration fuer einen Wert, der laengst entschieden ist.
+    """
+    body = " ".join(
+        statement for item in migrations([CORE]) for statement in statements_of(item.statements)
+    )
+    assert "CHECK (status IN ('new', 'indexed', 'forwarded', 'forward_failed'))" in body
+    assert {status.value for status in SubmissionStatus} == {
+        "new",
+        "indexed",
+        "forwarded",
+        "forward_failed",
+    }
+
+
+def test_the_local_track_id_sequence_stops_at_the_reserved_range() -> None:
+    """Der Suchindex nimmt nur u32-Dokument-IDs (empirisch, Phase 11).
+
+    Dokument-ID = 2^31 + `local_track_id`; die Sequenz darf deshalb nicht
+    ueber 2^31-1 hinaus und schon gar nicht umlaufen — ein Umlauf wuerde
+    lokale Einreichungen auf fremde Dokumente legen.
+    """
+    body = " ".join(
+        statement for item in migrations([CORE]) for statement in statements_of(item.statements)
+    )
+    assert (
+        "CREATE SEQUENCE local_submission_track_id_seq AS integer "
+        "MINVALUE 1 MAXVALUE 2147483647 NO CYCLE" in body
+    )
 
 
 def test_schema_has_no_foreign_keys() -> None:
@@ -155,7 +207,7 @@ def test_core_creates_tables_and_indexes_only_indexes() -> None:
     assert "CREATE INDEX" not in core_body
     assert "CREATE UNIQUE INDEX" not in core_body
     assert "CREATE TABLE" not in index_body
-    assert index_body.count("CREATE INDEX") + index_body.count("CREATE UNIQUE INDEX") == 8
+    assert index_body.count("CREATE INDEX") + index_body.count("CREATE UNIQUE INDEX") == 11
 
 
 def test_lz4_compression_is_set_before_the_bulk_import() -> None:
@@ -173,6 +225,8 @@ def test_partial_indexes_keep_their_predicates() -> None:
     assert "ON track (new_id) WHERE new_id IS NOT NULL" in index_body
     assert "WHERE fingerprint IS NULL OR track_id IS NULL" in index_body
     assert "WHERE indexed_at IS NULL" in index_body
+    # Arbeitsvorrat der Submit-Indexierung (Muster `fingerprint_idx_unindexed`).
+    assert "ON local_submission (id) WHERE status = 'new'" in index_body
 
 
 # --- Kommandozeile ---------------------------------------------------------

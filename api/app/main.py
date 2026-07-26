@@ -19,10 +19,13 @@ Hier sitzt alles, was mit dem Transport zu tun hat, und nichts weiter:
 Proxy durch (ARCHITECTURE §7 „Durchsetzungsort Auth & Rate-Limit"); der
 Dienst hier hat keinen Host-Port und ist nur im Compose-Netz erreichbar.
 
-Die Route ist ``async``, die Arbeit dahinter nicht: Datenbank, Index und
+Die Routen sind ``async``, die Arbeit dahinter nicht: Datenbank, Index und
 Rescoring sind synchron und laufen deshalb ueber
 ``run_in_threadpool``. So blockiert ein laufendes Rescoring nicht den
 Event-Loop, und es bleibt bei genau einer (synchronen) Implementierung.
+
+Zwei Routen liegen hier: ``/v2/lookup`` (Phase 9/10) und ``/v2/submit``
+(Phase 11). Beide gibt es als ``GET`` **und** ``POST``.
 """
 
 from __future__ import annotations
@@ -40,8 +43,16 @@ from starlette.concurrency import run_in_threadpool
 from acoustid_api.errors import AcoustidError, InternalError, RequestTooLargeError, error_payload
 from acoustid_api.formats import ResponseFormat
 from acoustid_api.lookup import handle_lookup
-from acoustid_api.params import LookupParams, RequestValues, parse_format, parse_lookup
+from acoustid_api.params import (
+    LookupParams,
+    RequestValues,
+    SubmitParams,
+    parse_format,
+    parse_lookup,
+    parse_submit,
+)
 from acoustid_api.service import ApiService
+from acoustid_api.submit import check_mode, handle_submit
 from shared import setup_logging
 from shared.env import EnvSettings
 
@@ -111,6 +122,10 @@ def create_app(service: ApiService | None = None) -> FastAPI:
     async def lookup(request: Request) -> Response:
         return await _lookup(request)
 
+    @app.api_route("/v2/submit", methods=["GET", "POST"])
+    async def submit(request: Request) -> Response:
+        return await _submit(request)
+
     return app
 
 
@@ -135,10 +150,41 @@ async def _lookup(request: Request) -> Response:
     return _render(response_format, {"status": "ok", **data}, 200)
 
 
+async def _submit(request: Request) -> Response:
+    """Ein Submit von der Leitung bis zur fertigen Antwort.
+
+    Der Modus wird **vor** dem Parsen geprueft: ist ``submit.mode`` gleich
+    ``off``, soll die Anfrage nicht erst hundert Fingerprints dekodieren, um
+    dann abgelehnt zu werden. Das Antwortformat steht vorher fest, damit auch
+    diese Absage im gewuenschten Format herausgeht.
+    """
+    response_format = ResponseFormat()
+    try:
+        values = await _read_values(request)
+        response_format = parse_format(values)
+        service: ApiService = request.app.state.service
+        check_mode(service.config)
+        params = parse_submit(values)
+        data = await run_in_threadpool(_run_submit, service, params)
+    except AcoustidError as error:
+        return _render(response_format, error_payload(error), error.http_status)
+    except Exception:
+        _LOG.exception("Unbehandelter Fehler im Submit")
+        error = InternalError()
+        return _render(response_format, error_payload(error), error.http_status)
+    return _render(response_format, {"status": "ok", **data}, 200)
+
+
 def _run_lookup(service: ApiService, params: LookupParams) -> dict[str, Any]:
     """Synchroner Teil: Verbindung ziehen, Pipeline laufen lassen."""
     with service.pool.connection() as connection:
         return handle_lookup(connection, service, params)
+
+
+def _run_submit(service: ApiService, params: SubmitParams) -> dict[str, Any]:
+    """Synchroner Teil: Verbindung ziehen, speichern, indexieren."""
+    with service.pool.connection() as connection:
+        return handle_submit(connection, service, params)
 
 
 def _render(response_format: ResponseFormat, data: dict[str, Any], status_code: int) -> Response:

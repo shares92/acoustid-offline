@@ -1,7 +1,9 @@
-"""Lesezugriffe der API auf die AcoustID-Postgres (ARCHITECTURE §5.2).
+"""Datenbankzugriffe der API auf die AcoustID-Postgres (ARCHITECTURE §5.2).
 
-Alles, was der Lookup aus der eigenen Datenbank braucht, steht in diesem
-Modul — sechs Abfragen, alle rein lesend:
+Alles, was API-Anfragen aus der eigenen Datenbank brauchen, steht in diesem
+Modul. Bis Phase 10 waren das ausschliesslich Lesezugriffe des Lookups; seit
+Phase 11 kommt der eine Schreibpfad des Submit dazu (``local_submission``,
+ganz unten). Zuerst der Lookup:
 
 1. :func:`load_candidates` holt zu den Kandidaten-IDs des Suchindex die
    **Vollvektoren**. Nur sie erlauben den echten AcoustID-Score; der Index
@@ -35,6 +37,26 @@ auf dem alten Track stehen, und nur ``track.new_id`` verraet das Ziel. Ohne
 die Verkettung wuerde ein Lookup die **zurueckgezogene** AcoustID liefern
 (bewusste Abweichung, DoD Phase 9).
 
+**Lokale Einreichungen (Phase 11).** Eigene Submissions duerfen nicht in
+``track``/``fingerprint`` stehen — der Delta-Importer wuerde sie beim
+naechsten Tagesdelta ueberschreiben (ARCHITECTURE §5.2, Import-Regel 2).
+Sie leben in ``local_submission`` und sind trotzdem auffindbar, weil sie im
+Suchindex einen **reservierten Dokument-ID-Bereich** belegen:
+
+=========================  =================================================
+``[0, 2^31-1]``            Delta-Bestand — die Dokument-ID **ist** die
+                           ``fingerprint.id`` (Spaltentyp ``integer``).
+``[2^31, 2^32-1]``         lokale Einreichungen — Dokument-ID ist
+                           :data:`LOCAL_DOC_ID_BASE` + ``local_track_id``.
+=========================  =================================================
+
+Der Index nimmt **u32**-Dokument-IDs (empirisch verifiziert, Phase 11); die
+beiden Bereiche teilen ihn also lueckenlos und nachweisbar ueberschneidungs-
+frei auf. Jede Abfrage, die Dokument- oder Track-IDs entgegennimmt, trennt
+die beiden Welten deshalb zuerst per :func:`split_doc_ids` — und zwar nicht
+nur der Ordnung halber: die Delta-Abfragen casten nach ``integer[]``, eine
+lokale ID wuerde dort schlicht einen Bereichsfehler ausloesen.
+
 Alle Anweisungen sind Raw-SQL mit expliziten Spaltenlisten; die Vektoren
 kommen als ``list[int]`` (signed int32) aus psycopg und werden erst im
 Rescoring vorzeichenlos gelesen.
@@ -45,25 +67,46 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Final
-from uuid import UUID
+from typing import TYPE_CHECKING, Final
+from uuid import UUID, uuid4
 
 import psycopg
 
+if TYPE_CHECKING:  # pragma: no cover - nur fuer die Typpruefung
+    from acoustid_api.params import Submission
+
 __all__ = [
+    "LOCAL_DOC_ID_BASE",
+    "MAX_LOCAL_TRACK_ID",
     "MAX_MERGE_DEPTH",
     "MAX_META_IDS_PER_TRACK",
     "Candidate",
     "MetaRow",
+    "PendingSubmission",
+    "StoredSubmission",
     "load_candidates",
+    "load_pending_submissions",
     "lookup_mbids",
     "lookup_meta",
     "lookup_meta_ids",
+    "mark_submissions_indexed",
     "resolve_track_gid",
     "resolve_tracks",
+    "split_doc_ids",
+    "store_submission",
 ]
 
 _LOG = logging.getLogger(__name__)
+
+#: Erste Dokument-ID des reservierten Bereichs fuer lokale Einreichungen.
+#: Direkt oberhalb des Wertebereichs von ``fingerprint.id`` (``integer``) —
+#: eine Kollision mit dem Delta-Bestand ist damit typbedingt unmoeglich.
+LOCAL_DOC_ID_BASE: Final = 2**31
+
+#: Groesste ``local_track_id``, die noch eine u32-Dokument-ID ergibt. Die
+#: Sequenz in der Migration endet beim selben Wert (``NO CYCLE``), diese
+#: Konstante ist die zweite Bremse davor.
+MAX_LOCAL_TRACK_ID: Final = 2**31 - 1
 
 #: Wie weit einer Merge-Kette gefolgt wird. Ketten sind in der Praxis ein
 #: bis zwei Glieder lang; die Grenze schuetzt vor einem Zyklus in den Daten
@@ -88,6 +131,31 @@ class Candidate:
 
     fingerprint_id: int
     track_id: int
+    hashes: Sequence[int]
+
+
+@dataclass(frozen=True, slots=True)
+class StoredSubmission:
+    """Eine gespeicherte Einreichung — das Ergebnis von :func:`store_submission`.
+
+    Attributes:
+        local_track_id: Gruppenschluessel der Einreichung; ``+
+            LOCAL_DOC_ID_BASE`` ergibt die Dokument-ID im Suchindex.
+        local_track_gid: Die AcoustID, unter der Lookups sie ausliefern.
+        row_ids: Die Submission-IDs der Antwort — eine je MBID, mindestens
+            eine.
+    """
+
+    local_track_id: int
+    local_track_gid: UUID
+    row_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSubmission:
+    """Eine Einreichung, die der Suchindex noch nicht kennt (Status ``new``)."""
+
+    local_track_id: int
     hashes: Sequence[int]
 
 
@@ -180,6 +248,96 @@ WITH RECURSIVE chain AS (
 SELECT id, gid FROM chain ORDER BY depth DESC LIMIT 1
 """
 
+# --- Lokale Einreichungen ---------------------------------------------------
+#
+# `DISTINCT ON (local_track_id)` ueberall dort, wo eine Einreichung gemeint
+# ist und nicht eine Zeile: eine eingereichte Aufnahme mit drei MBIDs steht
+# als drei Zeilen in der Tabelle, teilt sich aber Vektor, Laenge und GID.
+
+_LOCAL_CANDIDATES_SQL: Final = """
+SELECT DISTINCT ON (local_track_id) local_track_id, fingerprint
+FROM local_submission
+WHERE local_track_id = ANY(%(ids)s::integer[])
+  AND length BETWEEN %(duration)s - %(diff)s AND %(duration)s + %(diff)s
+ORDER BY local_track_id, id
+"""
+
+_LOCAL_RESOLVE_SQL: Final = """
+SELECT DISTINCT ON (local_track_id) local_track_id, local_track_gid
+FROM local_submission
+WHERE local_track_id = ANY(%(ids)s::integer[])
+ORDER BY local_track_id, id
+"""
+
+_LOCAL_RESOLVE_GID_SQL: Final = """
+SELECT local_track_id
+FROM local_submission
+WHERE local_track_gid = %(gid)s
+ORDER BY id
+LIMIT 1
+"""
+
+# `count(*)` ist die Entsprechung zu `track_mbid.submission_count`: so oft
+# wurde diese MBID fuer diese Aufnahme eingereicht (`sources` in der Antwort).
+_LOCAL_MBIDS_SQL: Final = """
+SELECT local_track_id, mbid::text, count(*)
+FROM local_submission
+WHERE local_track_id = ANY(%(ids)s::integer[])
+  AND mbid IS NOT NULL
+GROUP BY local_track_id, mbid
+ORDER BY local_track_id, mbid
+"""
+
+_NEXT_LOCAL_TRACK_ID_SQL: Final = "SELECT nextval('local_submission_track_id_seq')"
+
+_INSERT_SUBMISSION_SQL: Final = """
+INSERT INTO local_submission (
+    local_track_id, local_track_gid, fingerprint, length, bitrate, fileformat,
+    mbid, puid, foreignid, track, artist, album, album_artist,
+    track_no, disc_no, year, client, client_version, submitted_by
+) VALUES (
+    %(local_track_id)s, %(local_track_gid)s, %(fingerprint)s, %(length)s,
+    %(bitrate)s, %(fileformat)s, %(mbid)s, %(puid)s, %(foreignid)s,
+    %(track)s, %(artist)s, %(album)s, %(album_artist)s,
+    %(track_no)s, %(disc_no)s, %(year)s, %(client)s, %(client_version)s, %(user)s
+)
+RETURNING id
+"""
+
+_PENDING_SUBMISSIONS_SQL: Final = """
+SELECT DISTINCT ON (local_track_id) local_track_id, fingerprint
+FROM local_submission
+WHERE status = 'new'
+ORDER BY local_track_id, id
+LIMIT %(limit)s
+"""
+
+_MARK_INDEXED_SQL: Final = """
+UPDATE local_submission
+   SET status = 'indexed', indexed_at = now()
+ WHERE local_track_id = ANY(%(ids)s::integer[])
+   AND status = 'new'
+"""
+
+
+def split_doc_ids(doc_ids: Iterable[int]) -> tuple[list[int], list[int]]:
+    """Dokument-IDs in die beiden Bereiche trennen.
+
+    Returns:
+        ``(fingerprint_ids, local_track_ids)`` — die erste Liste sind
+        Dokument-IDs des Delta-Bestands (= ``fingerprint.id``), die zweite
+        die um :data:`LOCAL_DOC_ID_BASE` verminderten IDs lokaler
+        Einreichungen. Beide sind entdoppelt und aufsteigend sortiert.
+    """
+    delta: set[int] = set()
+    local: set[int] = set()
+    for doc_id in doc_ids:
+        if doc_id >= LOCAL_DOC_ID_BASE:
+            local.add(doc_id - LOCAL_DOC_ID_BASE)
+        else:
+            delta.add(doc_id)
+    return sorted(delta), sorted(local)
+
 
 def load_candidates(
     connection: psycopg.Connection,
@@ -191,8 +349,9 @@ def load_candidates(
     """Vollvektoren der Kandidaten, gefiltert nach Laenge.
 
     Args:
-        connection: Verbindung zur AcoustID-Postgres (nur lesend).
-        fingerprint_ids: Dokument-IDs aus dem Suchindex.
+        connection: Verbindung zur AcoustID-Postgres.
+        fingerprint_ids: Dokument-IDs aus dem Suchindex — beide Bereiche
+            (Delta-Bestand und lokale Einreichungen) duerfen gemischt kommen.
         duration: Vom Client gemeldete Laenge in Sekunden.
         max_duration_diff: Zugelassene Abweichung in Sekunden (``±``).
 
@@ -201,14 +360,30 @@ def load_candidates(
         Reihenfolge. Zeilen ohne Vektor, ohne Track oder ohne Laenge fallen
         heraus: ohne Vektor gibt es keinen Score, und eine unbekannte Laenge
         ist im Original ebenfalls kein Treffer (``BETWEEN`` auf ``NULL``).
+        Lokale Einreichungen tragen ihre **Dokument-ID** als
+        ``fingerprint_id`` und ``track_id``; damit sortieren sie bei
+        Score-Gleichstand hinter den Delta-Bestand, und die
+        Track-Aufloesung erkennt sie an derselben Grenze wieder.
     """
-    if not fingerprint_ids:
-        return []
-    rows = connection.execute(
-        _CANDIDATES_SQL,
-        {"ids": list(fingerprint_ids), "duration": duration, "diff": max_duration_diff},
-    ).fetchall()
-    return [Candidate(fingerprint_id=row[0], track_id=row[1], hashes=row[2]) for row in rows]
+    delta_ids, local_ids = split_doc_ids(fingerprint_ids)
+    arguments = {"duration": duration, "diff": max_duration_diff}
+    candidates: list[Candidate] = []
+    if delta_ids:
+        rows = connection.execute(_CANDIDATES_SQL, {"ids": delta_ids, **arguments}).fetchall()
+        candidates += [
+            Candidate(fingerprint_id=row[0], track_id=row[1], hashes=row[2]) for row in rows
+        ]
+    if local_ids:
+        rows = connection.execute(_LOCAL_CANDIDATES_SQL, {"ids": local_ids, **arguments}).fetchall()
+        candidates += [
+            Candidate(
+                fingerprint_id=LOCAL_DOC_ID_BASE + row[0],
+                track_id=LOCAL_DOC_ID_BASE + row[0],
+                hashes=row[1],
+            )
+            for row in rows
+        ]
+    return candidates
 
 
 def resolve_tracks(
@@ -223,14 +398,24 @@ def resolve_tracks(
     Returns:
         Abbildung Ausgangs-ID -> (aufgeloeste ID, aufgeloeste GID). IDs ohne
         Track-Zeile fehlen in der Abbildung; der Aufrufer laesst sie fallen
-        (im Original macht das der ``JOIN``).
+        (im Original macht das der ``JOIN``). Lokale Einreichungen kennen
+        keine Merges — sie loesen sich auf sich selbst auf und liefern die
+        beim Einreichen vergebene GID.
     """
     if not track_ids:
         return {}
-    rows = connection.execute(
-        _RESOLVE_SQL, {"ids": list(set(track_ids)), "max_depth": MAX_MERGE_DEPTH}
-    ).fetchall()
-    resolved = {row[0]: (row[1], row[2]) for row in rows}
+    delta_ids, local_ids = split_doc_ids(track_ids)
+    resolved: dict[int, tuple[int, UUID]] = {}
+    if delta_ids:
+        rows = connection.execute(
+            _RESOLVE_SQL, {"ids": delta_ids, "max_depth": MAX_MERGE_DEPTH}
+        ).fetchall()
+        resolved.update({row[0]: (row[1], row[2]) for row in rows})
+    if local_ids:
+        rows = connection.execute(_LOCAL_RESOLVE_SQL, {"ids": local_ids}).fetchall()
+        resolved.update(
+            {LOCAL_DOC_ID_BASE + row[0]: (LOCAL_DOC_ID_BASE + row[0], row[1]) for row in rows}
+        )
     missing = set(track_ids) - set(resolved)
     if missing:
         _LOG.warning(
@@ -250,16 +435,27 @@ def lookup_mbids(
     eigenen Datenbank, dafuer muss MusicBrainz nicht erreichbar sein
     (Invariante §8.7).
 
+    Bei lokalen Einreichungen sind es die **eingereichten** MBIDs, und
+    ``sources`` zaehlt, wie oft dieselbe MBID fuer diese Aufnahme eingereicht
+    wurde — dieselbe Bedeutung wie ``track_mbid.submission_count``, nur aus
+    der eigenen Submit-Tabelle.
+
     Returns:
         Track-ID -> ``[(MBID, submission_count), …]``, nach MBID sortiert.
         AcoustIDs ohne (aktive) Zuordnung fehlen in der Abbildung.
     """
-    ids = sorted(set(track_ids))
-    if not ids:
-        return {}
+    delta_ids, local_ids = split_doc_ids(track_ids)
     result: dict[int, list[tuple[str, int]]] = {}
-    for track_id, mbid, sources in connection.execute(_MBIDS_SQL, {"ids": ids}).fetchall():
-        result.setdefault(track_id, []).append((mbid, sources))
+    if delta_ids:
+        for track_id, mbid, sources in connection.execute(
+            _MBIDS_SQL, {"ids": delta_ids}
+        ).fetchall():
+            result.setdefault(track_id, []).append((mbid, sources))
+    if local_ids:
+        for local_track_id, mbid, sources in connection.execute(
+            _LOCAL_MBIDS_SQL, {"ids": local_ids}
+        ).fetchall():
+            result.setdefault(LOCAL_DOC_ID_BASE + local_track_id, []).append((mbid, sources))
     return result
 
 
@@ -274,8 +470,14 @@ def lookup_meta_ids(
     Sortiert nach Einreichungszahl absteigend und je AcoustID auf
     ``max_ids_per_track`` gekappt — die Kappung macht das Original ebenfalls
     erst in Python, damit die Reihenfolge stimmt.
+
+    **Lokale Einreichungen bleiben aussen vor.** Ihre Textmetadaten stehen in
+    ``local_submission`` und nicht in ``track_meta``; ``usermeta`` deckt sie
+    bewusst noch nicht ab (docs/api-submit.md, „Grenzen"). Sie hier
+    durchzureichen waere ausserdem ein Bereichsfehler — die Abfrage castet
+    nach ``integer[]``.
     """
-    ids = sorted(set(track_ids))
+    ids, _ = split_doc_ids(track_ids)
     if not ids:
         return {}
     result: dict[int, list[int]] = {}
@@ -309,6 +511,10 @@ def lookup_meta(connection: psycopg.Connection, meta_ids: Iterable[int]) -> list
 def resolve_track_gid(connection: psycopg.Connection, gid: str) -> tuple[int, UUID] | None:
     """Eine AcoustID nachschlagen und Merges folgen (Parameter ``trackid``).
 
+    Findet auch die AcoustID einer lokalen Einreichung: was ein Lookup
+    ausliefert, muss sich auch direkt nachschlagen lassen — sonst waere die
+    lokale AcoustID eine ID zweiter Klasse.
+
     Returns:
         ``(Track-ID, Track-GID)`` des Ziels oder ``None``, wenn die GID
         unbekannt ist.
@@ -316,6 +522,127 @@ def resolve_track_gid(connection: psycopg.Connection, gid: str) -> tuple[int, UU
     row = connection.execute(
         _RESOLVE_GID_SQL, {"gid": gid, "max_depth": MAX_MERGE_DEPTH}
     ).fetchone()
+    if row is not None:
+        return row[0], row[1]
+    row = connection.execute(_LOCAL_RESOLVE_GID_SQL, {"gid": gid}).fetchone()
     if row is None:
         return None
-    return row[0], row[1]
+    return LOCAL_DOC_ID_BASE + row[0], UUID(gid)
+
+
+# --- Schreibpfad: lokale Einreichungen (Phase 11) ---------------------------
+
+
+def store_submission(
+    connection: psycopg.Connection,
+    submission: Submission,
+    *,
+    client: str,
+    client_version: str | None,
+    user: str,
+) -> StoredSubmission:
+    """Schreibt eine eingereichte Aufnahme nach ``local_submission``.
+
+    Je MBID entsteht eine eigene Zeile mit eigener Submission-ID (so verhaelt
+    sich das Original); ohne MBID bleibt es bei einer. Alle Zeilen teilen
+    sich ``local_track_id`` und ``local_track_gid`` — sie beschreiben
+    dieselbe Aufnahme, und ein Lookup soll sie als **einen** Treffer
+    ausliefern.
+
+    Der Aufrufer haelt die Transaktion: eine Anfrage mit mehreren
+    Teilanfragen wird ganz oder gar nicht gespeichert.
+
+    Args:
+        connection: Verbindung zur AcoustID-Postgres.
+        submission: Geprueftes Ergebnis aus :func:`~acoustid_api.params.parse_submit`.
+        client: Application-Key des einreichenden Clients.
+        client_version: ``clientversion``, falls mitgeschickt.
+        user: ``user``-Key des Einreichenden (Phase 12 reicht ihn durch).
+
+    Raises:
+        ValueError: Der reservierte Dokument-ID-Bereich ist erschoepft.
+    """
+    row = connection.execute(_NEXT_LOCAL_TRACK_ID_SQL).fetchone()
+    if row is None:  # pragma: no cover - nextval liefert immer eine Zeile
+        raise RuntimeError("nextval('local_submission_track_id_seq') lieferte keine Zeile")
+    local_track_id = int(row[0])
+    if local_track_id > MAX_LOCAL_TRACK_ID:  # pragma: no cover - 2^31 Einreichungen
+        raise ValueError(
+            f"local_track_id {local_track_id} ueberschreitet den reservierten "
+            f"Dokument-ID-Bereich (bis {MAX_LOCAL_TRACK_ID}) — der Suchindex "
+            "nimmt nur u32-Dokument-IDs"
+        )
+
+    local_track_gid = uuid4()
+    vector = [_to_signed_int32(value) for value in submission.hashes]
+    shared = {
+        "local_track_id": local_track_id,
+        "local_track_gid": local_track_gid,
+        "fingerprint": vector,
+        "length": submission.duration,
+        "bitrate": submission.bitrate,
+        "fileformat": submission.fileformat,
+        "puid": submission.puid,
+        "foreignid": submission.foreignid,
+        "track": submission.track,
+        "artist": submission.artist,
+        "album": submission.album,
+        "album_artist": submission.album_artist,
+        "track_no": submission.track_no,
+        "disc_no": submission.disc_no,
+        "year": submission.year,
+        "client": client,
+        "client_version": client_version,
+        "user": user,
+    }
+    row_ids: list[int] = []
+    for mbid in submission.mbids or (None,):
+        inserted = connection.execute(_INSERT_SUBMISSION_SQL, {**shared, "mbid": mbid}).fetchone()
+        if inserted is None:  # pragma: no cover - RETURNING liefert immer eine Zeile
+            raise RuntimeError("INSERT INTO local_submission lieferte keine ID zurueck")
+        row_ids.append(int(inserted[0]))
+    return StoredSubmission(
+        local_track_id=local_track_id,
+        local_track_gid=local_track_gid,
+        row_ids=tuple(row_ids),
+    )
+
+
+def load_pending_submissions(
+    connection: psycopg.Connection, *, limit: int
+) -> list[PendingSubmission]:
+    """Einreichungen im Status ``new``, aelteste zuerst.
+
+    Das ist der Arbeitsvorrat der Indexierung (Partialindex
+    ``local_submission_idx_unindexed``). ``limit`` zaehlt **Einreichungen**,
+    nicht Zeilen: eine Aufnahme mit drei MBIDs ist ein Eintrag.
+    """
+    rows = connection.execute(_PENDING_SUBMISSIONS_SQL, {"limit": limit}).fetchall()
+    return [PendingSubmission(local_track_id=row[0], hashes=row[1]) for row in rows]
+
+
+def mark_submissions_indexed(
+    connection: psycopg.Connection, local_track_ids: Sequence[int]
+) -> None:
+    """Setzt ``new`` -> ``indexed`` fuer alle Zeilen dieser Einreichungen.
+
+    Wird **nach** dem ``_update`` des Suchindex aufgerufen — nie davor. Die
+    umgekehrte Reihenfolge waere stiller Datenverlust: als indexiert
+    vermerkte Einreichungen, die der Index nie gesehen hat, taucht kein
+    Lookup je wieder auf (dieselbe Regel wie beim Index-Feed des Importers,
+    ARCHITECTURE §5.3).
+    """
+    if not local_track_ids:
+        return
+    connection.execute(_MARK_INDEXED_SQL, {"ids": sorted(set(local_track_ids))})
+
+
+def _to_signed_int32(value: int) -> int:
+    """u32-Hash in den Wertebereich der Spalte ``integer[]`` bringen.
+
+    Der Chromaprint-Dekoder liefert vorzeichenlose Hashes, die Spalte haelt
+    signed int32 — dasselbe Bitmuster, nur anders gelesen. Genau so stehen
+    auch die Vektoren aus den Tagesdeltas in der Datenbank; das Rescoring
+    liest beide wieder vorzeichenlos.
+    """
+    return value - 2**32 if value >= 2**31 else value

@@ -12,7 +12,14 @@ from __future__ import annotations
 
 from typing import Any, Final
 
-__all__ = ["ERROR_EXAMPLE", "ERROR_TABLE", "LOOKUP_BATCH_EXAMPLE", "LOOKUP_OK_EXAMPLE"]
+__all__ = [
+    "ERROR_EXAMPLE",
+    "ERROR_TABLE",
+    "LOOKUP_BATCH_EXAMPLE",
+    "LOOKUP_OK_EXAMPLE",
+    "SUBMIT_OK_EXAMPLE",
+    "SUBMIT_PARAMETERS",
+]
 
 #: „Antwort (Erfolg)" aus dem Forschungsbericht.
 LOOKUP_OK_EXAMPLE: Final[dict[str, Any]] = {
@@ -26,6 +33,32 @@ LOOKUP_BATCH_EXAMPLE: Final[dict[str, Any]] = {
     "status": "ok",
     "fingerprints": [{"index": 0, "results": []}],
 }
+
+#: „Antwort: {"status":"ok","submissions":[{"id":…,"status":"pending"}]} —
+#: `status` immer "pending" (asynchrone Verarbeitung). `index` ist im Code
+#: ein String ("0") und fehlt ohne `.N`-Suffix (Doku zeigt faelschlich Zahl)."
+SUBMIT_OK_EXAMPLE: Final[dict[str, Any]] = {
+    "status": "ok",
+    "submissions": [{"id": 1, "status": "pending"}],
+}
+
+#: „je Index `#`" aus dem Abschnitt /v2/submit — Name und ob mehrfach erlaubt.
+SUBMIT_PARAMETERS: Final[tuple[tuple[str, bool], ...]] = (
+    ("duration", False),
+    ("fingerprint", False),
+    ("bitrate", False),
+    ("fileformat", False),
+    ("mbid", True),
+    ("track", False),
+    ("artist", False),
+    ("album", False),
+    ("albumartist", False),
+    ("year", False),
+    ("trackno", False),
+    ("discno", False),
+    ("puid", False),
+    ("foreignid", False),
+)
 
 #: Abschnitt „Fehlerformat" des Forschungsberichts.
 ERROR_EXAMPLE: Final[dict[str, Any]] = {
