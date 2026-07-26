@@ -3,23 +3,21 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–12 abgeschlossen (2026-07-26). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (1264 Tests, drei
-Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation pg_acoustid).
-Warten auf Go für Phase 13. Phase 12 in Kürze: Modus `local+upstream`
-(`api/app/upstream.py`) — erster Weiterleitungsversuch in der
-Submit-Anfrage (max. 10 Gruppen, ein HTTP-Versuch, wirft nie),
-Wiederholungen über `drain_queue` (Abnehmer Phase 19; Drossel
-≤ 3 req/s prozessweit, Backoff 1→30 s, zwei Fehlerklassen),
-7-Fehler-Grenze mit ERROR-Ereignis `upstream_forward_gave_up`
-(Abnehmer Phase 20) + manuellem `retry_forward`; nur https, Key
-maskiert, `user`-Key unverändert durchgereicht. Getestet
-ausschließlich gegen Mock-Upstream — der erste Lauf gegen den echten
-Dienst ist für Phase 28 vorgemerkt. Phase 11 davor: `/v2/submit`
-(off/local), `local_submission`, Doc-ID-Bereich `[2^31, 2^32-1]`
-(u32-HOCH-Finding, Addendum 14); Phase-19-Vormerkung
-Submit↔Feed-Guard. Phase 10: MB-Query-Schicht, volle meta-Grammatik,
-degradierter Betrieb §8.7. Offener DoD-Rest aus Phase 8: der
+**Status: Phasen 0–13 abgeschlossen (2026-07-26) — der API-Block
+(9–13) ist damit vollständig. Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (1349 Tests,
+drei Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation
+pg_acoustid). Warten auf Go für Phase 14 (Wächter-Grundgerüst).
+Phase 13 in Kürze: `POST /v2/lookup/batch` (Objekt-Hülle mit
+`queries`, Antwort `responses` mit `index` in Anfragereihenfolge,
+Teilfehler je Eintrag bei HTTP 200, Limit 100 ⇒ 19/413,
+meta-Bündelung: ein MB-Roundtrip-Bündel je MetaPlan für alle
+Einträge) und `GET/POST /v2/submission_status` (`new` ⇒ `"pending"`,
+ab `indexed` ⇒ `"imported"` + `result.id`; unbekannte IDs still
+`"pending"`, nie 404; max. 100 IDs). Davor: Phase 12 Upstream-Queue
+(Echtlauf-Vormerkung Phase 28), Phase 11 /v2/submit + u32-Finding,
+Phase 10 MB-Resolver. Offen bleibt der Phase-8-Rest (Unraid-Probelauf,
+Anleitung docs/probelauf-unraid.md). Offener DoD-Rest aus Phase 8: der
 Probelauf am echten Datenbestand (auf der Unraid-Hardware des
 Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
 getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
@@ -410,15 +408,28 @@ Ziel: Viele Fingerprints in einer Anfrage — ein Weckvorgang; plus der
 kleine Original-Status-Endpoint.
 
 Aufgaben:
-- [ ] `POST /v2/lookup/batch`: JSON-Array `{fingerprint, duration,
-      meta}`, Antwort-Array in gleicher Reihenfolge
-- [ ] Limit 100 Einträge/Request mit sauberem Fehler bei Überschreitung
-- [ ] `GET/POST /v2/submission_status` (Mehrfach-`id`; unbekannte IDs
-      `"pending"`, nie 404) — Handoff-Korrektur, DECISIONS 2026-07-25
-- [ ] Tests inkl. Teilfehlern einzelner Einträge
+- [x] `POST /v2/lookup/batch` (`api/app/batch.py`): Objekt-Hülle
+      `{"client", "meta", "maxdurationdiff", "queries": […]}`,
+      Antwort `responses` mit `index` in Anfragereihenfolge, je
+      Eintrag eine vollständige AcoustID-Antwort; gemeinsame
+      Betriebsmittel gehören der Anfrage (Index weg ⇒ 13/503 gesamt),
+      Parameterfehler dem Eintrag; meta als Bündel je MetaPlan (ein
+      MB-Roundtrip-Bündel für alle Einträge); `format` ohne Wirkung
+- [x] Limit 100 ⇒ 19/413 vor dem Parsen; leeres `queries` ⇒ 200 + `[]`
+- [x] `GET/POST /v2/submission_status` (`api/app/status.py`):
+      Mehrfach-`id` (max. 100), Formatparität json/jsonp/xml;
+      Mapping `new` ⇒ `"pending"`, `indexed`/`forwarded`/
+      `forward_failed` ⇒ `"imported"` + `result.id` =
+      `local_track_gid`; unbekannte IDs still `"pending"`, nie 404;
+      antwortet auch bei `submit.mode = off`
+- [x] Tests inkl. Teilfehlern: 85 neue (47 Batch-HTTP, 29 Status-HTTP,
+      9 Integration inkl. E2E pending→imported und Batch über beide
+      Doc-ID-Bereiche); Agent lief lokal auch die 8 Extension-Tests
 
-Definition of Done: Batch- und Status-Tests grün; Verhalten
-dokumentiert.
+Definition of Done: erfüllt 2026-07-26 — 1349 Tests grün (lokal + CI);
+Verträge dokumentiert in docs/api-lookup.md (Batch) und
+docs/api-submit.md (submission_status). Detailentscheide in DECISIONS
+(„Phase-13-Batch/Status-Details"). Commit 1d8874a.
 
 ## Phase 14: Wächter — Grundgerüst, SQLite & /status
 
@@ -458,6 +469,11 @@ Aufgaben:
 
 Definition of Done: E2E-Wecktest grün; docker.sock-Codepfad minimal und
 isoliert.
+
+Hinweis (aus Phase 13): `GET /v2/lookup/batch` liefert FastAPIs
+nacktes 405 ohne AcoustID-Fehlerformat (einzige solche Antwort; kein
+passender 19er-Code). Falls ein einheitliches Fehlerbild gewünscht
+ist, wäre der Proxy hier der Ort.
 
 ## Phase 16: Wächter — Zustandsmaschine, Idle-Stopp & Startfehler
 
@@ -704,6 +720,10 @@ Application-Key registrieren (acoustid.org/new-application, sofort
 aktiv) und mit EINER Einreichung beginnen; unbestätigt sind die exakte
 Fehlerantwort bei ungültigem Key und das Verhalten oberhalb von
 3 req/s (docs/api-submit.md, offene Punkte).
+
+Hinweis (aus Phase 13): Der Batch hat jenseits der 100er-Grenze keine
+Kostenbremse (100 × 40 Kandidaten Rescoring synchron im Threadpool) —
+Dauer auf der Zielhardware hier mitmessen.
 
 ## Phase 29: Release, README & Unraid-Template
 

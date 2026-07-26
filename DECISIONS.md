@@ -701,3 +701,43 @@ kein Abnehmer); HTTP-Versuche zählen (verworfen — 7-Grenze nach einem
 Lauf erreicht). Vormerkung Phase 28: erster echter Lauf gegen
 api.acoustid.org mit registriertem Key, mit einer Einreichung
 beginnen.
+
+## 2026-07-26: Phase-13-Batch/Status-Details (Vertrag des eigenen Endpoints)
+
+Entscheidung: (1) **Batch-Rumpf ist eine Objekt-Hülle**
+(`{"client", "meta", "maxdurationdiff", "queries": [...]}`), kein
+nacktes Array — anfrageweite Felder bleiben möglich, ohne den Vertrag
+später zu brechen; §7 wurde entsprechend präzisiert. (2) **Je Eintrag
+eine vollständige AcoustID-Antwort** (`responses[]` mit `index`
+0-basiert, `status` je Eintrag) — Clients werten Einträge mit
+demselben Code aus wie Einzelantworten; Teilfehler bei **HTTP 200**.
+(3) **Gemeinsame Betriebsmittel gehören der Anfrage:** Index weg ⇒
+13/503 für alles (laute Absage aus Phase 9 bleibt), MB-Abfragefehler ⇒
+5/500; nur eintragseigene Parameterfehler bleiben beim Eintrag.
+(4) Grenze 100 ⇒ **19/413** (derselbe Code, auf den Picard sein
+Batching stützt), geprüft vor dem Parsen; leeres `queries` ⇒ 200 mit
+leerem Array. (5) **meta als Bündel je MetaPlan:** Einträge werden
+nach ausgewertetem Plan gruppiert, `inject_metadata` läuft einmal je
+Gruppe über alle Trefferobjekte — ein MB-Roundtrip-Bündel für 100
+Einträge, Phase-10-Choreografie unangetastet. (6) `format` wird am
+Batch nicht ausgewertet (immer JSON; XML hätte keinen sinnvollen
+Elementnamen für die gemischte Liste); nur POST, GET ⇒ nacktes 405
+(dokumentiert; einheitliches Fehlerbild wäre Proxy-Sache, Hinweis
+Phase 15). (7) **Status-Mapping:** `new` ⇒ `"pending"`;
+`indexed`/`forwarded`/`forward_failed` ⇒ `"imported"` mit `result.id`
+= `local_track_gid` — `imported` heißt lokal „hat eine AcoustID und
+ist nachschlagbar"; `forward_failed` bleibt `imported` (lokal fertig,
+Upstream ist Betreibersache §8.9; `pending` ließe Clients ewig
+fragen). (8) `id`-Obergrenze 100 ⇒ 19/413 (gezählt werden geschickte
+Werte); unlesbare IDs still übersprungen, keine übrig ⇒ Fehler 2;
+Antwort in Anfragereihenfolge je geschicktem Wert, DB einmal befragt;
+antwortet auch bei `submit.mode = off` (reine Leseauskunft).
+Begründung: Der eigene Endpoint hat kein Original-Vorbild — hier
+zählt Konsistenz mit dem eigenen Lookup-Vertrag und Auswertbarkeit
+durch bestehenden Client-Code; beim Status-Endpoint dagegen
+Formatparität zum Original.
+Alternativen: nacktes Array (verworfen — nicht erweiterbar);
+HTTP-Fehlerstatus bei Teilfehlern (verworfen — Clients verwürfen die
+ganze Antwort); Fehler je Eintrag auch bei Index-Ausfall (verworfen —
+halb beantwortete Batches sähen aus wie „kein Treffer");
+`forward_failed` als `pending` (verworfen — Client-Endlosschleife).

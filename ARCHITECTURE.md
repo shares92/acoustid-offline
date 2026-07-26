@@ -564,10 +564,15 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
 30 s, persistente Queue); nur https.
 
 ### Eigene Endpoints
-- **`POST /v2/lookup/batch`** — JSON-Body mit Array von
-  `{fingerprint, duration, meta}`; Antwort: Array in gleicher
-  Reihenfolge. Obergrenze 100 Einträge pro Request. (Zusätzlich gilt
-  das Original-Batchprotokoll mit max. 20, s. o.)
+- **`POST /v2/lookup/batch`** — JSON-Body: Objekt-Hülle
+  `{"client", "meta", "maxdurationdiff", "queries": [{fingerprint,
+  duration, meta}, …]}` (Hülle statt nacktem Array — erweiterbar ohne
+  Vertragsbruch, Phase-13-Entscheid); Antwort
+  `{"status":"ok","responses":[…]}` in Anfragereihenfolge, je Eintrag
+  eine vollständige AcoustID-Antwort mit `index` (0-basiert) —
+  Teilfehler einzelner Einträge bei HTTP 200. Obergrenze 100 Einträge
+  ⇒ 19/413. Details: [docs/api-lookup.md](docs/api-lookup.md).
+  (Zusätzlich gilt das Original-Batchprotokoll mit max. 20, s. o.)
 - **`GET /status`** — Wächter-Endpoint, weckt nie: Stack-Zustand
   (schlafend/startend/bereit/Fehler), Datenstand (letzte Delta-Sequenz),
   letzter Update-Lauf, Version.
@@ -585,8 +590,12 @@ Seit Phase 11 steht `GET/POST /v2/submit` in den Modi `off`/`local`
 Doc-ID-Bereich §5.3), seit Phase 12 auch `local+upstream`
 (`api/app/upstream.py`: Erstversuch in der Anfrage, Queue-Drain für
 den Update-Lauf, Drossel ≤ 3 req/s, 7-Fehler-Grenze §8.9; Vertrag und
-Abweichungen: [docs/api-submit.md](docs/api-submit.md)).
-Batch-Endpoint + `/v2/submission_status` folgen in Phase 13.
+Abweichungen: [docs/api-submit.md](docs/api-submit.md)). Seit
+Phase 13 stehen `POST /v2/lookup/batch` (`api/app/batch.py`) und
+`GET/POST /v2/submission_status` (`api/app/status.py`; Mapping:
+`new` ⇒ `"pending"`, ab `indexed` ⇒ `"imported"` mit `result.id` =
+lokale AcoustID). **Der API-Block (Phasen 9–13) ist damit
+vollständig.**
 
 ### Durchsetzungsort Auth & Rate-Limit
 API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**
