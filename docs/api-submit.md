@@ -1,14 +1,15 @@
-# API-Dienst: `/v2/submit` (Phase 11)
+# API-Dienst: `/v2/submit` (Phasen 11 + 12)
 
 Referenz zum Submit-Endpunkt des Containers `acoustid-api`. Vertrag und
-Begründungen: ARCHITECTURE §5.2, §5.3, §6 und §7 sowie
+Begründungen: ARCHITECTURE §5.2, §5.3, §6, §7 und §8.9 sowie
 [docs/research/phase1-api-formate.md](research/phase1-api-formate.md) und
 [docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md).
 Der Lookup steht in [docs/api-lookup.md](api-lookup.md).
 
-**Stand:** Modi `off` und `local` vollständig; `local+upstream` verhält sich
-in dieser Phase wie `local` — die Weiterleitung an api.acoustid.org und die
-Statuspfade `forwarded`/`forward_failed` baut Phase 12.
+**Stand:** alle drei Modi vollständig — `off`, `local` (Phase 11) und
+`local+upstream` samt Weiterleitung an api.acoustid.org, Statuspfaden
+`forwarded`/`forward_failed`, Warteschlange und Retry-Hook (Phase 12,
+Abschnitt [Upstream-Weiterleitung](#upstream-weiterleitung-localupstream)).
 `/v2/submission_status` folgt in Phase 13.
 
 ## Modi (`submit.mode`, ARCHITECTURE §6)
@@ -17,7 +18,7 @@ Statuspfade `forwarded`/`forward_failed` baut Phase 12.
 |---|---|
 | `off` | Der Endpunkt nimmt nichts an: **Fehler 12 „not allowed" / HTTP 400**, geprüft noch vor dem Lesen der Parameter. |
 | `local` (Default) | Speichern in `local_submission`, indexieren, Antwort `pending`. |
-| `local+upstream` | In dieser Phase identisch mit `local`. Die Statusmaschine kann die Weiterleitung bereits abbilden. |
+| `local+upstream` | Wie `local`, **zusätzlich** Weiterleitung an api.acoustid.org. Braucht `submit.upstream_app_key` (die Config lehnt den Modus sonst ab). |
 
 Warum **12** und nicht 13 („service currently unavailable"): der Zustand ist
 kein Ausfall, sondern eine Entscheidung des Betreibers. Ein 503 würde Picard
@@ -119,8 +120,10 @@ Deshalb eine eigene Tabelle (Migrationen `core/0008_local_submission.sql` und
 - **Vorzeichen:** der Chromaprint-Dekoder liefert u32, die Spalte hält signed
   int32 — dasselbe Bitmuster, genau wie bei den Vektoren aus den Deltas.
 - **Statusdomäne vollständig** per `CHECK`: `new`, `indexed`, `forwarded`,
-  `forward_failed`. Die letzten beiden benutzt erst Phase 12; sie stehen
-  bereits im Schema, damit dafür keine Migration nötig wird.
+  `forward_failed`. Die letzten beiden benutzt die Upstream-Weiterleitung; sie
+  standen seit Phase 11 im Schema, deshalb kam Phase 12 **ohne Migration** aus
+  (auch die vier Spalten `forwarded_at`, `forward_attempts`, `forward_error`
+  und `submitted_by` waren schon da).
 
 ## Reservierter Dokument-ID-Bereich
 
@@ -156,7 +159,10 @@ Bestand**, Phase 5). Verankert ist der Befund in
 ## Statusmaschine und Indexierung
 
 ```
-new ──(_update im Index)──> indexed ──(Phase 12)──> forwarded | forward_failed
+new ──(_update im Index)──> indexed ──(Upstream-Antwort)──> forwarded
+                                    └──(Fehler)─────────> forward_failed ──┐
+                                                            ↑              │
+                                                            └──────────────┘
 ```
 
 - **Synchron in der Anfrage**, aber in der richtigen Reihenfolge: erst das
@@ -183,6 +189,152 @@ new ──(_update im Index)──> indexed ──(Phase 12)──> forwarded | 
 - **Nur Stille im Vektor:** kein Dokument, aber trotzdem `indexed` — sonst
   läge die Zeile bei jeder künftigen Anfrage wieder im Arbeitsvorrat (wie beim
   Index-Feed).
+
+## Upstream-Weiterleitung (`local+upstream`)
+
+Modul: `api/app/upstream.py`. Vertrag: ARCHITECTURE §7 („Upstream-Weiterleitung"),
+§6 (`submit.mode`, `submit.upstream_app_key`) und Invariante §8.9.
+
+### Was hinausgeht
+
+Genau der Original-Submit, den auch Picard schickt — `POST` mit
+`application/x-www-form-urlencoded` an **`https://api.acoustid.org/v2/submit`**:
+
+| Feld | Wert |
+|---|---|
+| `client` | **unser eigener** Application-Key (`submit.upstream_app_key`) |
+| `user` | der `submitted_by`-Key des einreichenden Clients, **unverändert** |
+| `clientversion` | Version dieser Instanz |
+| `format` | `json` |
+| `duration.0` | `local_submission.length` |
+| `fingerprint.0` | aus dem gespeicherten Vollvektor **zurückgerechnet** |
+| `mbid.0` | **einmal je MBID der Gruppe** (mehrfach belegter Name) |
+| `bitrate.0`, `fileformat.0`, `puid.0`, `foreignid.0`, `track.0`, `artist.0`, `album.0`, `albumartist.0`, `trackno.0`, `discno.0`, `year.0` | nur, wenn gesetzt |
+
+- **Nur `https`.** Der Original-Dienst erzwingt es nicht, hier gehen aber
+  fremde `user`-Keys über die Leitung; der Weiterleiter lehnt jede andere
+  Adresse schon beim Bauen ab. Die Zieladresse ist eine Konstante
+  (`UPSTREAM_URL`) und in Tests über den Konstruktor ersetzbar — dasselbe
+  Muster wie die `base_url` des Downloaders.
+- **`user` unverändert durchreichen**, weil acoustid.org keinen Mechanismus
+  für „im Namen Dritter" kennt und die Nutzungsbedingungen den User-Key an
+  den Nutzer binden (Phase-1-Bericht, „Application-Key & Nutzungsregeln").
+  Der Key wird deshalb auch **nie geloggt**.
+- **Der Fingerprint wird neu kodiert.** Gespeichert ist der Vollvektor, nicht
+  die Zeichenkette des Clients; `encode_fingerprint` ist das verlustfreie
+  Gegenstück zum Dekoder (bit-verifiziert in CI). Eine zusätzliche Spalte für
+  die Original-Zeichenkette wäre eine Migration ohne Gegenwert.
+- **Eine Anfrage je Einreichungsgruppe** (`local_track_id`): eine Aufnahme mit
+  drei MBIDs steht als drei Zeilen in der Tabelle und geht als **eine**
+  Anfrage mit dreifachem `mbid.0` hinaus — so, wie der Client sie eingereicht
+  hat. Mehrere Gruppen werden **nicht** gebündelt: sie können verschiedene
+  `user`-Keys tragen (davon gibt es je Anfrage nur einen), und eine Anfrage je
+  Gruppe hält Erfolg und Fehlschlag eindeutig der Gruppe zugeordnet, deren
+  Status danach umgesetzt wird.
+
+### Wann weitergeleitet wird
+
+Zwei Wege — ein Hintergrund-Worker existiert bewusst nicht (er kollidierte
+mit dem Schlaf-Zyklus, DECISIONS „Phase-11-Submit-Details"):
+
+| Weg | Auslöser | Umfang | HTTP-Versuche je Gruppe |
+|---|---|---|---|
+| `forward_after_submit` | die Submit-Anfrage selbst, nach Speichern + Indexieren | **nur die Gruppen dieser Anfrage**, höchstens 10 | 1 |
+| `drain_queue` | Wächter im Update-Zyklus (Phase 19), Admin-UI (Phase 26) | ganzer Arbeitsvorrat, höchstens 500 Gruppen | 5 |
+
+Der erste Versuch gehört in die Anfrage, weil §8.9 von Fehlversuchen spricht,
+die „beim nächsten Update-Lauf **erneut** versucht" werden — und weil der
+Stack sonst einschlafen könnte, bevor überhaupt etwas hinausgegangen ist. Die
+Deckelung auf 10 Gruppen hält die Antwortzeit bei ≤ 3 Anfragen/s unter rund
+3,5 Sekunden; der Rest bleibt `indexed` und geht im nächsten
+Warteschlangenlauf hinaus. Im Anfragepfad gibt es **kein** Backoff — bis zu
+30 Sekunden Wartezeit in einer offenen Client-Anfrage wären eine Zumutung.
+
+**Weitergeleitet wird nur, was `indexed` ist.** Der Status ist eine einzige
+Spalte; eine Einreichung, die der Suchindex noch nicht kennt, darf diese
+Information nicht gegen `forwarded` eintauschen. Zeilen im Status `new` holt
+der nächste Submit nach und landen erst danach in der Warteschlange.
+
+### Drossel und Backoff
+
+- **Hart ≤ 3 Anfragen/s** (Nutzungsbedingung von acoustid.org): ein
+  Mindestabstand von ⅓ s zwischen zwei Anfragen, durchgesetzt von einer
+  **prozessweiten** Drossel mit Schloss und monotoner Uhr. Prozessweit ist
+  wesentlich: die API bearbeitet Anfragen im Threadpool, und ein
+  Warteschlangenlauf kann parallel dazu laufen. Deshalb hängt der
+  Weiterleiter am `ApiService` und nicht an der Anfrage. Der Zeitpunkt wird
+  unter dem Schloss reserviert, gewartet wird ausserhalb.
+- **Backoff exponentiell 1 s → 2 → 4 → 8 → 16 → 30 s (Deckel).** Upstream
+  schickt kein `Retry-After`, also ein eigenes Schema. Es greift nur zwischen
+  den HTTP-Versuchen **eines** Laufs.
+- **Zwei Fehlerklassen.** Netzfehler, Zeitüberschreitung, 408/429/5xx und
+  unlesbare Antworten heissen „der Dienst ist gerade nicht da": der Lauf
+  bricht danach ab, die restlichen Gruppen behalten ihren Zähler
+  (`skipped` im Bericht). Ein 4xx oder eine Fehlerantwort im AcoustID-Format
+  betrifft nur diese eine Gruppe; der Lauf macht weiter.
+
+### Warteschlange und die 7-Fehler-Grenze (§8.9)
+
+Arbeitsvorrat sind alle Gruppen mit `status = 'indexed'` **oder**
+`status = 'forward_failed' AND forward_attempts < 7`, älteste zuerst.
+
+- Erfolg ⇒ `status = 'forwarded'`, `forwarded_at = now()`,
+  `forward_error = NULL`. `forward_attempts` bleibt stehen — die Zahl ist
+  Historie und wird nicht geschönt.
+- Fehlschlag ⇒ `status = 'forward_failed'`, `forward_attempts + 1`,
+  `forward_error` = gekürzte Ursache (max. 500 Zeichen).
+- **`forward_attempts` zählt Läufe, nicht HTTP-Versuche.** Ein
+  Warteschlangenlauf mit fünf HTTP-Versuchen ist ein Fehlversuch.
+- Ab dem **7.** Fehlversuch fällt die Gruppe aus dem Arbeitsvorrat: kein
+  automatischer Versuch mehr, und ein strukturiertes Ereignis geht ins Log
+  (Abnehmer: Benachrichtigung „Upstream-Submit dauerhaft fehlgeschlagen",
+  Phase 20).
+- Statuswechsel nur aus einem gültigen Vorzustand — die `UPDATE`s tragen
+  `AND status IN ('indexed', 'forward_failed')`. Eine bereits weitergeleitete
+  Gruppe wechselt kein zweites Mal.
+- Eine Zeile ohne `submitted_by` scheitert **ohne** Anfrage („kein user-Key
+  hinterlegt"): raten wäre eine Zweckentfremdung eines fremden Keys. Über den
+  Endpunkt kann das nicht entstehen (`user` ist Pflicht), die Spalte ist aber
+  NULL-bar.
+
+### Manueller Wiederholungsversuch
+
+`retry_forward(connection, service, local_track_ids=None)` ist der Hook aus
+§8.9 — aufrufbar für die Trigger-API des Wächters (Phase 19) und den Knopf
+„Upstream-Queue senden" der Admin-UI (Phase 26):
+
+- **ohne Namensnennung:** setzt alle Gruppen zurück, die die Grenze erreicht
+  haben (`forward_attempts >= 7` ⇒ 0, `forward_error` geleert), und versucht
+  **genau diese** erneut. Gruppen unterhalb der Grenze bleiben unangetastet —
+  sie kommen beim nächsten Lauf ohnehin dran.
+- **mit `local_track_ids`:** setzt genau diese zurück (ab dem ersten
+  Fehlversuch) und versucht sie erneut.
+
+### Ereignisse im Log
+
+```json
+{"event": "upstream_submission_forwarded", "local_track_id": 17, "mbids": 2,
+ "http_attempts": 1, "upstream_submission_ids": [4711, 4712]}
+{"event": "upstream_forward_gave_up", "local_track_id": 17,
+ "forward_attempts": 7, "max_forward_attempts": 7, "forward_error": "…"}
+```
+
+Weder der Application-Key noch der `user`-Key erscheinen darin — der
+Application-Key wird aus jeder Fehlermeldung entfernt (`***`), bevor sie ins
+Log oder in `forward_error` geht.
+
+### Die Submission-IDs des Originals werden nicht gespeichert
+
+Die Antwort von api.acoustid.org enthält eigene Submission-IDs. Sie landen
+**nur im Log** (`upstream_submission_ids`), nicht in der Datenbank:
+
+- Sie in eine Spalte neben die lokalen IDs zu legen, wäre ein Datenmodellfehler
+  — `/v2/submission_status` (Phase 13) beantwortet ausschliesslich **lokale**
+  IDs, und ein vermischter Bestand wäre nicht mehr auseinanderzuhalten.
+- Eine eigene Spalte wäre eine Migration ohne Abnehmer: die IDs sind nur gegen
+  das `/v2/submission_status` des Originals etwas wert, und diese Instanz
+  fragt dort nichts nach.
+- Nachvollziehbar bleiben sie über das Log-Ereignis.
 
 ## Wirkung im Lookup
 
@@ -232,12 +384,17 @@ Der Wächter verwirft ab Phase 17 daraufhin seinen Lookup-Cache (Invariante
 - **Keine Löschfunktion.** Zurücknehmen lässt sich eine Einreichung derzeit nur
   von Hand (Zeile löschen **und** `DELETE /:index/:id` mit
   `2^31 + local_track_id`).
+- **Keine Rücknahme upstream.** Was einmal weitergeleitet ist, lässt sich von
+  hier aus nicht zurückholen; der Original-Dienst kennt keinen solchen Aufruf.
+- **Kein Nachfragen bei `/v2/submission_status` des Originals.** Ob eine
+  weitergeleitete Einreichung dort tatsächlich verarbeitet wurde, prüft diese
+  Instanz nicht. `forwarded` heisst „angenommen", nicht „importiert".
 
 ## Tests
 
 ```bash
 uv run pytest api/tests/test_submit_params.py api/tests/test_submit_http.py \
-              api/tests/test_submit_range.py            # ohne Dienste
+              api/tests/test_submit_range.py api/tests/test_upstream.py  # ohne Dienste
 
 docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
 AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
@@ -245,8 +402,16 @@ AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
 ```
 
 Die HTTP-Tests stellen Postgres durch eine Handvoll Zeilen im Arbeitsspeicher
-nach; die Integrationstests laufen gegen echtes PG 18 und das gepinnte
-Index-Image, mit **echten** Vollvektoren aus einem Tages-Delta.
+nach (`api/tests/stubs.py`, `FakeDb`); die Integrationstests laufen gegen
+echtes PG 18 und das gepinnte Index-Image, mit **echten** Vollvektoren aus
+einem Tages-Delta.
+
+**An api.acoustid.org geht in keinem Test etwas hinaus** — auch nicht mit
+`--network`. An seiner Stelle steht ein `httpx.MockTransport`
+(`api/tests/upstream_mock.py`); der Weiterleiter selbst ist der echte, damit
+das Wire-Format mitgeprüft wird. Drossel und Backoff bekommen eine Testuhr,
+die nur durch das eigene `sleep` weiterläuft — die Wartezeiten sind als
+Zahlenreihe einklagbar, gewartet wird nie.
 
 ## Bewusste Abweichungen vom Original
 
@@ -260,6 +425,13 @@ Index-Image, mit **echten** Vollvektoren aus einem Tages-Delta.
 | Stille Verwerfung | MBID/PUID/Textmetadaten | zusätzlich zählt `foreignid` als Zuordnung | `foreignid` ist ein Identifikator wie `puid`; eine Einreichung damit zu verwerfen wäre Datenverlust. |
 | Rumpf `multipart/form-data` | wird gelesen | wird ignoriert | Wie beim Lookup: kein bekannter Client benutzt es, spart eine Abhängigkeit. |
 | Anzahl Teilanfragen | keine dokumentierte Grenze | ebenfalls keine (nur 1 MiB) | Picards Batching stützt sich auf das 413 der Rumpfgrenze. |
+| Weiterleitung (Phase 12) | existiert nicht (der Dienst **ist** das Ziel) | Modus `local+upstream` reicht jede Einreichung an api.acoustid.org weiter | Projektentscheid ARCHITECTURE §6/§7: eine Offline-Instanz soll den Bestand nicht versanden lassen. |
+| `client` der weitergeleiteten Anfrage | der Key des einreichenden Clients | **unser eigener** Application-Key | Wir sind gegenüber acoustid.org der Aufrufer; der Key des Clients gehört nicht uns. |
+| `user` der weitergeleiteten Anfrage | — | der `user`-Key des Clients, unverändert | acoustid.org kennt kein „im Namen Dritter"; die Nutzungsbedingungen binden den User-Key an den Nutzer. |
+| Fingerprint der weitergeleiteten Anfrage | (die Original-Zeichenkette liegt vor) | aus dem Vollvektor neu kodiert | Gespeichert ist der Vektor; der Codec ist verlustfrei und bit-verifiziert — eine Spalte für die Zeichenkette wäre eine Migration ohne Gegenwert. |
+| Bündelung upstream | ein Client bündelt viele Aufnahmen je Anfrage | **eine** Anfrage je Einreichungsgruppe | Verschiedene Gruppen können verschiedene `user`-Keys tragen; je Gruppe eine Anfrage hält die Statuszuordnung eindeutig. |
+| Upstream-Submission-IDs | (die eigenen IDs sind die Antwort) | nur im Log, nicht in der Datenbank | Kein Vermischen mit den lokalen IDs, die `/v2/submission_status` beantwortet; eine eigene Spalte hätte keinen Abnehmer. |
+| Fehler bei der Weiterleitung | — | HTTP 200 `pending`, Zeile wird `forward_failed` | Lokal gespeichert ist die Wahrheit; ein Fehlercode brächte Clients zum erneuten Senden ⇒ Dubletten. |
 
 ## Offene Punkte
 
@@ -275,3 +447,18 @@ Index-Image, mit **echten** Vollvektoren aus einem Tages-Delta.
    spätestens, wenn die Instanz überwiegend eigene Einreichungen führt.
 3. **Rücknahme/Bereinigung** eigener Einreichungen hat noch keine Oberfläche;
    die Admin-UI (Phasen 23–27) wäre der Ort dafür.
+4. **Der Weiterleiter ist nie gegen den echten Dienst gelaufen.** Format und
+   Nutzungsregeln stammen aus dem Quelltext-Studium der Phase 1, geprüft wird
+   gegen eine Attrappe. Ein erster echter Lauf braucht einen registrierten
+   Application-Key (acoustid.org/new-application, sofort aktiv) und sollte mit
+   **einer** Einreichung beginnen; unbestätigt bleiben bis dahin die genaue
+   Fehlerantwort bei ungültigem Key und das Verhalten bei Überschreiten der
+   3-Anfragen-Grenze.
+5. **Modus-Wechsel `local` → `local+upstream` schiebt den Altbestand nach.**
+   Der erste Warteschlangenlauf danach nimmt **alle** bisher nur lokal
+   gespeicherten Einreichungen mit (höchstens 500 je Lauf, ≤ 3 Anfragen/s).
+   Das ist gewollt, sollte in der Admin-UI (Phase 25) aber am Umschalter
+   stehen.
+6. **Kein Abgleich mit `/v2/submission_status` des Originals**: `forwarded`
+   heisst „angenommen", nicht „importiert" (siehe „Grenzen"). Ein Nachfragen
+   wäre erst mit einer eigenen Spalte für die Upstream-IDs sinnvoll.

@@ -14,8 +14,10 @@ Module:
 * :mod:`acoustid_api.store` — Lesezugriffe auf die AcoustID-Postgres.
 * :mod:`acoustid_api.service` — Pool, Index-Client, Konfiguration.
 
-Es kommen dazu: ``meta`` samt MusicBrainz-Resolver (Phase 10), ``/v2/submit``
-(Phase 11/12) sowie ``/v2/lookup/batch`` und ``/v2/submission_status``
+Dazugekommen sind ``meta`` samt MusicBrainz-Resolver (Phase 10),
+``/v2/submit`` mit :mod:`acoustid_api.submit` (Phase 11) und die
+Upstream-Weiterleitung in :mod:`acoustid_api.upstream` (Phase 12).
+Es fehlen noch ``/v2/lookup/batch`` und ``/v2/submission_status``
 (Phase 13).
 """
 

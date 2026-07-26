@@ -10,13 +10,19 @@ Lokal::
     AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \\
         uv run pytest api/tests --integration=require
 
-Der Nachweis, um den es geht, ist die Definition of Done der Phase: eine
+Der Nachweis, um den es geht, ist die Definition of Done der Phase 11: eine
 Einreichung wandert von ``new`` nach ``indexed`` und wird anschliessend vom
 **echten** Lookup gefunden — mit ihrer eigenen AcoustID und den eingereichten
 MBIDs. Dazu die beiden Faelle, die man nur mit echten Diensten sieht: ein
 ausgefallener Suchindex (Einreichung bleibt ``new``, spaeterer Submit holt
 nach) und die Frage, ob der reservierte Dokument-ID-Bereich mit importierten
 Fingerprints kollidiert.
+
+Der letzte Abschnitt gehoert der **Upstream-Warteschlange (Phase 12)**: dort
+geht es um die Anweisungen selbst — Arbeitsvorrat, die vier Phase-12-Spalten
+und die 7-Fehler-Grenze in echtem SQL. An api.acoustid.org geht auch dort
+nichts hinaus; der Dienst bleibt ein ``httpx.MockTransport``
+(`upstream_mock.py`).
 
 Gearbeitet wird mit **echten** Vollvektoren aus einem Tages-Delta;
 synthetische Hashes haetten eine andere Bitstatistik, und genau die
@@ -33,18 +39,28 @@ from pathlib import Path
 from typing import Any, NamedTuple
 from uuid import uuid4
 
+import httpx
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg_pool import ConnectionPool
+from upstream_mock import APP_KEY, MockUpstream, error_response, make_forwarder
 
 from acoustid_api.main import create_app
 from acoustid_api.service import ApiService
-from acoustid_api.store import LOCAL_DOC_ID_BASE
+from acoustid_api.store import (
+    LOCAL_DOC_ID_BASE,
+    load_forward_queue,
+    mark_forward_failed,
+    mark_forwarded,
+    reset_forward_attempts,
+)
+from acoustid_api.upstream import MAX_FORWARD_ATTEMPTS, drain_queue, retry_forward
 from shared.config import Config
 from shared.env import EnvSettings
 from shared.fingerprint import encode_fingerprint
 from shared.fpindex import FpIndexClient, Insert, extract_query
+from shared.models import SubmitMode
 
 pytestmark = [pytest.mark.integration, pytest.mark.db, pytest.mark.index]
 
@@ -369,3 +385,238 @@ def test_the_stored_vector_survives_the_round_trip(
     assert [value & 0xFFFFFFFF for value in stored[0]] == [
         value & 0xFFFFFFFF for value in sample.vector
     ]
+
+
+# --- Upstream-Warteschlange (Phase 12) --------------------------------------
+#
+# Hier geht es um die Anweisungen selbst: dass der Arbeitsvorrat die richtigen
+# Zeilen findet, dass die vier Phase-12-Spalten so beschrieben werden wie in
+# §5.2 vorgesehen und dass die 7-Fehler-Grenze in SQL greift. Der HTTP-Verkehr
+# bleibt auch hier eine Attrappe (`upstream_mock.py`) — an api.acoustid.org
+# geht in keinem Test etwas hinaus.
+
+UPSTREAM_CONFIG = Config.model_validate(
+    {"submit": {"mode": SubmitMode.LOCAL_UPSTREAM, "upstream_app_key": APP_KEY}}
+)
+
+
+@pytest.fixture
+def upstream() -> MockUpstream:
+    return MockUpstream()
+
+
+def upstream_service(
+    pool: ConnectionPool, index: FpIndexClient, upstream: MockUpstream
+) -> ApiService:
+    """Die echte App im Modus `local+upstream`, Upstream als Attrappe."""
+    service = ApiService(pool, index, UPSTREAM_CONFIG, upstream=make_forwarder(upstream))
+    service.open()
+    return service
+
+
+def queue(db: psycopg.Connection, **kwargs: Any) -> list[Any]:
+    return load_forward_queue(db, limit=100, max_attempts=MAX_FORWARD_ATTEMPTS, **kwargs)
+
+
+def test_the_queue_holds_what_is_indexed_but_not_forwarded(
+    db: psycopg.Connection, client: TestClient, samples: list[Sample]
+) -> None:
+    submit(client, samples[0], bitrate="320", fileformat="FLAC", artist="Die Band")
+    waiting = queue(db)
+    assert len(waiting) == 1
+    entry = waiting[0]
+    assert entry.local_track_id == rows(db)[0][1]
+    assert entry.duration == samples[0].length
+    assert entry.mbids == (MBID,)
+    # Der user-Key steht in `submitted_by` und wird von dort durchgereicht.
+    assert entry.submitted_by == "usertestkey"
+    assert (entry.bitrate, entry.fileformat, entry.artist) == (320, "FLAC", "Die Band")
+    assert [value & 0xFFFFFFFF for value in entry.hashes] == [
+        value & 0xFFFFFFFF for value in samples[0].vector
+    ]
+
+
+def test_two_mbids_are_one_queue_entry_with_two_mbids(
+    db: psycopg.Connection, client: TestClient, samples: list[Sample]
+) -> None:
+    sample = samples[0]
+    response = client.post(
+        "/v2/submit",
+        content="&".join(
+            [
+                "client=testkey",
+                "user=usertestkey",
+                f"fingerprint={sample.encoded()}",
+                f"duration={sample.length}",
+                f"mbid={MBID}",
+                f"mbid={OTHER_MBID}",
+            ]
+        ),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    assert response.status_code == 200, response.text
+    waiting = queue(db)
+    assert len(waiting) == 1
+    assert set(waiting[0].mbids) == {MBID, OTHER_MBID}
+
+
+def test_an_unindexed_submission_is_not_in_the_queue(
+    db: psycopg.Connection, pool: ConnectionPool, samples: list[Sample]
+) -> None:
+    broken = ApiService(pool, FpIndexClient("http://127.0.0.1:1", "tot"), Config())
+    broken.open()
+    with TestClient(create_app(broken)) as client:
+        submit(client, samples[0])
+    assert [row[3] for row in rows(db)] == ["new"]
+    assert queue(db) == []
+
+
+def test_the_status_columns_are_written_as_specified(
+    db: psycopg.Connection, client: TestClient, samples: list[Sample]
+) -> None:
+    submit(client, samples[0])
+    local_track_id = rows(db)[0][1]
+
+    assert mark_forward_failed(db, local_track_id, "HTTP 503") == 1
+    failed = db.execute(
+        "SELECT status, forward_attempts, forward_error, forwarded_at "
+        "FROM local_submission WHERE local_track_id = %s",
+        (local_track_id,),
+    ).fetchone()
+    assert failed == ("forward_failed", 1, "HTTP 503", None)
+
+    assert mark_forwarded(db, local_track_id) == 1
+    done = db.execute(
+        "SELECT status, forward_attempts, forward_error, forwarded_at IS NOT NULL "
+        "FROM local_submission WHERE local_track_id = %s",
+        (local_track_id,),
+    ).fetchone()
+    assert done == ("forwarded", 1, None, True)
+    # Eine bereits weitergeleitete Gruppe wechselt nicht noch einmal.
+    assert mark_forwarded(db, local_track_id) == 0
+    assert queue(db) == []
+
+
+def test_all_rows_of_a_group_switch_together_in_sql(
+    db: psycopg.Connection, client: TestClient, samples: list[Sample]
+) -> None:
+    sample = samples[0]
+    client.post(
+        "/v2/submit",
+        content="&".join(
+            [
+                "client=testkey",
+                "user=usertestkey",
+                f"fingerprint={sample.encoded()}",
+                f"duration={sample.length}",
+                f"mbid={MBID}",
+                f"mbid={OTHER_MBID}",
+            ]
+        ),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    local_track_id = rows(db)[0][1]
+    assert mark_forwarded(db, local_track_id) == 2
+    assert {row[3] for row in rows(db)} == {"forwarded"}
+
+
+def test_the_seven_error_limit_holds_in_sql(
+    db: psycopg.Connection, client: TestClient, samples: list[Sample]
+) -> None:
+    submit(client, samples[0])
+    local_track_id = rows(db)[0][1]
+    for expected in range(1, MAX_FORWARD_ATTEMPTS + 1):
+        assert mark_forward_failed(db, local_track_id, "HTTP 503") == expected
+        assert (queue(db) == []) is (expected >= MAX_FORWARD_ATTEMPTS)
+
+    revived = reset_forward_attempts(db, min_attempts=MAX_FORWARD_ATTEMPTS)
+    assert revived == [local_track_id]
+    assert len(queue(db)) == 1
+
+
+def test_the_whole_way_ends_in_forwarded(
+    db: psycopg.Connection,
+    pool: ConnectionPool,
+    index: FpIndexClient,
+    upstream: MockUpstream,
+    samples: list[Sample],
+) -> None:
+    """Die Definition of Done der Phase, gegen echte Dienste."""
+    service = upstream_service(pool, index, upstream)
+    with TestClient(create_app(service)) as client:
+        payload = submit(client, samples[0])
+        assert payload["submissions"][0]["status"] == "pending"
+        # Lokal bleibt alles auffindbar — die Weiterleitung ist eine Zugabe.
+        assert len(lookup(client, samples[0])["results"]) == 1
+
+    assert [row[3] for row in rows(db)] == ["forwarded"]
+    assert upstream.count == 1
+    assert upstream.field("client") == APP_KEY
+    assert upstream.field("user") == "usertestkey"
+    assert upstream.field("fingerprint.0") == samples[0].encoded()
+    assert upstream.values("mbid.0") == [MBID]
+    assert queue(db) == []
+
+
+def test_a_failed_forward_is_retried_by_the_next_drain(
+    db: psycopg.Connection,
+    pool: ConnectionPool,
+    index: FpIndexClient,
+    samples: list[Sample],
+) -> None:
+    """Der Weg aus §8.9: der Update-Lauf holt den Fehlversuch nach."""
+    broken = MockUpstream([httpx.Response(503, text="Wartung")])
+    service = ApiService(pool, index, UPSTREAM_CONFIG, upstream=make_forwarder(broken))
+    service.open()
+    with TestClient(create_app(service)) as client:
+        submit(client, samples[0])
+    assert [row[3] for row in rows(db)] == ["forward_failed"]
+
+    healthy = MockUpstream()
+    service.upstream = make_forwarder(healthy)
+    report = drain_queue(db, service, max_attempts=1)
+    assert (report.attempted, report.forwarded) == (1, 1)
+    assert [row[3] for row in rows(db)] == ["forwarded"]
+    assert healthy.count == 1
+
+
+def test_the_manual_retry_works_against_the_real_columns(
+    db: psycopg.Connection,
+    pool: ConnectionPool,
+    index: FpIndexClient,
+    samples: list[Sample],
+) -> None:
+    refuse = MockUpstream(default=lambda: error_response(4, "invalid API key"))
+    service = ApiService(pool, index, UPSTREAM_CONFIG, upstream=make_forwarder(refuse))
+    service.open()
+    with TestClient(create_app(service)) as client:
+        submit(client, samples[0])
+    for _ in range(MAX_FORWARD_ATTEMPTS - 1):
+        drain_queue(db, service, max_attempts=1)
+
+    attempts = db.execute("SELECT DISTINCT forward_attempts FROM local_submission").fetchall()
+    assert attempts == [(MAX_FORWARD_ATTEMPTS,)]
+    assert queue(db) == []
+
+    healthy = MockUpstream()
+    service.upstream = make_forwarder(healthy)
+    report = retry_forward(db, service, max_attempts=1)
+    assert report.forwarded == 1
+    assert healthy.count == 1
+    assert [row[3] for row in rows(db)] == ["forwarded"]
+
+
+def test_outside_the_upstream_mode_the_drain_does_nothing(
+    db: psycopg.Connection,
+    pool: ConnectionPool,
+    index: FpIndexClient,
+    upstream: MockUpstream,
+    samples: list[Sample],
+) -> None:
+    service = ApiService(pool, index, Config(), upstream=make_forwarder(upstream))
+    service.open()
+    with TestClient(create_app(service)) as client:
+        submit(client, samples[0])
+    assert [row[3] for row in rows(db)] == ["indexed"]
+    assert drain_queue(db, service).empty
+    assert upstream.count == 0

@@ -10,9 +10,9 @@ Fremd-ID oder schlicht Textmetadaten). Was daraus wird, entscheidet
                         („not allowed") / HTTP 400, noch bevor Parameter
                         gelesen werden.
 ``local``               Speichern in ``local_submission`` und indexieren.
-``local+upstream``      In dieser Phase wie ``local``; die Weiterleitung an
-                        api.acoustid.org kommt in Phase 12 und setzt genau
-                        auf der Statusmaschine auf, die hier entsteht.
+``local+upstream``      Zusaetzlich weiterleiten an api.acoustid.org
+                        (:mod:`acoustid_api.upstream`, Phase 12) — als
+                        Zugabe, nie als Bedingung.
 ======================  ====================================================
 
 **Warum ein reservierter Dokument-ID-Bereich.** Eigene Einreichungen duerfen
@@ -22,12 +22,14 @@ Suchindex Dokument-IDs ab :data:`~acoustid_api.store.LOCAL_DOC_ID_BASE`
 belegen — oberhalb von allem, was ``fingerprint.id`` je annehmen kann. Der
 Lookup erkennt sie an dieser Grenze wieder (:mod:`acoustid_api.store`).
 
-**Statusmaschine.** ``new`` -> ``indexed`` (hier), spaeter ``forwarded`` |
-``forward_failed`` (Phase 12). Der Weg von ``new`` nach ``indexed`` laeuft
-**synchron in der Anfrage**, aber in der richtigen Reihenfolge: erst das
-``_update`` des Index, dann der Statuswechsel. Bricht etwas dazwischen ab,
-bleibt die Einreichung ``new`` und wird beim naechsten Submit nachgetragen —
-dieselbe Resume-Denke wie beim Index-Feed des Importers (§8.4).
+**Statusmaschine.** ``new`` -> ``indexed`` (hier) -> ``forwarded`` |
+``forward_failed`` (:mod:`acoustid_api.upstream`). Der Weg von ``new`` nach
+``indexed`` laeuft **synchron in der Anfrage**, aber in der richtigen
+Reihenfolge: erst das ``_update`` des Index, dann der Statuswechsel. Bricht
+etwas dazwischen ab, bleibt die Einreichung ``new`` und wird beim naechsten
+Submit nachgetragen — dieselbe Resume-Denke wie beim Index-Feed des
+Importers (§8.4). Die Weiterleitung setzt danach auf: sie fasst nur an, was
+schon indexiert ist.
 
 **Die Antwort ist immer ``pending``** — auch dann, wenn schon alles
 indexiert ist. Das ist keine Nachlaessigkeit, sondern der Vertrag: das
@@ -54,6 +56,7 @@ from acoustid_api.store import (
     mark_submissions_indexed,
     store_submission,
 )
+from acoustid_api.upstream import forward_after_submit
 from shared.config import Config
 from shared.fpindex import FpIndexError, Insert, extract_query
 from shared.models import SubmitMode
@@ -134,6 +137,9 @@ def handle_submit(
             ]
         _log_stored(params, stored)
         index_pending(connection, service)
+        # Nur im Modus `local+upstream`, und nur fuer das, was diese Anfrage
+        # gespeichert hat. Wirft nie — die Antwort haengt nicht daran.
+        forward_after_submit(connection, service, [item.local_track_id for item in stored])
 
     return {"submissions": _response(params, stored)}
 

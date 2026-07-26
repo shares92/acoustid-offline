@@ -13,13 +13,14 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections.abc import Sequence
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from original_examples import ERROR_TABLE, SUBMIT_OK_EXAMPLE
-from stubs import StubConnection, StubIndex, StubService
+from stubs import FakeDb, StubConnection, StubIndex, StubService
+from upstream_mock import APP_KEY, MockUpstream, make_forwarder
 
 from acoustid_api.main import MAX_BODY_BYTES, create_app
 from acoustid_api.store import LOCAL_DOC_ID_BASE
@@ -45,49 +46,9 @@ BASE = {
 _ERROR_STATUS = {code: status for code, status, _ in ERROR_TABLE}
 
 
-class FakeDb:
-    """`local_submission` als Liste von Zeilen — nur was der Submit braucht."""
-
-    def __init__(self) -> None:
-        self.rows: list[dict[str, Any]] = []
-        self._track_ids = 0
-        self._row_ids = 0
-
-    def __call__(self, query: str, params: Any) -> Sequence[tuple[Any, ...]] | None:
-        statement = query.strip()
-        if "nextval" in statement:
-            self._track_ids += 1
-            return [(self._track_ids,)]
-        if statement.startswith("INSERT INTO local_submission"):
-            self._row_ids += 1
-            self.rows.append({**params, "id": self._row_ids, "status": "new"})
-            return [(self._row_ids,)]
-        if statement.startswith("UPDATE local_submission"):
-            for row in self.rows:
-                if row["status"] == "new" and row["local_track_id"] in params["ids"]:
-                    row["status"] = "indexed"
-            return []
-        if statement.startswith("SELECT DISTINCT ON (local_track_id)") and "'new'" in statement:
-            pending: list[tuple[Any, ...]] = []
-            seen: set[int] = set()
-            for row in self.rows:
-                if row["status"] != "new" or row["local_track_id"] in seen:
-                    continue
-                seen.add(row["local_track_id"])
-                pending.append((row["local_track_id"], row["fingerprint"]))
-            return pending[: params["limit"]]
-        return None
-
-    @property
-    def status_by_track(self) -> dict[int, set[str]]:
-        result: dict[int, set[str]] = {}
-        for row in self.rows:
-            result.setdefault(row["local_track_id"], set()).add(row["status"])
-        return result
-
-
 @pytest.fixture
 def db() -> FakeDb:
+    """`local_submission` im Arbeitsspeicher (siehe `stubs.FakeDb`)."""
     return FakeDb()
 
 
@@ -339,16 +300,82 @@ def test_mode_off_still_honours_the_requested_format(db: FakeDb) -> None:
     assert "<code>12</code>" in response.text
 
 
-def test_mode_local_upstream_behaves_like_local_for_now(db: FakeDb, index: StubIndex) -> None:
-    """Die Weiterleitung kommt in Phase 12 — gespeichert wird schon jetzt."""
+def upstream_client(
+    db: FakeDb, index: StubIndex, upstream: MockUpstream, **extra: Any
+) -> TestClient:
+    """Testclient im Modus `local+upstream` mit Mock-Upstream (Phase 12)."""
     config = Config.model_validate(
-        {"submit": {"mode": SubmitMode.LOCAL_UPSTREAM, "upstream_app_key": "geheim"}}
+        {"submit": {"mode": SubmitMode.LOCAL_UPSTREAM, "upstream_app_key": APP_KEY}}
     )
-    service = StubService(connection=StubConnection(handler=db), index=index, config=config)
-    with TestClient(create_app(service)) as client:  # type: ignore[arg-type]
+    service = StubService(
+        connection=StubConnection(handler=db),
+        index=index,
+        config=config,
+        upstream=make_forwarder(upstream, **extra),
+    )
+    return TestClient(create_app(service))  # type: ignore[arg-type]
+
+
+def test_mode_local_upstream_stores_indexes_and_forwards(db: FakeDb, index: StubIndex) -> None:
+    """Der ganze Weg einer Einreichung in einer Anfrage (Phase 12)."""
+    upstream = MockUpstream()
+    with upstream_client(db, index, upstream) as client:
         response = client.post("/v2/submit", data=BASE)
     assert response.json()["submissions"] == [{"id": 1, "status": "pending"}]
+    assert index.doc_ids == [LOCAL_DOC_ID_BASE + 1]
+    assert db.status_by_track == {1: {"forwarded"}}
+    assert upstream.count == 1
+    assert upstream.field("client") == APP_KEY
+    # Der user-Key des Clients geht unveraendert mit.
+    assert upstream.field("user") == BASE["user"]
+
+
+def test_an_upstream_failure_never_spoils_the_answer(db: FakeDb, index: StubIndex) -> None:
+    """Lokal gespeichert ist die Wahrheit — die Antwort bleibt Original."""
+    upstream = MockUpstream([httpx.Response(503, text="Wartung")])
+    with upstream_client(db, index, upstream) as client:
+        response = client.post("/v2/submit", data=BASE)
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "submissions": [{"id": 1, "status": "pending"}]}
+    assert db.status_by_track == {1: {"forward_failed"}}
+    assert db.attempts_by_track == {1: 1}
+
+
+def test_an_unreachable_upstream_never_spoils_the_answer(db: FakeDb, index: StubIndex) -> None:
+    upstream = MockUpstream([httpx.ConnectError("kein Netz")])
+    with upstream_client(db, index, upstream) as client:
+        response = client.post("/v2/submit", data=BASE)
+    assert response.status_code == 200
+    assert response.json()["submissions"][0]["status"] == "pending"
+    assert db.status_by_track == {1: {"forward_failed"}}
+
+
+def test_a_submission_that_stays_new_is_not_forwarded(db: FakeDb) -> None:
+    """Erst indexieren, dann weiterleiten — sonst ginge der Status verloren."""
+    index = StubIndex(error=FpIndexTransportError("kein Netz"))
+    upstream = MockUpstream()
+    with upstream_client(db, index, upstream) as client:
+        response = client.post("/v2/submit", data=BASE)
+    assert response.status_code == 200
+    assert db.status_by_track == {1: {"new"}}
+    assert upstream.count == 0
+
+
+def test_mode_local_asks_nothing_upstream(db: FakeDb, index: StubIndex) -> None:
+    """Regression: der Modus entscheidet, nicht die Anwesenheit des Clients."""
+    upstream = MockUpstream()
+    config = Config.model_validate({"submit": {"mode": SubmitMode.LOCAL}})
+    service = StubService(
+        connection=StubConnection(handler=db),
+        index=index,
+        config=config,
+        upstream=make_forwarder(upstream),
+    )
+    with TestClient(create_app(service)) as client:  # type: ignore[arg-type]
+        response = client.post("/v2/submit", data=BASE)
+    assert response.status_code == 200
     assert db.status_by_track == {1: {"indexed"}}
+    assert upstream.count == 0
 
 
 # --- Statusmaschine und Index ----------------------------------------------

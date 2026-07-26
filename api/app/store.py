@@ -81,15 +81,20 @@ __all__ = [
     "MAX_MERGE_DEPTH",
     "MAX_META_IDS_PER_TRACK",
     "Candidate",
+    "ForwardCandidate",
     "MetaRow",
     "PendingSubmission",
     "StoredSubmission",
     "load_candidates",
+    "load_forward_queue",
     "load_pending_submissions",
     "lookup_mbids",
     "lookup_meta",
     "lookup_meta_ids",
+    "mark_forward_failed",
+    "mark_forwarded",
     "mark_submissions_indexed",
+    "reset_forward_attempts",
     "resolve_track_gid",
     "resolve_tracks",
     "split_doc_ids",
@@ -157,6 +162,40 @@ class PendingSubmission:
 
     local_track_id: int
     hashes: Sequence[int]
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardCandidate:
+    """Eine Einreichung, die upstream noch aussteht (Phase 12).
+
+    Eine **Gruppe**, keine Zeile: die MBIDs aller Zeilen desselben
+    ``local_track_id`` stehen in :attr:`mbids`, alle uebrigen Felder teilen
+    sich die Zeilen ohnehin. Genau so geht die Gruppe als **eine** Anfrage
+    hinaus (:mod:`acoustid_api.upstream`).
+
+    Attributes:
+        submitted_by: Der ``user``-Key des einreichenden Clients. Er wird
+            unveraendert durchgereicht und deshalb **nie** geloggt.
+        forward_attempts: Bisherige Fehlversuche (Grenze 7, §8.9).
+    """
+
+    local_track_id: int
+    hashes: Sequence[int]
+    duration: int
+    mbids: tuple[str, ...] = ()
+    puid: str | None = None
+    foreignid: str | None = None
+    bitrate: int | None = None
+    fileformat: str | None = None
+    track: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    album_artist: str | None = None
+    track_no: int | None = None
+    disc_no: int | None = None
+    year: int | None = None
+    submitted_by: str | None = None
+    forward_attempts: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +356,64 @@ UPDATE local_submission
    SET status = 'indexed', indexed_at = now()
  WHERE local_track_id = ANY(%(ids)s::integer[])
    AND status = 'new'
+"""
+
+# --- Upstream-Warteschlange (Phase 12) --------------------------------------
+#
+# Arbeitsvorrat: indexiert und noch nicht weitergeleitet, oder gescheitert
+# und noch unterhalb der 7-Fehler-Grenze (§8.9). `new` fehlt mit Absicht —
+# der Status ist eine einzige Spalte, und „noch nicht im Index" darf nicht
+# gegen „weitergeleitet" eingetauscht werden. `%(only)s::integer[] IS NULL`
+# macht aus derselben Anweisung die gezielte Variante fuer den manuellen
+# Retry; der Cast ist Pflicht, sonst kann Postgres den Typ des Parameters
+# nicht bestimmen (LEARNINGS: Casts bei Arrays).
+
+_FORWARD_QUEUE_SQL: Final = """
+SELECT DISTINCT ON (local_track_id)
+       local_track_id, fingerprint, length, bitrate, fileformat, puid, foreignid,
+       track, artist, album, album_artist, track_no, disc_no, year,
+       submitted_by, forward_attempts
+FROM local_submission
+WHERE (status = 'indexed'
+       OR (status = 'forward_failed' AND forward_attempts < %(max_attempts)s))
+  AND (%(only)s::integer[] IS NULL OR local_track_id = ANY(%(only)s::integer[]))
+ORDER BY local_track_id, id
+LIMIT %(limit)s
+"""
+
+_FORWARD_MBIDS_SQL: Final = """
+SELECT local_track_id, mbid::text
+FROM local_submission
+WHERE local_track_id = ANY(%(ids)s::integer[])
+  AND mbid IS NOT NULL
+ORDER BY local_track_id, id
+"""
+
+_MARK_FORWARDED_SQL: Final = """
+UPDATE local_submission
+   SET status = 'forwarded', forwarded_at = now(), forward_error = NULL
+ WHERE local_track_id = %(id)s
+   AND status IN ('indexed', 'forward_failed')
+RETURNING id
+"""
+
+_MARK_FORWARD_FAILED_SQL: Final = """
+UPDATE local_submission
+   SET status = 'forward_failed',
+       forward_attempts = forward_attempts + 1,
+       forward_error = %(error)s
+ WHERE local_track_id = %(id)s
+   AND status IN ('indexed', 'forward_failed')
+RETURNING forward_attempts
+"""
+
+_RESET_FORWARD_SQL: Final = """
+UPDATE local_submission
+   SET forward_attempts = 0, forward_error = NULL
+ WHERE status = 'forward_failed'
+   AND forward_attempts >= %(min_attempts)s
+   AND (%(only)s::integer[] IS NULL OR local_track_id = ANY(%(only)s::integer[]))
+RETURNING local_track_id
 """
 
 
@@ -635,6 +732,140 @@ def mark_submissions_indexed(
     if not local_track_ids:
         return
     connection.execute(_MARK_INDEXED_SQL, {"ids": sorted(set(local_track_ids))})
+
+
+# --- Upstream-Warteschlange (Phase 12) --------------------------------------
+
+
+def load_forward_queue(
+    connection: psycopg.Connection,
+    *,
+    limit: int,
+    max_attempts: int,
+    only: Sequence[int] | None = None,
+) -> list[ForwardCandidate]:
+    """Einreichungen, die upstream noch ausstehen — aelteste zuerst.
+
+    Zwei Abfragen statt einer Aggregation: die erste holt je Gruppe die
+    gemeinsamen Felder (``DISTINCT ON``, wie ueberall in diesem Modul), die
+    zweite die MBIDs aller Zeilen dieser Gruppen. Ein ``array_agg`` haette
+    ein ``GROUP BY`` ueber sechzehn Spalten gebraucht.
+
+    Args:
+        limit: Hoechstzahl **Gruppen** (nicht Zeilen).
+        max_attempts: Ab so vielen Fehlversuchen faellt eine Gruppe aus dem
+            Arbeitsvorrat (§8.9).
+        only: Auf diese ``local_track_id`` einschraenken (Submit-Anfrage,
+            manueller Retry). ``None`` = der ganze Vorrat.
+
+    Returns:
+        Die Gruppen in aufsteigender ``local_track_id``; eine leere Liste,
+        wenn nichts ansteht oder ``only`` leer ist.
+    """
+    if only is not None and not only:
+        return []
+    rows = connection.execute(
+        _FORWARD_QUEUE_SQL,
+        {
+            "limit": limit,
+            "max_attempts": max_attempts,
+            "only": sorted(set(only)) if only is not None else None,
+        },
+    ).fetchall()
+    if not rows:
+        return []
+
+    ids = [row[0] for row in rows]
+    mbids: dict[int, list[str]] = {}
+    for local_track_id, mbid in connection.execute(_FORWARD_MBIDS_SQL, {"ids": ids}).fetchall():
+        found = mbids.setdefault(local_track_id, [])
+        # Derselbe Client kann dieselbe MBID zweimal geschickt haben; upstream
+        # waere das eine Dublette.
+        if mbid not in found:
+            found.append(mbid)
+
+    return [
+        ForwardCandidate(
+            local_track_id=row[0],
+            hashes=row[1],
+            duration=row[2],
+            bitrate=row[3],
+            fileformat=row[4],
+            puid=row[5],
+            foreignid=row[6],
+            track=row[7],
+            artist=row[8],
+            album=row[9],
+            album_artist=row[10],
+            track_no=row[11],
+            disc_no=row[12],
+            year=row[13],
+            submitted_by=row[14],
+            forward_attempts=row[15],
+            mbids=tuple(mbids.get(row[0], ())),
+        )
+        for row in rows
+    ]
+
+
+def mark_forwarded(connection: psycopg.Connection, local_track_id: int) -> int:
+    """Setzt alle Zeilen einer Gruppe auf ``forwarded``.
+
+    Nur aus einem gueltigen Vorzustand (``indexed`` oder ``forward_failed``):
+    eine Zeile, die der Suchindex noch nicht kennt, darf ihren Status nicht
+    verlieren. ``forward_attempts`` bleibt stehen — die Zahl ist Historie —,
+    ``forward_error`` wird geleert.
+
+    Returns:
+        Zahl der geaenderten Zeilen (0, wenn die Gruppe inzwischen einen
+        anderen Status hat).
+    """
+    return len(connection.execute(_MARK_FORWARDED_SQL, {"id": local_track_id}).fetchall())
+
+
+def mark_forward_failed(connection: psycopg.Connection, local_track_id: int, error: str) -> int:
+    """Zaehlt einen Fehlversuch und haelt die Ursache fest.
+
+    Returns:
+        Der neue ``forward_attempts``-Stand (0, wenn nichts geaendert wurde).
+        Ab :data:`~acoustid_api.upstream.MAX_FORWARD_ATTEMPTS` gibt es keinen
+        automatischen Versuch mehr.
+    """
+    rows = connection.execute(
+        _MARK_FORWARD_FAILED_SQL, {"id": local_track_id, "error": error}
+    ).fetchall()
+    return max((row[0] for row in rows), default=0)
+
+
+def reset_forward_attempts(
+    connection: psycopg.Connection,
+    *,
+    local_track_ids: Sequence[int] | None = None,
+    min_attempts: int,
+) -> list[int]:
+    """Nullt den Fehlerzaehler — die Vorbereitung des manuellen Retrys.
+
+    Args:
+        local_track_ids: Gezielt diese Gruppen; ``None`` = alle
+            gescheiterten mit mindestens ``min_attempts`` Fehlversuchen.
+        min_attempts: Untergrenze, ab der zurueckgesetzt wird. Ohne
+            ``local_track_ids`` steht hier die Aufgabe-Grenze aus §8.9,
+            damit ein Sammelaufruf nicht auch Gruppen anfasst, die ohnehin
+            beim naechsten Lauf wieder drankommen.
+
+    Returns:
+        Die betroffenen ``local_track_id``, aufsteigend und entdoppelt.
+    """
+    if local_track_ids is not None and not local_track_ids:
+        return []
+    rows = connection.execute(
+        _RESET_FORWARD_SQL,
+        {
+            "min_attempts": min_attempts,
+            "only": sorted(set(local_track_ids)) if local_track_ids is not None else None,
+        },
+    ).fetchall()
+    return sorted({row[0] for row in rows})
 
 
 def _to_signed_int32(value: int) -> int:
