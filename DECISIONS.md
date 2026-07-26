@@ -624,3 +624,41 @@ Mehrwert); Schema-Mismatch als 500 (verworfen — degradierter Betrieb
 ist das dokumentierte Verhalten bei kaputtem Spiegel); Config-Schlüssel
 für Breaker/Timeouts (verworfen — ohne Messwerte vom echten Spiegel
 wären es Scheinstellschrauben).
+
+## 2026-07-26: Phase-11-Submit-Details (Ablage, Doc-ID-Raum, Modi)
+
+Entscheidung: (1) Lokale Einreichungen leben **ausschließlich** in
+`local_submission` (+ Suchindex), nie in den sieben Dump-Tabellen —
+deren Delta-Upsert schreibt ganze Zeilen per expliziter ID und würde
+lokale Einträge still überschreiben. (2) Auffindbarkeit über den
+reservierten Doc-ID-Bereich `[2^31, 2^32-1]`: Doc-ID = 2^31 +
+`local_track_id`; die Dokument-IDs des acoustid-index sind **u32**
+(HOCH-Finding, empirisch gegen das gepinnte Image gemessen: 2^32-1
+angenommen, ≥ 2^32 ⇒ HTTP 400 `IntegerOverflow` für den ganzen Batch;
+der Client nahm zuvor unbelegt u64 an — korrigiert, Guard in
+`fpindex/wire.py`). Disjunktheit typbedingt: `fingerprint.id` ist
+Postgres-`integer` ≤ 2^31-1; Sequenz `AS integer … NO CYCLE` + Guard.
+(3) Eine Zeile je eingereichter MBID (Original-Verhalten), Gruppierung
+über `local_track_id`, ausgelieferte AcoustID = `local_track_gid`.
+(4) `submit.mode off` ⇒ Fehler 12 „not allowed"/HTTP 400, geprüft VOR
+dem Parsen. (5) **Synchron** indexieren im Request (`_update` → dann
+Statuswechsel, Muster indexfeed), bewusst ohne `expected_version` (die
+API ist nicht alleiniger Schreiber); kein Hintergrund-Worker — der
+Stack dürfte sonst einschlafen, bevor die Einreichung im Index steht.
+(6) Index nicht erreichbar ⇒ trotzdem HTTP 200 `"pending"`, Zeile
+bleibt `new`, Nachtrag bei der nächsten Submit-Anfrage (max. 200) über
+den Partialindex-Arbeitsvorrat. (7) `user` wird verlangt, aber nie
+geprüft (kein Benutzerbestand; Auth macht der Wächter); `foreignid`
+zählt bei der stillen Verwerfung als Zuordnung. (8) Keine
+Dubletten-/Merge-Logik (zweimal eingereicht = zwei AcoustIDs) — die
+Pflege-Warteschlangen des Originals sind bewusst außerhalb des Scopes.
+Begründung: Datenhoheit des Importers ist Invariante (§5.2 Regel 2);
+u32-Typbeleg macht den ID-Raum beweisbar kollisionsfrei; laute Fehler
+nur, wo kein Datenverlust droht — ein Fehlercode bei Index-Ausfall
+erzeugte Client-Retries und damit Dubletten.
+Alternativen: Ablage in track/fingerprint mit reservierten IDs
+(verworfen — Delta-Upsert überschreibt still); `off` als 13/503
+(verworfen — Picard/beets wiederholen darauf, und 503 gehört dem
+Wächter fürs Aufwecken); asynchroner Index-Worker (verworfen —
+kollidiert mit dem Schlaf-Zyklus, Phase 16). Vormerkung Phase 19:
+Submit↔Feed-Konflikt am `expected_version`-Guard (PROGRESS-Hinweis).

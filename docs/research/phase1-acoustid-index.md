@@ -240,6 +240,14 @@ main @ 2025-10-27) verifiziert:
     colima `--vz-rosetta` läuft es. Healthcheck-Werkzeuglage im Image:
     nur `wget` (kein curl/nc/python3); `fpindex` hat keinen
     Check-Modus (unbekanntes Argument → Illegal instruction).
+14. **Dokument-IDs sind u32** (Befund aus Phase 11, gleiches Image):
+    `1`, `2^31-1`, `2^31` und `2^32-1` werden angenommen und
+    unverändert wiedergefunden; `2^32` und alles darüber quittiert der
+    Server mit HTTP 400 `IntegerOverflow` für den **ganzen** Batch —
+    lauter Fehler, kein stilles Wrappen. Weder README noch `api.zig`
+    dokumentieren das; der Client validiert seit Phase 11 gegen u32
+    (`shared/shared/fpindex/wire.py`), und der Bereich `[2^31, 2^32-1]`
+    ist für lokale Submissions reserviert (ARCHITECTURE §5.2/§5.3).
 
 ## Offene Punkte
 

@@ -3,18 +3,21 @@
 Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–10 abgeschlossen (2026-07-25). Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (1048 Tests, drei
+**Status: Phasen 0–11 abgeschlossen (2026-07-26). Repo öffentlich unter
+https://github.com/shares92/acoustid-offline, CI grün (1178 Tests, drei
 Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation pg_acoustid).
-Warten auf Go für Phase 11. Phase 10 in Kürze: MB-Query-Schicht als
-`shared/shared/mb/` (einzige Datei mit MB-Tabellennamen ist
-`queries.py` — als Test verankert; psycopg3 + eigener Pool,
-Circuit-Breaker, Selfcheck, Staleness-Schwellen), volle
-`meta`-Grammatik inkl. m2/compress bug-für-bug, Online-Redirect-
-Auflösung (kanonische MBID; Flag `mb.keep_submitted_mbid`),
-degradierter Betrieb nach §8.7; `sources`/`usermeta` sind vollständig
-aus dem Delta-Bestand abbildbar — nichts musste entfallen. Kein
-HOCH-Finding im Bestand. Offener DoD-Rest aus Phase 8: der
+Warten auf Go für Phase 12. Phase 11 in Kürze: `GET/POST /v2/submit`
+(Modi `off`/`local`), Tabelle `local_submission` (DDL jetzt in §5.2;
+eine Zeile je MBID, Gruppierung über `local_track_id`), Statusmaschine
+`new` → `indexed` synchron im Request, Auffindbarkeit über den
+reservierten Doc-ID-Bereich `[2^31, 2^32-1]` im Suchindex.
+HOCH-Finding dabei: die Dokument-IDs des acoustid-index sind **u32**
+(nicht u64, wie der Client annahm) — empirisch verifiziert, Client
+korrigiert, Befund im Index-Bericht (Addendum 14). Vorgemerkt für
+Phase 19: Submit während des Update-Laufs kann den Index-Feed am
+`expected_version`-Guard scheitern lassen (Hinweis dort). Phase 10
+davor: MB-Query-Schicht `shared/shared/mb/`, volle `meta`-Grammatik
+bug-für-bug, `mb.keep_submitted_mbid`, degradierter Betrieb §8.7. Offener DoD-Rest aus Phase 8: der
 Probelauf am echten Datenbestand (auf der Unraid-Hardware des
 Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
 getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
@@ -344,14 +347,31 @@ docs/api-lookup.md tabelliert. Detailentscheide in DECISIONS
 Ziel: Kompatibler Submit mit lokaler Speicherung und Indexierung.
 
 Aufgaben:
-- [ ] Parameter-Parsing gemäß Original (`client`, `user`,
-      `fingerprint.N`, `duration.N`, MBID/Metadaten-Felder)
-- [ ] Modi `off`/`local`; `local_submission` mit Statusmaschine
-      `new` → `indexed`; Indexierung über Index-Client
-- [ ] Kompatibles Antwortformat
-- [ ] Tests: Submit → Lookup findet die Submission; Modus `off`
+- [x] Parameter-Parsing gemäß Original: alle Felder aus dem
+      Phase-1-Bericht inkl. `fix_meta`-Normalisierung, stille
+      Verwerfung (erweitert um `foreignid` als Zuordnung), mehrfaches
+      `mbid.N` ⇒ je MBID eine Submission-Zeile, `wait`
+      geparst+ignoriert, Grenzen (`duration` 1…32767)
+- [x] Modi `off`/`local`: `off` ⇒ Fehler 12/400 vor dem Parsen
+      (13/503 verworfen — Client-Retries, Wächter-Semantik);
+      `local` ⇒ speichern + **synchron** indexieren, Reihenfolge
+      `_update` → Statuswechsel; Index nicht erreichbar ⇒ 200,
+      Zeile bleibt `new`, Nachtrag bei der nächsten Anfrage.
+      Migrationen core/0008 + indexes/0105; Doc-ID-Bereich
+      `[2^31, 2^32-1]` (u32 empirisch verifiziert — HOCH-Finding,
+      Client-Guard in fpindex/wire.py; Disjunktheit typbedingt, da
+      `fingerprint.id` Postgres-`integer` ist)
+- [x] Kompatibles Antwortformat: `status` immer `"pending"`, `index`
+      als String nur bei `.N`-Suffix, wörtliche Original-Beispiele
+- [x] Tests: Submit → `new`→`indexed` → Lookup findet die Submission
+      (Integration gegen PG 18 + Index-Image); Modus `off`;
+      Index-Ausfall + Nachtrag; Bereichs-Kollisionsfreiheit;
+      115 Unit- + 23 Integrationstests, gesamt +130
 
-Definition of Done: Tests grün; Statusübergänge korrekt persistiert.
+Definition of Done: erfüllt 2026-07-26 — 1178 Tests grün (lokal + CI);
+Statusübergänge persistiert und getestet. Vertrag + Abweichungen:
+docs/api-submit.md; Detailentscheide in DECISIONS
+(„Phase-11-Submit-Details"). Commits ead4790 + b15c60b.
 
 ## Phase 12: API — Upstream-Forwarding & Queue
 
@@ -491,6 +511,13 @@ Hinweis (aus Phase 8): Beim Stoppen des Importer-Containers ein
 großzügiges Stop-Timeout setzen — SIGTERM wirkt erst nach der laufenden
 Tagesdatei; Dockers 10-s-Default führt zu SIGKILL (sicheres Rollback,
 aber der Lauf endet ohne den geordneten Exit-Code 8).
+
+Hinweis (aus Phase 11): Ein Submit während des Update-Laufs erhöht die
+Index-Version und lässt den Index-Feed des Importers am
+`expected_version`-Guard scheitern (Lauf endet als Fehler, Resume
+intakt — DECISIONS „Phase-7-Import-Details" Punkt 7). In dieser Phase
+entscheiden: Submits während des Laufs im Wächter zurückstellen ODER
+den Feed ohne Guard fahren.
 
 ## Phase 20: Benachrichtigungen
 

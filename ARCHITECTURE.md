@@ -258,6 +258,44 @@ CREATE TABLE import_state (                          -- [P] Buchführung resumie
     finished_at timestamptz NULL,
     PRIMARY KEY (stream, day)
 );
+
+CREATE SEQUENCE local_submission_track_id_seq AS integer MINVALUE 1 MAXVALUE 2147483647 NO CYCLE;
+
+CREATE TABLE local_submission (
+    id               bigserial   PRIMARY KEY,           -- [P] Submission-ID der Antwort
+    local_track_id   integer     NOT NULL,              -- [P] Gruppe + Dokument-ID (+2^31)
+    local_track_gid  uuid        NOT NULL,              -- [P] ausgelieferte AcoustID
+    status           text        NOT NULL DEFAULT 'new',-- [P] new|indexed|forwarded|forward_failed
+    fingerprint      integer[]   NOT NULL,              -- voller signed-int32-Vektor (Rescoring)
+    length           integer     NOT NULL,              -- `duration.N` in Sekunden, 1…32767
+    bitrate          integer     NULL,                  -- `bitrate.N`
+    fileformat       varchar     NULL,                  -- `fileformat.N`
+    mbid             uuid        NULL,                  -- `mbid.N` (eine Zeile je MBID)
+    puid             uuid        NULL,                  -- `puid.N` (Legacy)
+    foreignid        varchar     NULL,                  -- `foreignid.N`, Form vendor:id
+    track            varchar     NULL,                  -- `track.N`
+    artist           varchar     NULL,                  -- `artist.N`
+    album            varchar     NULL,                  -- `album.N`
+    album_artist     varchar     NULL,                  -- `albumartist.N`
+    track_no         integer     NULL,                  -- `trackno.N`
+    disc_no          integer     NULL,                  -- `discno.N`
+    year             integer     NULL,                  -- `year.N`
+    client           varchar     NULL,                  -- `client` (Application-Key)
+    client_version   varchar     NULL,                  -- `clientversion`
+    submitted_by     varchar     NULL,                  -- `user` (Phase 12 reicht ihn durch)
+    created          timestamptz NOT NULL DEFAULT now(),
+    indexed_at       timestamptz NULL,                  -- [P] an acoustid-index uebergeben
+    forwarded_at     timestamptz NULL,                  -- [P] Phase 12
+    forward_attempts integer     NOT NULL DEFAULT 0,    -- [P] Phase 12 (Grenze 7, §8.9)
+    forward_error    text        NULL,                  -- [P] Phase 12
+    CONSTRAINT local_submission_status_check
+        CHECK (status IN ('new', 'indexed', 'forwarded', 'forward_failed'))
+);
+ALTER TABLE local_submission ALTER COLUMN fingerprint SET COMPRESSION lz4;
+CREATE INDEX local_submission_idx_unindexed ON local_submission (id)
+    WHERE status = 'new';                                -- [P] Arbeitsvorrat Indexierung
+CREATE INDEX local_submission_idx_track_id  ON local_submission (local_track_id);
+CREATE INDEX local_submission_idx_track_gid ON local_submission (local_track_gid);
 ```
 
 **Import-Regeln (Invarianten des Importers):**
@@ -310,10 +348,17 @@ Container nicht sichtbar), `prefetch.py`, `measure.py`, `report.py`
 (Exit-Codes + Report-Schema) und `__main__.py` (CLI). Details, Aufrufe
 und Report-Format: [docs/importer-job.md](docs/importer-job.md).
 
-**Weitere Tabellen (Spalten werden in ihren Phasen festgelegt):**
-| Tabelle | Inhalt |
-|---|---|
-| `local_submission` | Eigene Einreichungen: Fingerprint-Daten, Metadaten aus dem Submit, Zeitstempel, Status `new` → `indexed` → `forwarded` \| `forward_failed` (Phase 11/12) |
+**Umsetzung (Phase 11):** `local_submission` (DDL oben im Block;
+Migrationen core/0008 + indexes/0105) hält eigene Einreichungen —
+bewusst **nie** in den sieben Dump-Tabellen (deren Upsert schreibt
+ganze Zeilen per expliziter ID und würde lokale Einträge still
+überschreiben). Eine Zeile je eingereichter MBID; `local_track_id`
+gruppiert die Zeilen einer Aufnahme und ist zugleich — versetzt um
+2^31 — die Dokument-ID im Suchindex (reservierter Bereich
+[2^31, 2^32-1], typbedingt disjunkt zu `fingerprint.id`; §5.3).
+Status `new` → `indexed` (Phase 11) → `forwarded` | `forward_failed`
+(Phase 12). Details: [docs/api-submit.md](docs/api-submit.md),
+DECISIONS „Phase-11-Submit-Details".
 
 ### 5.3 Matching-Pipeline (verifiziert in Phase 1)
 
@@ -321,7 +366,10 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
 
 - **Zweistufig:** (1) Kandidaten aus dem acoustid-index
   (`POST /:index/_search`, limit 20–40, timeout 2000 ms, msgpack;
-  Score dort = Integer-Trefferzahl, dient nur der Vorsortierung);
+  Score dort = Integer-Trefferzahl, dient nur der Vorsortierung;
+  Dokument-IDs sind **u32** — empirisch verifiziert, Phase 11 —,
+  `[0, 2^31-1]` gehört dem Delta-Bestand (`fingerprint.id`),
+  `[2^31, 2^32-1]` den lokalen Submissions);
   (2) **Rescoring in Python** (Nachbau `acoustid_compare2`,
   max_offset 80) gegen den Vollvektor aus Postgres; Längenfilter
   `length ± 7`; Ergebnis-Score float, Cutoff > 0,4 (Lookup) bzw.
@@ -532,7 +580,11 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
 **inklusive `meta`** (MB-Resolver `shared/shared/mb/` + `api/app/meta.py`;
 volle Grammatik mit Original-Präzedenz, degradierter Betrieb nach §8.7,
 Abweichungen tabelliert in [docs/api-lookup.md](docs/api-lookup.md)).
-Submit folgt in 11/12, Batch-Endpoint + `/v2/submission_status` in 13.
+Seit Phase 11 steht `GET/POST /v2/submit` in den Modi `off`/`local`
+(`api/app/submit.py`; `local_submission` §5.2, reservierter
+Doc-ID-Bereich §5.3, Vertrag und Abweichungen:
+[docs/api-submit.md](docs/api-submit.md)). Upstream-Forwarding folgt
+in Phase 12, Batch-Endpoint + `/v2/submission_status` in 13.
 
 ### Durchsetzungsort Auth & Rate-Limit
 API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**

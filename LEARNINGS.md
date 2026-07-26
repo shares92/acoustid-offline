@@ -36,6 +36,13 @@ für Requests, stilles Deckeln von limit/timeout, `{"e": …}`-Fehlerrümpfe
 und Indexnamen-Regeln. Vor der Integration einen empirischen
 Abgleichslauf einplanen und die Befunde als Addendum an den
 Recherche-Bericht hängen.
+Folgefund (Phase 11): Auch **Wertebereiche** gehören zum empirischen
+Abgleich — der Doc-ID-Typ des Index war nirgends belegt, der eigene
+Client nahm stillschweigend u64 an; die Messung ergab u32 mit hartem
+400 ab 2^32. Wer auf dem unbelegten u64 einen ID-Raum aufgebaut hätte,
+hätte den Fehler erst beim ersten echten Submit gesehen. Vor jedem
+Design, das auf Typgrenzen einer Fremd-API baut: Grenzwerte messen
+(letzter gültiger Wert, erster ungültiger).
 
 ## [Technik] Auch offizieller Referenzcode kann defekt sein
 
