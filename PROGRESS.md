@@ -7,28 +7,26 @@ liegen in der Git-Historie dieser Datei und im Session-Archiv
 (`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status (2026-08-01): Phasen 0–16 abgeschlossen — voller
-Stack-Lebenszyklus (schlafend → startet → bereit → stoppt → fehler)
-steht. Repo https://github.com/shares92/acoustid-offline,
-Phase-16-Commit `a42c192` (danach Doku-Update), Arbeitsbaum sauber,
-CI grün (1571 Tests, drei Jobs: Lint+Unit 1315+43 übersprungen,
-Integration PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 network-
-und 4 compose-Tests laufen nie in CI, der Compose-E2E lief lokal
-zweifach grün). Warten auf Go für Phase 17 (Wächter —
-Lookup-Cache).**
+**Status (2026-08-01): Phasen 0–17 abgeschlossen — Lookup-Cache
+antwortet bei schlafendem Stack in ~0,01 s, ohne zu wecken. Repo
+https://github.com/shares92/acoustid-offline, Phase-17-Commit
+`8c3816c` (danach Doku-Update), Arbeitsbaum sauber, CI grün
+(1611 Tests, drei Jobs: Lint+Unit 1354+43 übersprungen, Integration
+PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 network- und 5
+compose-Tests laufen nie in CI, der Compose-E2E lief lokal zweifach
+grün). Warten auf Go für Phase 18 (Wächter — Auth & Rate-Limit).**
 
-## Session-Übergabe (Stand 2026-08-01, nach Phase 16)
+## Session-Übergabe (Stand 2026-08-01, nach Phase 17)
 
-**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14–16
+**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14–17
 nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
 Stand-Vorprüfung jeweils bestanden), vom Orchestrator verifiziert
-(Code-Review + Suite + ruff; E2E-Wecktest ab Phase 15 jeweils doppelt
-gefahren — Agent und Orchestrator), ff-Merges
-`7ce2cd5`/`3f9daee`/`a42c192`, alle CI-Läufe beobachtet und grün,
-5-Phasen-Doku-Sweep (10–14) und Doku-Updates nach 15/16 erledigt.
-Healthcheck-Mitentscheid: interner API-Endpunkt `/_health`, gebaut in
-Phase 15 (DECISIONS 2026-08-01). Die beiden bewusst offenen
-Phase-15-Lücken (Hand-Stopp, Weck-Frist) sind in Phase 16 geschlossen.
+(Code-Review + Suite + ruff; E2E ab Phase 15 jeweils doppelt gefahren
+— Agent und Orchestrator), ff-Merges
+`7ce2cd5`/`3f9daee`/`a42c192`/`8c3816c`, alle CI-Läufe beobachtet und
+grün, 5-Phasen-Doku-Sweep (10–14) und Doku-Updates nach 15/16/17
+erledigt. Healthcheck-Mitentscheid: interner API-Endpunkt `/_health`,
+gebaut in Phase 15 (DECISIONS 2026-08-01).
 
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
@@ -57,15 +55,25 @@ mb.keep_submitted_mbid). **Phase 16:** Zustandsmaschine mit
 (15 s, erkennt Hand-Stopp/-Start, überspringt bei laufenden
 Vorgängen), Startfehler-Pfad mit Erholung aus `error`, Weck-Frist
 gehört jetzt dem Vorgang (jeder Wartende verlängert auf seine
-Haltezeit).
-**Existiert noch nicht:** Wächter-Rest (Phasen 17–22: Cache, Auth,
+Haltezeit). **Phase 17:** Lookup-Cache als eigene SQLite-Datei
+(`lookup-cache.sqlite3`, selbstheilend — Defekt ⇒ wegwerfen und neu),
+Schlüssel = SHA-256 per Sperrliste (alles außer `client`/
+`clientversion`), nur HTTP 200 + `status: ok` wird eingelagert
+(Batch/xml/jsonp bewusst nicht), Byte-Parität ohne `X-Cache`,
+LRU-Verdrängung über monotone Sequenz bis 90 % von
+`cache.max_size_mb`, Hit zählt nicht als Aktivität, Invalidierung
+über `service.invalidate_cache(reason)` (Submit im Proxy-Pfad;
+`delta_import` Phase 19, `manual` Phase 25) — auch bei
+`cache.enabled=false`.
+**Existiert noch nicht:** Wächter-Rest (Phasen 18–22: Auth,
 Scheduler, Notify, Backup, Metrics), Admin-UI (23–27, Designpaket
 abgenommen unter docs/design/), E2E/Release (28–29). Nie gelaufen:
 Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung Phase 17** einholen (Lookup-Cache: Hits wecken
-   nie; Invalidierung nach Delta-Import und lokaler Submission).
+1. **Go-Entscheidung Phase 18** einholen (Auth `apikey`-Modus +
+   IP-Rate-Limit am Proxy; gilt auch für Cache-Hits bei schlafendem
+   Stack).
 2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
    Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
    daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
@@ -79,8 +87,8 @@ Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
-Arbeitsregeln), dann per AskUserQuestion das Go für Phase 17 einholen
-und bei Go einen Opus-Bau-Agenten mit dem Phase-17-Block unten
+Arbeitsregeln), dann per AskUserQuestion das Go für Phase 18 einholen
+und bei Go einen Opus-Bau-Agenten mit dem Phase-18-Block unten
 beauftragen — inklusive Stand-Vorprüfung im Auftragstext (DECISIONS
 2026-08-01). Nächster voller Doku-Sweep: nach Phase 19.
 
@@ -150,22 +158,9 @@ Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 | 14 | Wächter: Grundgerüst, SQLite & /status | 7ce2cd5 | Paket `acoustid_watchdog` (FastAPI), SQLite-Migrationsläufer (`PRAGMA user_version`), event_log-Ringpuffer 5000 exakt, /status baulich weckfrei, Erststart-Passwort argon2 nur ins Containerlog, Reload-Marke `config.yaml.reload`, compose+Healthcheck; am echten Container verifiziert |
 | 15 | Wächter: Proxy, Docker-Steuerung & Wecken | 3f9daee | Reverse-Proxy `/v2/*` roh/streamend (405-Parität bleibt), DockerClient (3 Routen, httpx über uds, unversioniert), WakeCoordinator (ein Weckvorgang via Task+shield; Timeout → 503+Retry-After 30, Zustand bleibt `starting`), API `GET /_health` (DB+Index, ohne MB) + Reload-Empfang (10 s, Teilmenge, Rest zurückgeschrieben+Warnung), E2E-Wecktest (Marker `compose`, opt-in): Weckdauer ~1,3 s lokal |
 | 16 | Wächter: Zustandsmaschine, Idle-Stopp & Startfehler | a42c192 | `ALLOWED_TRANSITIONS` (25 Paare getestet; streng `to()` / nachsichtig `try_to()`), IdleStopper (30-s-Takt, Job-Blockade §8.5 via `JobSource`→`update_run`, Job setzt Leerlaufuhr zurück), StatePoller (15 s, Hand-Stopp/-Start erkannt, skip bei `busy`, `error` bleibt sichtbar), Weck-Frist gehört dem Vorgang, Anfragen bei `stopping` warten und wecken danach; E2E 4/4 |
+| 17 | Wächter: Lookup-Cache | 8c3816c | Eigene SQLite (`lookup-cache.sqlite3`, selbstheilend), Schlüssel SHA-256 per Sperrliste (ohne `client`/`clientversion`, gzip-Rumpf nur für Schlüssel entpackt), nur 200+`status: ok` (Batch/xml/jsonp nicht), Byte-Parität ohne `X-Cache`, LRU über monotone Sequenz (90 %-Räumung), Hit ≠ Aktivität, `invalidate_cache(reason)` submit/delta_import/manual, wirkt auch bei `enabled=false`; E2E 5/5 (Hit 0,01 s bei gestopptem Stack) |
 
 ---
-
-## Phase 17: Wächter — Lookup-Cache
-
-Ziel: Cache-Hits wecken das Array nie.
-
-Aufgaben:
-- [ ] Cache auf SSD: Schlüssel = Hash(Fingerprint+Duration+
-      meta-Parameter), Wert = serialisierte Antwort
-- [ ] `cache.enabled`, `cache.max_size_mb` mit Verdrängung
-- [ ] Vollständige Invalidierung nach erfolgreichem Delta-Import und
-      nach jeder lokalen Submission (Invariante §8.6)
-- [ ] Tests: Hit ohne Stack-Start; Invalidierung beider Auslöser
-
-Definition of Done: Cache-Tests grün inkl. Größenbegrenzung.
 
 ## Phase 18: Wächter — Auth & Rate-Limit
 
@@ -204,6 +199,11 @@ Aufgaben:
       Zyklus (Invariante §8.4); Plattenplatz-Guard-Ergebnis behandeln
 - [ ] Interne Trigger-API für manuelle Läufe (Basis für /admin/jobs)
 - [ ] Compose-Test: simulierter Zyklus inkl. Fehler-Retry-Pfad
+
+Hinweis (aus Phase 17): Die Cache-Invalidierung nach erfolgreichem
+Delta-Import ist ein Aufruf von
+`service.invalidate_cache(reason="delta_import")` — Schnittstelle
+steht, Ereignis inklusive.
 
 Definition of Done: Zyklus-Test grün; Historie korrekt; Stack schläft
 nach dem Lauf wieder.
@@ -269,6 +269,10 @@ Aufgaben:
 - [ ] Tests: konsistente Sicherung, Historieneintrag, deaktivierter Fall
 
 Definition of Done: Backup-Tests grün; Restore dokumentiert.
+
+Hinweis (aus Phase 17): `lookup-cache.sqlite3` gehört ausdrücklich
+NICHT ins Backup (Wegwerfware, potenziell 512 MiB); gesichert wird
+nur `watchdog.sqlite3` + config.yaml (+ local_submission-Daten).
 
 ## Phase 22: Metrics
 

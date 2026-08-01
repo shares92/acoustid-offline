@@ -920,3 +920,52 @@ bestenfalls veraltet, Poller erhebt ohnehin); Poller-Intervall als
 Config (verworfen — kein Betreiber-Nutzen); Stopp bei `error` nach
 Frist (verworfen — verwischt Diagnose); Anfragen bei `stopping`
 abweisen (verworfen — unnötige 503s).
+
+## 2026-08-01: Phase-17-Details (Lookup-Cache)
+
+Entscheidung: (1) **Eigene SQLite-Datei** `lookup-cache.sqlite3` (nicht
+Dateicache, nicht die Zustands-DB — Phase-14-Entscheid): Buchhaltung
+als `SUM(size_bytes)`, Verdrängung + vollständige Leerung je eine
+Transaktion, `auto_vacuum=INCREMENTAL`. **Selbstheilend:** jeder
+`sqlite3.Error` ⇒ Datei wegwerfen und neu anlegen; scheitert auch das,
+schaltet sich der Cache still ab — ein Cache darf nie eine Anfrage
+scheitern lassen. (2) **Schlüssel per Sperrliste** (SHA-256 über
+[Schemaversion, Pfad, Parameterpaare], alles außer
+`client`/`clientversion`): ein vergessener antwortprägender Parameter
+wäre bei einer Erlaubnisliste eine FALSCHE Antwort, bei der Sperrliste
+nur ein verpasster Treffer. Keine Umsortierung, keine
+Case-Normalisierung, keine Default-Ergänzung; gzip-Formularrümpfe nur
+für den Schlüssel entpackt (weitergereicht werden Originalbytes);
+Methode nicht im Schlüssel (GET≡POST laut Vertrag). (3) **Eingelagert
+nur HTTP 200 + JSON `status: "ok"`** — schließt Fehlerantworten und
+`format=xml`/`jsonp` ohne zweiten Parser aus (kein realer Client nutzt
+sie). **Batch nie gecacht** (identische Rümpfe wiederholen sich nicht;
+Teilfehler stecken IN der 200er-Antwort und würden festgeschrieben).
+(4) **Byte-Parität:** Kopfzeilen der API außer hop-by-hop/`date`/
+`content-length` (Letztere aus dem bytegleichen Rumpf neu = gleicher
+Wert); kein `X-Cache`. (5) **LRU über monotone `used_seq`-Spalte**
+(ISO-Zeitstempel hätte Millisekunden-Kollisionen), geräumt bis 90 %
+der Grenze; `cache.max_size_mb` als MiB, logisch verrechnet
+(Rumpf+Kopfzeilen). Übergroße Einzelantworten werden nicht eingelagert.
+(6) **Ein Cache-Hit zählt NICHT als Aktivität** — er braucht das Array
+nicht; sonst hielte der Cache den Stack wach, den er überflüssig macht.
+(7) **Invalidierung unabhängig von `cache.enabled`** (sonst überlebten
+Alt-Einträge einen Aus/Ein-Zyklus über einen Import hinweg); einziger
+Weg ist `service.invalidate_cache(reason)` mit Ereignis (Quelle
+`cache`), Ereignis nur bei tatsächlich entfernten Einträgen. Auslöser:
+erfolgreiche `POST /v2/submit`-Antwort (gemessen am HTTP-Status, Rumpf
+bleibt streamend — zu oft leeren ist die harmlose Richtung),
+`delta_import` (Phase 19), `manual` (Phase 25). (8) Anfragerumpf-
+Pufferung für den Schlüssel auf 1 MiB gedeckelt; darüber läuft die
+Anfrage ungecacht weiter (gelesener Anfang wird dem Strom wieder
+vorangestellt). (9) `lookup-cache.sqlite3` gehört NICHT ins
+Phase-21-Backup (Wegwerfware).
+Begründung: Fail-safe-Richtung überall „verpasster Treffer statt
+falscher Antwort"; §8.2 baulich (Cache-Zweig vor jedem Stack-Kontakt);
+§8.6 vollständig.
+Alternativen: Erlaubnisliste im Schlüssel (verworfen — falsche-Antwort-
+Risiko); Batch je Eintrag cachen (verworfen — Proxy würde zweite
+Vertragsquelle); Submit-Rumpf prüfen (verworfen — kostet Streaming);
+Parameter sortieren (verworfen — Zusage ohne Not, Hitrate real
+unbeeinträchtigt); Größe gegen page_count messen (verworfen — ohne
+VACUUM nicht monoton).

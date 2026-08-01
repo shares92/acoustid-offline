@@ -476,3 +476,18 @@ Anwenden: Vor jedem asyncio-Primitiv fragen, aus welchem Thread es
 bedient wird; bei Threadpool-Beteiligung entweder threadsichere
 Strukturen (Lock + Werte) oder `call_soon_threadsafe`; „wartet
 überhaupt jemand?" zuerst klären — oft reicht ein Flag.
+
+## [Technik] Cache-Schlüssel per Sperrliste — die Fehlerrichtung entscheidet
+
+Was: Der Lookup-Cache hasht alle Anfrageparameter außer einer
+Sperrliste (`client`, `clientversion`), statt eine Erlaubnisliste
+antwortprägender Parameter zu pflegen. Zusatzentscheid: LRU über eine
+monotone Sequenzspalte statt ISO-Zeitstempel (Millisekunden-
+Kollisionen würfen sonst den zuletzt benutzten Eintrag raus).
+Warum: Die beiden Fehlerrichtungen sind nicht symmetrisch — ein in der
+Erlaubnisliste vergessener Parameter liefert eine FALSCHE Antwort an
+Clients, ein zu strenger Schlüssel nur einen verpassten Treffer.
+Caches müssen in die harmlose Richtung irren.
+Anwenden: Bei jedem Response-Cache zuerst fragen, welche Fehlerrichtung
+harmlos ist, und die Schlüsselbildung darauf ausrichten; bei
+LRU-Buchhaltung nie auf Zeitstempel-Eindeutigkeit bauen.
