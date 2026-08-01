@@ -7,26 +7,30 @@ liegen in der Git-Historie dieser Datei und im Session-Archiv
 (`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status (2026-08-01): Phasen 0–17 abgeschlossen — Lookup-Cache
-antwortet bei schlafendem Stack in ~0,01 s, ohne zu wecken. Repo
-https://github.com/shares92/acoustid-offline, Phase-17-Commit
-`8c3816c` (danach Doku-Update), Arbeitsbaum sauber, CI grün
-(1611 Tests, drei Jobs: Lint+Unit 1354+43 übersprungen, Integration
-PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 network- und 5
-compose-Tests laufen nie in CI, der Compose-E2E lief lokal zweifach
-grün). Warten auf Go für Phase 18 (Wächter — Auth & Rate-Limit).**
+**Status (2026-08-01): Phasen 0–18 abgeschlossen — Auth (`apikey`)
+und IP-Rate-Limit stehen am Proxy, auch für Cache-Hits bei
+schlafendem Stack. Repo https://github.com/shares92/acoustid-offline,
+Phase-18-Commit `2570ea5` (danach Doku-Update), Arbeitsbaum sauber,
+CI grün (1649 Tests, drei Jobs: Lint+Unit 1391+43 übersprungen,
+Integration PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 network-
+und 6 compose-Tests laufen nie in CI, der Compose-E2E lief lokal
+zweifach grün). Warten auf Go für Phase 19 (Wächter — Scheduler &
+Update-Zyklus); danach ist der volle 5-Phasen-Doku-Sweep (15–19)
+fällig.**
 
-## Session-Übergabe (Stand 2026-08-01, nach Phase 17)
+## Session-Übergabe (Stand 2026-08-01, nach Phase 18)
 
-**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14–17
+**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14–18
 nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
 Stand-Vorprüfung jeweils bestanden), vom Orchestrator verifiziert
 (Code-Review + Suite + ruff; E2E ab Phase 15 jeweils doppelt gefahren
 — Agent und Orchestrator), ff-Merges
-`7ce2cd5`/`3f9daee`/`a42c192`/`8c3816c`, alle CI-Läufe beobachtet und
-grün, 5-Phasen-Doku-Sweep (10–14) und Doku-Updates nach 15/16/17
-erledigt. Healthcheck-Mitentscheid: interner API-Endpunkt `/_health`,
-gebaut in Phase 15 (DECISIONS 2026-08-01).
+`7ce2cd5`/`3f9daee`/`a42c192`/`8c3816c`/`2570ea5`, alle CI-Läufe
+beobachtet und grün, 5-Phasen-Doku-Sweep (10–14) und Doku-Updates
+nach 15–18 erledigt. Offener Betreiber-Entscheid:
+X-Forwarded-For-Vertrauensliste fürs Rate-Limit hinter TLS-Proxy
+(siehe Phase-29-Hinweis; Empfehlung des Bau-Agenten: eigener
+§6-Schlüssel, Default leer = heutiges Verhalten).
 
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
@@ -64,16 +68,25 @@ LRU-Verdrängung über monotone Sequenz bis 90 % von
 `cache.max_size_mb`, Hit zählt nicht als Aktivität, Invalidierung
 über `service.invalidate_cache(reason)` (Submit im Proxy-Pfad;
 `delta_import` Phase 19, `manual` Phase 25) — auch bei
-`cache.enabled=false`.
-**Existiert noch nicht:** Wächter-Rest (Phasen 18–22: Auth,
-Scheduler, Notify, Backup, Metrics), Admin-UI (23–27, Designpaket
-abgenommen unter docs/design/), E2E/Release (28–29). Nie gelaufen:
+`cache.enabled=false`. **Phase 18:** Reihenfolge Rate-Limit → Auth →
+Cache → Wecken (abgewiesene Anfragen wecken nie, Tripwire-getestet);
+`apikey`-Modus gegen `api_key`-Tabelle (sha256-Hash-Vergleich
+konstant-zeitig, „zuletzt benutzt" auf 1 Schreibvorgang/60 s je Key
+gedrosselt), Whitelist-Schalter Picard/beets, Fehlercodes belegt
+(fehlender client 2/400, ungültiger Key 4/400, Limit 14/429 mit
+gerechnetem Retry-After, Rumpf > 1 MiB 19/413); IP-Limiter als
+exaktes gleitendes 60-s-Fenster (LRU-Deckel 2048 IPs, abgelehnte
+Anfragen zählen nicht); 503-Text jetzt generisch (Original-Wortlaut
+Code 13), /status bleibt offen.
+**Existiert noch nicht:** Wächter-Rest (Phasen 19–22: Scheduler,
+Notify, Backup, Metrics), Admin-UI (23–27, Designpaket abgenommen
+unter docs/design/), E2E/Release (28–29). Nie gelaufen:
 Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung Phase 18** einholen (Auth `apikey`-Modus +
-   IP-Rate-Limit am Proxy; gilt auch für Cache-Hits bei schlafendem
-   Stack).
+1. **Go-Entscheidung Phase 19** einholen (Scheduler & Update-Zyklus;
+   Hinweise im Phasenblock: Stop-Timeout, Submit-während-Lauf-Entscheid,
+   drain_queue/retry_forward, Cache-Invalidierung).
 2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
    Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
    daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
@@ -87,10 +100,11 @@ Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
-Arbeitsregeln), dann per AskUserQuestion das Go für Phase 18 einholen
-und bei Go einen Opus-Bau-Agenten mit dem Phase-18-Block unten
+Arbeitsregeln), dann per AskUserQuestion das Go für Phase 19 einholen
+und bei Go einen Opus-Bau-Agenten mit dem Phase-19-Block unten
 beauftragen — inklusive Stand-Vorprüfung im Auftragstext (DECISIONS
-2026-08-01). Nächster voller Doku-Sweep: nach Phase 19.
+2026-08-01). Nach Phase 19: voller 5-Phasen-Doku-Sweep (15–19) mit
+Diff-Anzeige.
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
@@ -159,32 +173,9 @@ Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 | 15 | Wächter: Proxy, Docker-Steuerung & Wecken | 3f9daee | Reverse-Proxy `/v2/*` roh/streamend (405-Parität bleibt), DockerClient (3 Routen, httpx über uds, unversioniert), WakeCoordinator (ein Weckvorgang via Task+shield; Timeout → 503+Retry-After 30, Zustand bleibt `starting`), API `GET /_health` (DB+Index, ohne MB) + Reload-Empfang (10 s, Teilmenge, Rest zurückgeschrieben+Warnung), E2E-Wecktest (Marker `compose`, opt-in): Weckdauer ~1,3 s lokal |
 | 16 | Wächter: Zustandsmaschine, Idle-Stopp & Startfehler | a42c192 | `ALLOWED_TRANSITIONS` (25 Paare getestet; streng `to()` / nachsichtig `try_to()`), IdleStopper (30-s-Takt, Job-Blockade §8.5 via `JobSource`→`update_run`, Job setzt Leerlaufuhr zurück), StatePoller (15 s, Hand-Stopp/-Start erkannt, skip bei `busy`, `error` bleibt sichtbar), Weck-Frist gehört dem Vorgang, Anfragen bei `stopping` warten und wecken danach; E2E 4/4 |
 | 17 | Wächter: Lookup-Cache | 8c3816c | Eigene SQLite (`lookup-cache.sqlite3`, selbstheilend), Schlüssel SHA-256 per Sperrliste (ohne `client`/`clientversion`, gzip-Rumpf nur für Schlüssel entpackt), nur 200+`status: ok` (Batch/xml/jsonp nicht), Byte-Parität ohne `X-Cache`, LRU über monotone Sequenz (90 %-Räumung), Hit ≠ Aktivität, `invalidate_cache(reason)` submit/delta_import/manual, wirkt auch bei `enabled=false`; E2E 5/5 (Hit 0,01 s bei gestopptem Stack) |
+| 18 | Wächter: Auth & Rate-Limit | 2570ea5 | Reihenfolge Limit → Auth → Cache → Wecken (Abweisungen wecken nie, Tripwire); `apikey` gegen `api_key` (sha256 konstant-zeitig, zuletzt-benutzt gedrosselt 60 s), Whitelist Picard/beets, Codes belegt (2/400, 4/400, 14/429 gerechneter Retry-After, 19/413); Limiter exaktes 60-s-Gleitfenster (LRU 2048 IPs, Abweisungen zählen nicht); 503-Text generisch; E2E 6/6 (apikey schützt Cache-Hit bei gestopptem Stack) |
 
 ---
-
-## Phase 18: Wächter — Auth & Rate-Limit
-
-Ziel: `apikey`-Modus und IP-Rate-Limit am Proxy. Durchsetzungsort
-Wächter ist entschieden (DECISIONS 2026-07-25).
-
-Aufgaben:
-- [ ] `apikey`-Modus: `client`-Prüfung gegen `api_key`-Tabelle
-      (Hash-Vergleich), Fehlerantwort im AcoustID-Fehlerformat,
-      „zuletzt benutzt" aktualisieren
-- [ ] Whitelist-Schalter `auth.allow_known_client_keys` (Picard/beets,
-      default aus — DECISIONS 2026-07-25)
-- [ ] Modus `none`: `client` akzeptiert und ignoriert
-- [ ] Rate-Limit pro Client-IP (`ratelimit.per_ip_per_min`), aktiv auch
-      im Modus `none` → `429` + `Retry-After`
-- [ ] Tests: beide Modi, Limit, Cache-Hit-Pfad mit Auth
-
-Definition of Done: Auth-/Limit-Tests grün, auch in Kombination mit
-Cache-Hits.
-
-Hinweis (aus Phase 15): Der 503-Fehlertext des Wächters (Wecken
-fehlgeschlagen / API nicht erreichbar) enthält interne Details wie
-Containernamen — im LAN unkritisch; hier, wo Exponierung nach außen
-Thema wird, ggf. generischer fassen.
 
 ## Phase 19: Wächter — Scheduler & Update-Zyklus
 
@@ -422,6 +413,13 @@ Aufgaben:
       Docker-Setup, Bootstrap-Anleitung mit realistischer Zeitangabe
       (aus Phase 0/8), Restore, Lizenzhinweis, TLS/apikey-Hinweis bei
       Exponierung
+
+Hinweis (aus Phase 18, offener Betreiber-Entscheid): Hinter einem
+TLS-Reverse-Proxy sehen alle Clients für das Rate-Limit dieselbe IP
+(X-Forwarded-For wird bewusst nicht ausgewertet — fälschbar).
+Empfehlung des Bau-Agenten: Vertrauenslisten-Schlüssel in §6 (Default
+leer = heutiges Verhalten). Spätestens hier beim TLS-Hinweis
+entscheiden und dokumentieren.
 - [ ] Unraid-Community-App-Template (XML) im Repo
 - [ ] .env.example final abgleichen
 

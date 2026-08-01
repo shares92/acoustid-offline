@@ -491,3 +491,20 @@ Caches müssen in die harmlose Richtung irren.
 Anwenden: Bei jedem Response-Cache zuerst fragen, welche Fehlerrichtung
 harmlos ist, und die Schlüsselbildung darauf ausrichten; bei
 LRU-Buchhaltung nie auf Zeitstempel-Eindeutigkeit bauen.
+
+## [Technik] Hochentropische API-Keys brauchen kein KDF — das wäre eine DoS-Fläche
+
+Was: Für selbst erzeugte Zufalls-Keys (api_key-Tabelle) wird bewusst
+ungesalzenes sha256 mit `secrets.compare_digest` verwendet, nicht
+argon2 wie beim Admin-Passwort. Ein KDF je Anfrage kostete ~50 ms und
+64 MiB Speicher — bei 120 zulässigen Anfragen/min/IP eine selbstgebaute
+Denial-of-Service-Fläche; zudem machte ein Salt je Eintrag den
+UNIQUE-Index-Lookup („welcher Key ist das?") zum verify() gegen jeden
+Datensatz.
+Warum: KDFs bremsen Wörterbuchangriffe auf schwache Geheimnisse;
+gegen 144-Bit-Zufall gibt es kein Wörterbuch — die Kosten treffen
+dann nur noch den Verteidiger.
+Anwenden: Hash-Härte nach Entropie der Geheimnisse wählen:
+Menschenpasswörter ⇒ KDF (argon2), Maschinen-Token ⇒ schneller Hash +
+konstant-zeitiger Vergleich; im Anfragepfad grundsätzlich keine
+speicherharten Funktionen.

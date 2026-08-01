@@ -969,3 +969,47 @@ Vertragsquelle); Submit-Rumpf prüfen (verworfen — kostet Streaming);
 Parameter sortieren (verworfen — Zusage ohne Not, Hitrate real
 unbeeinträchtigt); Größe gegen page_count messen (verworfen — ohne
 VACUUM nicht monoton).
+
+## 2026-08-01: Phase-18-Details (Auth & Rate-Limit am Proxy)
+
+Entscheidung: (1) **Reihenfolge Rate-Limit → Auth → Cache → Wecken** —
+von außen nach innen, jeder Schritt teurer als der davor; Limit und
+Auth laufen rein aus Wächter-Daten, §8.2 gilt damit auch für
+abgewiesene Anfragen (Tripwire-getestet). `plan_request` liest den
+Rumpf einmal VOR der Auth (client steht bei POST im Rumpf), geprüft
+wird vor jedem Cache-Zugriff/Weckvorgang. (2) **Fehlercodes belegt**
+(Phase-1-Fehlertabelle + api/app/errors.py): fehlender client 2/400,
+ungültiger/inaktiver Key 4/400 (gesperrt = unbekannt, gleiche
+Antwort), Rate-Limit 14/429, Rumpf > 1 MiB im apikey-Modus 19/413
+(API antwortete ohnehin so — für eine feststehende Antwort wird nicht
+geweckt). DB-Fehler bei der Key-Prüfung ⇒ nicht autorisiert, nie
+stiller Durchlass. (3) **Ungesalzenes sha256 + compare_digest** für
+Key-Hashes: hochentropische Maschinen-Keys, kein Wörterbuch zu
+bremsen; argon2 je Anfrage (~50 ms, 64 MiB) wäre eine selbstgebaute
+DoS-Fläche und ein Salt machte den UNIQUE-Index-Zugriff zum
+Vollscan-verify. (4) **„Zuletzt benutzt" gedrosselt** auf 1
+Schreibvorgang je 60 s und Key (Merker im Speicher, verliert ein
+Neustart folgenlos) — Minutenauflösung genügt der Key-Liste der
+Phase 26; Massenschreibvorgänge in der Zustands-DB bleiben tabu
+(Phase-14-Linie). (5) **Exaktes gleitendes 60-s-Fenster je IP**
+(Zeitstempel-Deque, ≤ Limit Einträge ≈ 4 KB/IP) statt Festfenster
+(Burst-Verdopplung an der Grenze); Retry-After gerechnet; LRU-Deckel
+2048 IPs + Minuten-Sweep; **abgelehnte Anfragen zählen nicht** (das
+Limit soll bremsen, nicht dauerhaft aussperren); X-Forwarded-For wird
+NICHT ausgewertet (fälschbar) — Vertrauensliste-Entscheid offen, Hinweis
+Phase 29. (6) **503-Text generisch** = Original-Wortlaut zu Code 13
+(Containernamen nur noch im Log/Ereignis); bewusste Abweichungen
+dokumentiert: Retry-After bei 503/429 (Original schickt nie einen,
+§7 verlangt ihn), eigene Fehlerantworten immer JSON auch bei
+format=xml/jsonp. (7) **/status bleibt ohne Auth und ohne Limit**
+(Bereitschaftsanzeige §7). (8) OPTIONS/Preflight wird im apikey-Modus
+wie alles unter /v2/ geprüft (fail-closed; form-urlencodetes POST
+löst kein Preflight aus). (9) Cache-Treffer zählen gegen das Limit
+(Missbrauchsschutz für den Port, keine Kostenrechnung).
+Begründung: fail-closed überall; Parität steigt sogar (503-Wortlaut);
+keine §6-/Env-Erweiterung ohne Betreiber-Entscheid.
+Alternativen: argon2 für API-Keys (verworfen — DoS-Fläche);
+Festfenster-Limiter (verworfen — Burst-Verdopplung); X-Forwarded-For
+immer auswerten (verworfen — fälschbar); OPTIONS ausnehmen (verworfen
+— Schlupfloch ohne Bedarf); zuletzt-benutzt je Anfrage schreiben
+(verworfen — Massenschreiblast).
