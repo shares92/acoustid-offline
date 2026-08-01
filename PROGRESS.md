@@ -24,6 +24,13 @@ gegen echte Container, Batch-Messreihe, Entescape-Durchstich bis in
 die DB). Ertrag: ein LEARNINGS-Eintrag, ein DECISIONS-Prozessentscheid
 (Stand-Vorprüfung), Gedächtnis-/Doku-Abgleich.
 
+Die parallele Bau-Session (Probelauf-Anleitung + Phasen 10–13, Commits
+8fad234…ebdbdcc) ist inzwischen ebenfalls sauber beendet; ihr Review:
+`sessions/2026-07-26-phasen-10-13-api-block.md`. Neu aus ihrem
+Abschluss: LEARNINGS-Folgefund zur CI-Beobachtung (Registry-Flakes,
+`cancel-in-progress`-„cancelled" ist kein Fehler). Am offenen Stand
+ändert sich nichts — Punkt 1 unten (Go Phase 14) bleibt der Einstieg.
+
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
 Index-Client (msgpack), Importer komplett (Download, Parser mit

@@ -164,6 +164,15 @@ Anwenden: Action-Referenzen vor dem Commit gegen
 `gh api repos/<owner>/<repo>/tags` prüfen; nach jedem Push den ersten
 CI-Lauf tatsächlich beobachten statt Grün anzunehmen (Orchestrator-
 Verifikation hat den Fehler hier in Minuten gefangen).
+Folgefund (Phasen 11–13): Beim Beobachten zwei Nicht-Fehler nicht als
+Fehler diagnostizieren. (1) Docker-Hub-Registry-Timeouts beim
+„Initialize containers" des Integrationsjobs sind Infrastruktur-Flakes
+— die Tests liefen nie an; `gh run rerun --failed` genügt. (2) Bei
+Push-auf-Push (Code, direkt danach Doku-Sweep) meldet die
+`cancel-in-progress`-Concurrency den Vorgängerlauf als „cancelled" —
+das ist Ablösung, kein Bruch; maßgeblich ist der Lauf auf dem
+Nachfolge-Commit, der denselben Code testet. Erst Job-Conclusions und
+Logs ansehen, dann reagieren.
 
 ## [Technik] Mehrere gleichnamige Python-Pakete kollidieren im venv
 
