@@ -760,3 +760,22 @@ HTTP-Fehlerstatus bei Teilfehlern (verworfen — Clients verwürfen die
 ganze Antwort); Fehler je Eintrag auch bei Index-Ausfall (verworfen —
 halb beantwortete Batches sähen aus wie „kein Treffer");
 `forward_failed` als `pending` (verworfen — Client-Endlosschleife).
+
+## 2026-08-01: API bekommt internen Healthcheck-Endpunkt — Bau in Phase 15
+
+Entscheidung: Die API erhält einen **minimalen internen
+Healthcheck-Endpunkt** als Bereitschaftsprüfung für das
+Wake-on-request des Wächters (Vormerkung aus Phase 9). Gebaut wird er
+**erst in Phase 15**, wo er erstmals gebraucht wird — Phase 14 bleibt
+ein reines, paket-disjunktes Wächter-Paket. Ausgestaltung (nicht
+öffentlich dokumentiert, prüft DB- und Index-Anbindung leichtgewichtig)
+wird in Phase 15 festgelegt und dokumentiert.
+Begründung: Bereitschaft über eine bestehende Route (z. B. definierte
+Fehlerantwort von /v2/lookup) oder TCP-Connect zu erschließen ist
+fragil gegenüber Verhaltensänderungen; §7 sieht zwar keinen Endpunkt
+vor, ein interner, undokumentierter Prüfpfad bricht die Parität der
+öffentlichen API aber nicht.
+Alternativen: Bau schon in Phase 14 (verworfen — Paket nicht mehr
+disjunkt, kein Abnehmer vor Phase 15); bestehende Route/TCP als Probe
+(verworfen — fragil, verwechselt „Prozess lauscht" mit „Backends
+bereit"). (Betreiber-Entscheid 2026-08-01.)
