@@ -1,18 +1,28 @@
 """HTTP-Schicht des Waechters (FastAPI) — ARCHITECTURE §4, §7.
 
-Stand Phase 17 traegt sie zwei Routen:
+Stand Phase 18 traegt sie zwei Routen:
 
 ===============  ======  =================================================
 ``/status``      GET     Stack-Zustand, Datenstand, letzter Update-Lauf,
-                         Version — **weckt nie** (§7, §8.2)
-``/v2/{...}``    alle    Lookup-Cache, Reverse-Proxy auf ``acoustid-api``,
-                         **mit Weck-Logik** (§7 „Fehlerverhalten") und der
+                         Version — **weckt nie** (§7, §8.2), und **ohne
+                         Auth und ohne Rate-Limit**
+``/v2/{...}``    alle    Rate-Limit, Key-Pruefung, Lookup-Cache,
+                         Reverse-Proxy auf ``acoustid-api``, **mit
+                         Weck-Logik** (§7 „Fehlerverhalten") und der
                          Aktivitaetsmeldung fuer den Idle-Stopp
 ===============  ======  =================================================
 
 Seit Phase 17 weckt `/v2/*` nur noch dann, wenn die Antwort nicht schon im
 Lookup-Cache liegt — die zweite Stelle, an der Invariante §8.2 baulich
-haengt (:func:`_proxy`).
+haengt (:func:`_proxy`). Seit Phase 18 stehen Rate-Limit und Key-Pruefung
+**davor**: auch eine abgewiesene Anfrage weckt nichts, und ein Cache-Treffer
+ist genauso geschuetzt wie eine weitergeleitete Anfrage (§7 „Durchsetzungsort
+Auth & Rate-Limit").
+
+`/status` bleibt bewusst offen. Es ist die Bereitschaftsanzeige aus §7,
+zugleich der Container-Healthcheck und die Datenquelle der Admin-Statuskarte
+— eine Auskunft, fuer die es keinen Key gibt und die auch dann noch
+funktionieren muss, wenn alle Keys falsch sind.
 
 Dazu kommen die beiden Dauerlaeufer des Lebenszyklus
 (:mod:`acoustid_watchdog.lifecycle`): sie leben im Lifespan der Anwendung,
@@ -53,6 +63,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from acoustid_watchdog.auth import AuthOutcome, AuthResult
 from acoustid_watchdog.cache import (
     MAX_CACHEABLE_BODY_BYTES,
     CachedResponse,
@@ -60,13 +71,23 @@ from acoustid_watchdog.cache import (
     is_cacheable_response,
     plan_request,
 )
-from acoustid_watchdog.proxy import error_response
+from acoustid_watchdog.proxy import (
+    ERROR_INVALID_API_KEY,
+    ERROR_MESSAGES,
+    ERROR_MISSING_PARAMETER,
+    ERROR_RATE_LIMIT,
+    ERROR_REQUEST_TOO_LARGE,
+    ERROR_SERVICE_UNAVAILABLE,
+    error_response,
+)
+from acoustid_watchdog.ratelimit import UNKNOWN_CLIENT, WINDOW_S
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.status import build_status
 from acoustid_watchdog.wake import DEFAULT_RETRY_AFTER_S, StackNotReadyError
 from shared import setup_logging
 from shared.config import Config
 from shared.env import EnvSettings
+from shared.models import AuthMode
 
 __all__ = ["PROXY_METHODS", "SERVICE_NAME", "build_app", "create_app"]
 
@@ -163,26 +184,50 @@ async def _status(request: Request) -> JSONResponse:
 
 
 async def _proxy(request: Request) -> Response:
-    """Cache fragen, sonst wecken, weiterleiten, Antwort zurueckgeben.
+    """Bremsen, pruefen, Cache fragen, sonst wecken und weiterleiten.
 
-    Die Reihenfolge ist der ganze Punkt der beiden Phasen:
+    Die Reihenfolge ist der ganze Punkt der Phasen 17 und 18 — und sie ist
+    **von aussen nach innen** gebaut: jeder Schritt ist teurer als der davor,
+    also steht der billigste vorn.
 
-    1. **Cache** (Phase 17). Liegt die Antwort schon da, geht sie sofort
+    1. **Rate-Limit** (Phase 18, §6 ``ratelimit.per_ip_per_min``). Eine
+       Rechnung auf einer Liste im Speicher, ohne Datenbank, ohne Rumpf.
+       Sie steht vor allem anderen, weil sie sonst nur das schuetzte, was
+       hinter ihr liegt — eine Flut ungueltiger Keys wuerde die Key-Pruefung
+       ungebremst treffen.
+    2. **Auth** (Phase 18, §6 ``auth.mode``). Nur im ``apikey``-Modus: ein
+       Indexzugriff auf die Zustandsdatenbank. Sie steht **vor** dem Cache,
+       weil sonst ausgerechnet der billige Weg der ungeschuetzte waere: eine
+       Antwort aus dem Cache erreicht die API nie, und die API prueft
+       ohnehin keine Keys (§7 „Durchsetzungsort Auth & Rate-Limit").
+    3. **Cache** (Phase 17). Liegt die Antwort schon da, geht sie sofort
        zurueck — kein Docker-Kontakt, kein API-Kontakt, kein Weckvorgang.
        Genau hier ist Invariante §8.2 baulich erfuellt: der Zweig kehrt
        zurueck, **bevor** irgendetwas den Stack anfassen koennte.
-    2. **Bereit machen** (Phase 15/16), erst dann weiterleiten. Wie lange
+    4. **Bereit machen** (Phase 15/16), erst dann weiterleiten. Wie lange
        eine Anfrage dafuer gehalten werden darf, steht in
        ``wake.hold_timeout_s`` (§6).
-    3. **Einlagern**, wenn die Antwort dafuer taugt (HTTP 200 und
+    5. **Einlagern**, wenn die Antwort dafuer taugt (HTTP 200 und
        ``status: "ok"`` — :func:`~acoustid_watchdog.cache.
        is_cacheable_response`).
 
+    Die ersten beiden Schritte laufen **ausschliesslich aus Waechter-Daten**
+    (eine Liste im Speicher, eine SQLite auf dem Cache-Pool) — sie koennen
+    den Stack gar nicht anfassen. Damit gilt Invariante §8.2 auch fuer eine
+    abgewiesene Anfrage: sie weckt nie.
+
+    Eine technische Fussnote zur Reihenfolge: ``plan_request`` liegt im Code
+    **vor** der Auth-Pruefung, weil der ``client``-Parameter bei einer
+    POST-Anfrage im Rumpf steht und der Rumpf nur **einmal** gelesen werden
+    darf. Gelesen wird dabei nichts als der Rumpf — geprueft wird weiterhin
+    vor jedem Cache-Zugriff und vor jedem Weckvorgang.
+
     Die Laufzeit-Konfiguration wird dabei **bei jeder Anfrage frisch
-    gelesen** (``cache.enabled``, ``cache.max_size_mb``,
-    ``wake.hold_timeout_s``) — die Admin-UI kann sie aendern, ohne dass der
-    Waechter neu starten muss (Muster der :class:`~acoustid_watchdog.
-    lifecycle.IdleStopper`).
+    gelesen** (``ratelimit.per_ip_per_min``, ``auth.mode``,
+    ``auth.allow_known_client_keys``, ``cache.enabled``,
+    ``cache.max_size_mb``, ``wake.hold_timeout_s``) — die Admin-UI kann sie
+    aendern, ohne dass der Waechter neu starten muss (Muster der
+    :class:`~acoustid_watchdog.lifecycle.IdleStopper`).
 
     Zwei Faelle beantwortet der Waechter selbst (§7 „Fehlerverhalten"):
 
@@ -212,7 +257,17 @@ async def _proxy(request: Request) -> Response:
     """
     service: WatchdogService = request.app.state.service
     config = _runtime_config(service)
-    plan = await plan_request(request, cache_enabled=config.cache.enabled)
+
+    limited = _rate_limit(request, service, config)
+    if limited is not None:
+        return limited
+
+    apikey_mode = config.auth.mode is AuthMode.APIKEY
+    plan = await plan_request(request, cache_enabled=config.cache.enabled, need_client=apikey_mode)
+    if apikey_mode:
+        rejected = await _authenticate(request, service, plan, config)
+        if rejected is not None:
+            return rejected
 
     if plan.key is not None:
         cached = await run_in_threadpool(service.cache.get, plan.key)
@@ -223,11 +278,18 @@ async def _proxy(request: Request) -> Response:
     try:
         await service.wake.ensure_ready(timeout_s=config.wake.hold_timeout_s)
     except StackNotReadyError as error:
+        # Der Grund steht im Log (und, wo er einen Zustandswechsel bedeutet,
+        # im Ereignis-Log) — nicht in der Antwort: sie nennt keine
+        # Containernamen und keine internen Adressen (Phase 18).
         _LOG.warning(
             "Anfrage abgewiesen, Stack nicht bereit",
             extra={"path": request.url.path, "error": str(error)},
         )
-        return error_response(503, str(error), retry_after_s=error.retry_after_s)
+        return error_response(
+            503,
+            ERROR_MESSAGES[ERROR_SERVICE_UNAVAILABLE],
+            retry_after_s=error.retry_after_s,
+        )
 
     try:
         return await _forward(request, service, plan, config)
@@ -239,9 +301,110 @@ async def _proxy(request: Request) -> Response:
         )
         return error_response(
             503,
-            f"API nicht erreichbar: {error}",
+            ERROR_MESSAGES[ERROR_SERVICE_UNAVAILABLE],
             retry_after_s=DEFAULT_RETRY_AFTER_S,
         )
+
+
+def _rate_limit(request: Request, service: WatchdogService, config: Config) -> Response | None:
+    """Das IP-Limit (§6 ``ratelimit.per_ip_per_min``) — ``None`` = darf durch.
+
+    Gilt in **beiden** Auth-Modi und fuer alle ``/v2/*``-Routen. `/status`
+    bleibt bewusst aussen vor: es ist die Bereitschaftsanzeige (§7), zugleich
+    der Container-Healthcheck und die Datenquelle der Admin-Statuskarte, die
+    laut §6 alle 5 s pollt. Ein Limit darauf koennte im ungluecklichen Fall
+    die eigene Ueberwachung aussperren — und schuetzen muss es dort nichts:
+    die Antwort kommt aus dem Speicher und beruehrt weder Stack noch Array.
+
+    Gemessen wird die **direkte** Gegenstelle; ``X-Forwarded-For`` wird nicht
+    ausgewertet (Begruendung im :mod:`~acoustid_watchdog.ratelimit`-Docstring).
+    """
+    client_ip = request.client.host if request.client else UNKNOWN_CLIENT
+    limit = config.ratelimit.per_ip_per_min
+    decision = service.ratelimit.check(client_ip, limit=limit)
+    if decision.allowed:
+        return None
+
+    _LOG.warning(
+        "Anfrage abgewiesen, Rate-Limit ueberschritten",
+        extra={
+            "path": request.url.path,
+            "client_ip": client_ip,
+            "limit_per_min": limit,
+            "retry_after_s": decision.retry_after_s,
+        },
+    )
+    # Die Meldung des Originals nennt eine Rate **je Sekunde** (Code 14);
+    # unser Schluessel steht je Minute. Umgerechnet statt umformuliert: der
+    # Wortlaut bleibt der der Fehlertabelle, die Zahl beschreibt unser Limit.
+    return error_response(
+        429,
+        ERROR_MESSAGES[ERROR_RATE_LIMIT].format(rate=limit / WINDOW_S),
+        code=ERROR_RATE_LIMIT,
+        retry_after_s=decision.retry_after_s,
+    )
+
+
+async def _authenticate(
+    request: Request, service: WatchdogService, plan: RequestPlan, config: Config
+) -> Response | None:
+    """Die Key-Pruefung des ``apikey``-Modus — ``None`` = darf durch.
+
+    Die drei moeglichen Absagen tragen die Codes, die auch das Original
+    schickt (Phase-1-Bericht, Fehlertabelle):
+
+    ============================  =====  =====  ============================
+    Fall                          Code   HTTP   Meldung
+    ============================  =====  =====  ============================
+    ``client`` fehlt              2      400    missing required parameter …
+    ``client`` unbekannt/gesperrt 4      400    invalid API key
+    Rumpf zu gross fuer den Key   19     413    request too large
+    ============================  =====  =====  ============================
+
+    Der dritte Fall ist kein eigener Vertrag, sondern eine vorgezogene
+    Antwort: einen Rumpf ueber 1 MiB beantwortet die API selbst mit 19/413
+    (``acoustid_api.main.MAX_BODY_BYTES``) — unabhaengig davon, welcher Key
+    darin steht. Ihn dafuer erst durchzureichen hiesse, den Stack fuer eine
+    Anfrage zu wecken, deren Antwort schon feststeht.
+    """
+    if plan.client_unreadable:
+        _LOG.warning(
+            "Anfrage abgewiesen, Rumpf zu gross fuer die Key-Pruefung",
+            extra={"path": request.url.path},
+        )
+        return error_response(
+            413,
+            ERROR_MESSAGES[ERROR_REQUEST_TOO_LARGE],
+            code=ERROR_REQUEST_TOO_LARGE,
+        )
+
+    result: AuthResult = await run_in_threadpool(
+        service.auth.check,
+        plan.client,
+        allow_known=config.auth.allow_known_client_keys,
+    )
+    if result.ok:
+        _LOG.debug(
+            "Anfrage autorisiert",
+            extra={"path": request.url.path, "key_id": result.key_id, "key_label": result.label},
+        )
+        return None
+
+    _LOG.info(
+        "Anfrage abgewiesen, Key nicht akzeptiert",
+        extra={
+            "path": request.url.path,
+            "client_ip": request.client.host if request.client else None,
+            "reason": result.outcome.value,
+        },
+    )
+    if result.outcome is AuthOutcome.MISSING:
+        return error_response(
+            400,
+            ERROR_MESSAGES[ERROR_MISSING_PARAMETER].format(name="client"),
+            code=ERROR_MISSING_PARAMETER,
+        )
+    return error_response(400, ERROR_MESSAGES[ERROR_INVALID_API_KEY], code=ERROR_INVALID_API_KEY)
 
 
 async def _forward(

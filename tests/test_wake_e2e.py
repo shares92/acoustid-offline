@@ -22,9 +22,16 @@ prueft, dass der Waechter das von selbst merkt — `/status` sagt danach
 laufen.
 
 Seit Phase 17 steht der Gegenbeweis daneben, und er ist der Nachweis der
-Cache-Phase: derselbe Lookup ein zweites Mal weckt **nicht**. Der letzte
-Test legt den Stack von Hand schlafen und bekommt die Antwort trotzdem —
-bytegleich, und danach laeuft immer noch kein Container.
+Cache-Phase: derselbe Lookup ein zweites Mal weckt **nicht**. Der Test legt
+den Stack von Hand schlafen und bekommt die Antwort trotzdem — bytegleich,
+und danach laeuft immer noch kein Container.
+
+Seit Phase 18 haengt der letzte Test genau daran an: er stellt den Waechter
+auf ``auth.mode: apikey`` um und fragt **dieselbe, gecachte** Antwort noch
+dreimal — ohne Key, mit falschem Key, mit richtigem Key. Das ist der
+Nachweis, dass die Key-Pruefung vor dem Cache steht und nicht erst in der
+API (§7 „Durchsetzungsort Auth & Rate-Limit"). Er kostet einen Neustart des
+Waechter-Containers und drei Anfragen.
 
 **Laufen lassen** (Docker noetig, Images werden gebaut, dauert Minuten)::
 
@@ -367,3 +374,98 @@ def test_a_cached_lookup_is_answered_without_waking(sleeping_stack: None) -> Non
     # Der Nachweis: der Stack schlaeft immer noch.
     assert not any(_docker_running(name) for name in STACK_CONTAINERS)
     print(json.dumps({"cache_hit_seconds": round(answered_s, 2)}))
+    # Fuer den naechsten Test: derselbe Eintrag liegt jetzt im Cache.
+    # **Ohne** ``client`` — der gehoert nicht zum Schluessel (Phase 17) und
+    # wird dort je Fall eigens gesetzt.
+    CACHED_LOOKUP.update({name: value for name, value in parameters.items() if name != "client"})
+
+
+#: Die Parameter des gerade eingelagerten Lookups, ohne ``client`` — der
+#: letzte Test prueft an ihnen, dass die Key-Pruefung **auch** vor dem Cache
+#: greift. Sie werden erst im vorherigen Test gefuellt; die Tests dieser
+#: Datei laufen bewusst der Reihe nach auf demselben Stack.
+CACHED_LOOKUP: dict[str, object] = {}
+
+#: Der Key, den der letzte Test dem Waechter unterschiebt.
+E2E_API_KEY = "e2e-testschluessel"
+
+#: Was im Waechter-Container laeuft, um ``auth.mode`` umzustellen und einen
+#: Key anzulegen. Beides sind Schreibvorgaenge auf dem Datenverzeichnis; die
+#: Admin-UI (Phasen 25/26) wird dafuer spaeter Routen haben. Der Waechter
+#: haelt seine Konfiguration im Speicher (bewusst kein Datei-Watcher) —
+#: deshalb muss er danach neu starten.
+_ENABLE_APIKEY = """
+from acoustid_watchdog.auth import hash_key
+from acoustid_watchdog.store import Database, utc_now
+from shared.config import load_config, save_config
+from shared.env import EnvSettings
+from shared.models import AuthMode
+
+settings = EnvSettings.from_env()
+config = load_config(settings.config_path, create_if_missing=True)
+save_config(
+    config.model_copy(update={"auth": config.auth.model_copy(update={"mode": AuthMode.APIKEY})}),
+    settings.config_path,
+)
+with Database.for_data_dir(settings.data_dir) as db:
+    with db.transaction() as tx:
+        tx.execute(
+            "INSERT OR IGNORE INTO api_key (label, key_hash, active, created_at)"
+            " VALUES (?, ?, 1, ?)",
+            ("e2e", hash_key("__E2E_KEY__"), utc_now()),
+        )
+print("ok")
+""".replace("__E2E_KEY__", E2E_API_KEY)
+
+
+def test_apikey_mode_guards_even_the_cache(sleeping_stack: None) -> None:
+    """Phase 18: die Key-Pruefung steht vor dem Cache — am echten Waechter.
+
+    Der billigste moegliche Nachweis und zugleich der schaerfste: der Stack
+    ist aus dem vorherigen Test **gestoppt**, die Antwort liegt im Cache. Es
+    kostet einen Neustart des Waechter-Containers und drei Anfragen.
+
+    1. ``auth.mode: apikey`` setzen und einen Key anlegen (im Container, wie
+       es die Admin-UI spaeter tut), dann neu starten.
+    2. Dieselbe, gecachte Anfrage **ohne** ``client`` -> 2/400, **mit
+       falschem** ``client`` -> 4/400. Kein Container laeuft danach.
+    3. Mit dem richtigen Key kommt sie aus dem Cache zurueck — und der Stack
+       schlaeft immer noch.
+
+    `/status` muss die ganze Zeit ohne Key antworten (§7).
+    """
+    assert CACHED_LOOKUP, "der vorherige Test hat nichts eingelagert"
+
+    # Der Interpreter des Images liegt im venv, und das Arbeitsverzeichnis
+    # ist bewusst ``/`` (Namespace-Paket-Falle, LEARNINGS) — beides steht so
+    # im Dockerfile und im Healthcheck.
+    _compose(
+        _WATCHDOG_FILES, "exec", "-T", "watchdog", "/app/.venv/bin/python", "-c", _ENABLE_APIKEY
+    )
+    _compose(_WATCHDOG_FILES, "restart", "watchdog")
+    _wait("Waechter wieder erreichbar", _status, timeout_s=120)
+    assert not any(_docker_running(name) for name in STACK_CONTAINERS)
+
+    without = httpx.get(f"{WATCHDOG_URL}/v2/lookup", params=CACHED_LOOKUP, timeout=60)
+    assert without.status_code == 400, without.text
+    assert without.json() == {
+        "status": "error",
+        "error": {"code": 2, "message": 'missing required parameter "client"'},
+    }
+
+    wrong = dict(CACHED_LOOKUP, client="falscher-schluessel")
+    denied = httpx.get(f"{WATCHDOG_URL}/v2/lookup", params=wrong, timeout=60)
+    assert denied.status_code == 400, denied.text
+    assert denied.json() == {
+        "status": "error",
+        "error": {"code": 4, "message": "invalid API key"},
+    }
+
+    # Abgewiesen heisst: nichts angefasst (Invariante §8.2).
+    assert not any(_docker_running(name) for name in STACK_CONTAINERS)
+
+    allowed = dict(CACHED_LOOKUP, client=E2E_API_KEY)
+    accepted = httpx.get(f"{WATCHDOG_URL}/v2/lookup", params=allowed, timeout=60)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "ok"
+    assert not any(_docker_running(name) for name in STACK_CONTAINERS)

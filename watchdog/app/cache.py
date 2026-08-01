@@ -115,6 +115,7 @@ from fastapi import Request, Response
 from acoustid_watchdog.store import utc_now
 
 __all__ = [
+    "BATCH_PATH",
     "CACHEABLE_METHODS",
     "CACHEABLE_PATH",
     "CACHE_FILENAME",
@@ -144,6 +145,11 @@ CACHEABLE_PATH: Final = "/v2/lookup"
 
 #: Die Route, deren Erfolg den Cache leert (Invariante §8.6).
 SUBMIT_PATH: Final = "/v2/submit"
+
+#: Die eine Route, die ihre Parameter im **JSON**-Rumpf traegt statt im
+#: Formular (ARCHITECTURE §7, Phase 13). Sie wird nicht gecacht; ihr
+#: ``client`` muss die Auth-Pruefung trotzdem finden koennen (Phase 18).
+BATCH_PATH: Final = "/v2/lookup/batch"
 
 #: Methoden, die ``/v2/lookup`` beantworten (ARCHITECTURE §7). ``HEAD`` ist
 #: bewusst nicht dabei: eine HEAD-Antwort hat keinen Rumpf.
@@ -300,31 +306,64 @@ class RequestPlan:
             Bytes gehen dann weiter, nur eben aus dem Puffer.
         invalidates: Diese Anfrage leert den Cache, wenn sie gelingt
             (``/v2/submit``, Invariante §8.6).
+        client: Der Parameter ``client`` der Anfrage — nur gefuellt, wenn
+            :func:`plan_request` mit ``need_client=True`` gerufen wurde
+            (``apikey``-Modus, Phase 18).
+        client_unreadable: Der Rumpf war zu gross, um ``client`` darin zu
+            suchen. Dann ist ``client`` nicht aussagekraeftig; die
+            Auth-Pruefung antwortet mit Fehler 19/413 — genau dem, was die
+            API auf einen solchen Rumpf ohnehin antworten wuerde.
     """
 
     key: str | None = None
     content: bytes | AsyncIterator[bytes] | None = None
     invalidates: bool = False
+    client: str | None = None
+    client_unreadable: bool = False
 
 
-async def plan_request(request: Request, *, cache_enabled: bool) -> RequestPlan:
-    """Prueft eine eingehende Anfrage auf Cachefaehigkeit.
+async def plan_request(
+    request: Request, *, cache_enabled: bool, need_client: bool = False
+) -> RequestPlan:
+    """Prueft eine eingehende Anfrage auf Cachefaehigkeit — und liest den Key.
 
     Liest dafuer, und nur dafuer, den Anfragerumpf einer ``POST``-Anfrage —
     gedeckelt auf :data:`MAX_CACHEABLE_BODY_BYTES`. Reisst der Deckel, geht
     die Anfrage ohne Cache weiter und der schon gelesene Anfang wird dem
     Reststrom vorangestellt; der Waechter puffert also nie mehr als ein
     Megabyte, egal was ein Client schickt.
+
+    Args:
+        cache_enabled: ``cache.enabled`` (§6).
+        need_client: Der ``apikey``-Modus braucht den ``client``-Parameter
+            (Phase 18). Dann wird der Rumpf **auch** auf Routen gelesen, die
+            nicht gecacht werden — ``/v2/submit`` und ``/v2/lookup/batch``
+            tragen ihren ``client`` schliesslich ebenso im Rumpf. Es bleibt
+            bei **einer** Lesung: was hier gepuffert wurde, geht als
+            ``content`` weiter.
+
+    Die Lesart ist die der API (``acoustid_api.params.RequestValues``):
+    Query-String vor Rumpf, der erste Treffer gewinnt. Nur ``/v2/lookup/
+    batch`` traegt seine Huelle als JSON — dort steht ``client`` im
+    Objekt, und der Query-String hat trotzdem Vorrang
+    (``acoustid_api.params.parse_lookup_batch``).
     """
     path = request.url.path
-    if path == SUBMIT_PATH:
-        return RequestPlan(invalidates=True)
-    if not cache_enabled or path != CACHEABLE_PATH or request.method not in CACHEABLE_METHODS:
-        return RequestPlan()
+    invalidates = path == SUBMIT_PATH
+    cacheable = cache_enabled and path == CACHEABLE_PATH and request.method in CACHEABLE_METHODS
+    if not cacheable and not need_client:
+        return RequestPlan(invalidates=invalidates)
 
     query = parse_qsl(request.url.query, keep_blank_values=True)
+    client = _first(query, "client") if need_client else None
     if request.method == "GET":
-        return RequestPlan(key=cache_key(path, query))
+        # Wie bisher: eine GET-Anfrage hat keinen Rumpf, den diese API
+        # auswerten wuerde — Schluessel und Key stehen im Query-String.
+        return RequestPlan(
+            key=cache_key(path, query) if cacheable else None,
+            invalidates=invalidates,
+            client=client,
+        )
 
     # **Genau ein** Stromobjekt: ein zweites ``request.stream()`` wuerde
     # Starlette mit „Stream consumed" quittieren. Derselbe Generator wird
@@ -334,12 +373,43 @@ async def plan_request(request: Request, *, cache_enabled: bool) -> RequestPlan:
     if not complete:
         # Zu gross fuer den Cache — aber nicht fuer den Betrieb: der
         # gelesene Anfang plus der Rest des Stroms ist wieder die ganze
-        # Anfrage.
-        return RequestPlan(content=_prepend(body, stream))
-    form = _decode_form(body, request.headers.get("content-encoding"))
-    if form is None:
-        return RequestPlan(content=body)
-    return RequestPlan(key=cache_key(path, [*query, *form]), content=body)
+        # Anfrage. Steht der Key noch aus und nicht schon im Query-String,
+        # kann er hier nicht mehr gefunden werden.
+        return RequestPlan(
+            content=_prepend(body, stream),
+            invalidates=invalidates,
+            client=client,
+            client_unreadable=need_client and client is None,
+        )
+
+    raw, oversized = _decompress(body, request.headers.get("content-encoding"))
+    if raw is None:
+        # Unlesbarer (oder fremd kodierter) Rumpf: kein Schluessel, und der
+        # Key kann nur noch aus dem Query-String kommen. Ein ``client``, den
+        # die API aus einem kaputten gzip-Rumpf auch nicht laese, fehlt dann
+        # eben — Fehler 2 ist die richtige Antwort. Nur wenn der **entpackte**
+        # Rumpf ueber der Grenze liegt, ist es derselbe Fall wie oben: die
+        # API antwortet darauf mit 19/413, unabhaengig vom Key.
+        return RequestPlan(
+            content=body,
+            invalidates=invalidates,
+            client=client,
+            client_unreadable=oversized and need_client and client is None,
+        )
+
+    if need_client and client is None:
+        client = _json_client(raw) if path == BATCH_PATH else _first(_parse_form(raw), "client")
+
+    key = cache_key(path, [*query, *_parse_form(raw)]) if cacheable else None
+    return RequestPlan(key=key, content=body, invalidates=invalidates, client=client)
+
+
+def _first(items: Sequence[tuple[str, str]], name: str) -> str | None:
+    """Der erste Wert dieses Parameters — die Lesart von ``req.values``."""
+    for key, value in items:
+        if key == name:
+            return value
+    return None
 
 
 async def _read_capped(stream: AsyncIterator[bytes]) -> tuple[bytes, bool]:
@@ -362,30 +432,60 @@ async def _prepend(head: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[byt
         yield chunk
 
 
-def _decode_form(body: bytes, content_encoding: str | None) -> list[tuple[str, str]] | None:
-    """Der Formularrumpf als Paare — ``None``, wenn er nicht lesbar ist.
+def _decompress(body: bytes, content_encoding: str | None) -> tuple[bytes | None, bool]:
+    """Der Rumpf im Klartext, plus „war er zu gross?".
 
-    ``Content-Encoding: gzip`` wird hier **fuer den Schluessel** entpackt
+    ``Content-Encoding: gzip`` wird hier **fuer Schluessel und Key** entpackt
     (pyacoustid und beets schicken so). Weitergeleitet wird trotzdem der
     unveraenderte, gepackte Rumpf — das Entpacken und die 1-MiB-Grenze
     bleiben Sache der API (:mod:`acoustid_watchdog.proxy`). Ohne diesen
     Schritt kaeme der Schluessel aus komprimierten Bytes: zwei gleiche
     Anfragen mit verschiedenen gzip-Einstellungen waeren dann verschiedene
     Eintraege.
+
+    Returns:
+        ``(Klartext, zu_gross)``. ``(None, False)`` heisst „nicht lesbar",
+        ``(None, True)`` heisst „entpackt ueber der Grenze" — die beiden
+        muessen sich unterscheiden lassen, weil die API auf das zweite mit
+        19/413 antwortet und auf das erste mit dem Fehler des fehlenden
+        Parameters (Phase 18).
     """
-    if content_encoding:
-        if content_encoding.strip().lower() != "gzip":
-            return None
-        try:
-            body = gzip.decompress(body)
-        except OSError, EOFError, zlib.error:
-            # Ein kaputter gzip-Rumpf gilt der API als leer; hier gilt er
-            # als nicht cachefaehig — die Antwort darauf ist ein Fehler und
-            # wuerde ohnehin nicht eingelagert.
-            return None
-        if len(body) > MAX_CACHEABLE_BODY_BYTES:
-            return None
-    return parse_qsl(body.decode(_ENCODING, errors="replace"), keep_blank_values=True)
+    if not content_encoding:
+        return body, False
+    if content_encoding.strip().lower() != "gzip":
+        return None, False
+    try:
+        raw = gzip.decompress(body)
+    except OSError, EOFError, zlib.error:
+        # Ein kaputter gzip-Rumpf gilt der API als leer; hier gilt er
+        # als nicht cachefaehig — die Antwort darauf ist ein Fehler und
+        # wuerde ohnehin nicht eingelagert.
+        return None, False
+    if len(raw) > MAX_CACHEABLE_BODY_BYTES:
+        return None, True
+    return raw, False
+
+
+def _parse_form(raw: bytes) -> list[tuple[str, str]]:
+    """Der Formularrumpf als Paare — dieselbe Lesart wie in der API."""
+    return parse_qsl(raw.decode(_ENCODING, errors="replace"), keep_blank_values=True)
+
+
+def _json_client(raw: bytes) -> str | None:
+    """``client`` aus der JSON-Huelle von ``/v2/lookup/batch`` (Phase 13).
+
+    Unlesbares JSON, ein nacktes Array, ein ``client``, der keine Zeichenkette
+    ist: alles ergibt ``None`` — und damit Fehler 2, den die API auf denselben
+    Rumpf ebenfalls gaebe (``parse_lookup_batch``).
+    """
+    try:
+        payload = json.loads(raw)
+    except ValueError, UnicodeDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    client = payload.get("client")
+    return client if isinstance(client, str) else None
 
 
 def is_cacheable_response(response: Response, body: bytes) -> bool:

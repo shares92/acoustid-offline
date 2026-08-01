@@ -631,13 +631,48 @@ API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**
 am Proxy durch — auch für Cache-Hits bei schlafendem Stack (Entscheid
 2026-07-25, siehe DECISIONS.md). Der API-Service selbst prüft keine Keys.
 
+**Umsetzung (Phase 18).** Die Reihenfolge im Proxy-Pfad ist von außen nach
+innen gebaut: **Rate-Limit → Auth → Cache → Wecken/Weiterleiten**
+(`watchdog/app/main.py`). Beide Wächter am Eingang arbeiten ausschließlich
+aus Wächter-Daten und können den Stack gar nicht anfassen — Invariante §8.2
+gilt damit auch für jede abgewiesene Anfrage.
+
+- **`apikey`:** `client` wird wie in der API gelesen (Query-String vor
+  Form-Rumpf, gzip entpackt; bei `/v2/lookup/batch` zusätzlich aus der
+  JSON-Hülle) und gegen `api_key` geprüft — nur aktive Keys, Vergleich über
+  einen ungesalzenen `sha256`-Hash (die Keys sind selbst erzeugte
+  Zufallswerte; ein KDF je Anfrage wäre unangemessen und machte die
+  Nachschlagbarkeit unmöglich). `last_used_at` wird gedrosselt geschrieben
+  (höchstens einmal je Minute und Key).
+- **`none`:** `client` wird akzeptiert und ignoriert; ob er fehlt,
+  entscheidet weiterhin die API (Fehler 2).
+- **Rate-Limit:** gleitendes Minutenfenster je **direkter** Client-IP,
+  aktiv in beiden Modi. `X-Forwarded-For` wird bewusst **nicht** ausgewertet
+  (offener Klärungspunkt für den Betrieb hinter einem TLS-Proxy).
+- **`/status` bleibt offen** — ohne Key und ohne Limit: es ist zugleich
+  Bereitschaftsanzeige, Container-Healthcheck und Datenquelle der
+  Admin-Statuskarte.
+
 ### Fehlerverhalten
 - Aufwecken: Anfrage wird gehalten; erst nach `wake.hold_timeout_s`
   ohne Bereitschaft → `503` mit `Retry-After`.
-- Stack-Start-Fehler → `503` + Fehlertext + Notification.
+- Stack-Start-Fehler → `503` + Notification.
 - Ungültiger/fehlender Key im `apikey`-Modus → Fehlerantwort im
   AcoustID-Fehlerformat.
 - Rate-Limit überschritten → `429` + `Retry-After`.
+
+**Eigene Fehlerantworten des Wächters** tragen die Codes und die Wortlaute
+der Original-Fehlertabelle (Phase 18): 2/400 `missing required parameter
+"client"`, 4/400 `invalid API key`, 13/503 `service currently unavailable,
+try again later`, 14/429 `rate limit (…) exceeded, try again later`, 19/413
+`request too large`. Sie nennen **keine internen Details** (Containernamen,
+interne URLs) — der Grund steht im Container- und im Ereignis-Log.
+Bewusste Abweichungen vom Original: `Retry-After` bei 503 und 429 (das
+Original schickt den Kopf nie; §7 „Fehlerverhalten" verlangt ihn) und die
+Rate in der 14er-Meldung, die aus `ratelimit.per_ip_per_min` in
+Anfragen/Sekunde umgerechnet wird. Eigene Fehlerantworten sind immer JSON,
+auch bei `format=xml|jsonp` — der Wächter baut keine zweite
+Format-Schicht.
 
 ## 8. Verhaltensregeln & Invarianten
 

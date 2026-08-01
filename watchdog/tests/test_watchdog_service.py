@@ -126,6 +126,11 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     Seit Phase 17 kommt der Lookup-Cache dazu — eine zweite SQLite-Datei
     auf demselben Cache-Pool. Er ist der Grund, warum eine Anfrage das
     Array *gar nicht mehr* braucht; eine Verbindung dorthin ist er nicht.
+
+    Seit Phase 18 stehen Key-Pruefung und Rate-Limit am Eingang. Beide
+    gehoeren ausdruecklich hierher: sie rechnen im Speicher bzw. lesen die
+    eigene SQLite und muessen deshalb auch bei schlafendem Stack
+    funktionieren — sonst waere ausgerechnet ein Cache-Treffer ungeschuetzt.
     """
     attributes = set(vars(service))
     assert attributes == {
@@ -134,6 +139,8 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "cache",
         "config_store",
         "state",
+        "auth",
+        "ratelimit",
         "docker",
         "probe",
         "proxy",

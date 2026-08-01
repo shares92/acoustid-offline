@@ -25,12 +25,22 @@ Proxy waere eine zweite, konkurrierende Spezifikation:
   denen die Parameterlesart haengt (Chromaprint-Base64).
 
 Eigene Antworten gibt der Proxy nur dort, wo es keine fremde gibt: wenn der
-Stack nicht rechtzeitig bereit wird (``503`` + ``Retry-After``, §7) oder
-wenn die API waehrend der Uebertragung wegbricht. Diese beiden tragen das
-AcoustID-Fehlerformat mit Code 13 — dieselbe Tabelle, aus der die API ihre
-Fehler nimmt (``ERROR_CODES`` in :mod:`acoustid_api.errors`); der Waechter
-haelt sie hier nach, weil beide Dienste getrennte Images sind
+Stack nicht rechtzeitig bereit wird (``503`` + ``Retry-After``, §7), wenn
+die API waehrend der Uebertragung wegbricht — und seit Phase 18 dort, wo
+der Waechter die Anfrage gar nicht erst durchlaesst (fehlender/ungueltiger
+Key, ueberschrittenes Rate-Limit). Alle tragen das AcoustID-Fehlerformat
+mit einem Code aus derselben Tabelle, aus der die API ihre Fehler nimmt
+(``ERROR_CODES`` in :mod:`acoustid_api.errors`); der Waechter haelt die
+gebrauchten Codes hier nach, weil beide Dienste getrennte Images sind
 (DECISIONS 2026-07-25 „Getrennte Images").
+
+**Die eigenen Fehlertexte nennen keine Interna** (Phase 18, Hinweis aus
+Phase 15). Bis dahin stand im 503 der Containername oder die interne URL,
+an der das Wecken scheiterte — im LAN unkritisch, bei einer nach aussen
+exponierten Instanz eine Auskunft ueber den inneren Aufbau an jeden, der
+fragt. Der Client bekommt jetzt den Wortlaut, den auch das Original zu
+Code 13 schickt (:data:`ERROR_MESSAGES`); der Grund steht unveraendert im
+Containerlog und, wo er einen Zustandswechsel bedeutet, im Ereignis-Log.
 
 Seit Phase 17 gibt es **eine** Ausnahme vom Streaming, und zwar nur dort,
 wo der Lookup-Cache sie braucht: :meth:`ReverseProxy.forward_capturing`
@@ -40,8 +50,10 @@ Streaming-Pfad zurueck — der Waechter haelt nie eine ganze Antwort im
 Speicher, nur weil es einen Cache gibt. Was der Client bekommt, ist in
 beiden Faellen dasselbe.
 
-Auth-Pruefung und Rate-Limit gehoeren ebenfalls an diese Stelle, kommen
-aber erst in Phase 18.
+Auth-Pruefung und Rate-Limit liegen ebenfalls auf diesem Weg, stehen aber
+in eigenen Modulen (:mod:`acoustid_watchdog.auth`,
+:mod:`acoustid_watchdog.ratelimit`); die Reihenfolge setzt
+:func:`acoustid_watchdog.main._proxy`.
 """
 
 from __future__ import annotations
@@ -58,6 +70,11 @@ from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
 __all__ = [
+    "ERROR_INVALID_API_KEY",
+    "ERROR_MESSAGES",
+    "ERROR_MISSING_PARAMETER",
+    "ERROR_RATE_LIMIT",
+    "ERROR_REQUEST_TOO_LARGE",
     "ERROR_SERVICE_UNAVAILABLE",
     "HOP_BY_HOP_HEADERS",
     "RequestContent",
@@ -89,10 +106,42 @@ HOP_BY_HOP_HEADERS: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: Fehlercode 13 der AcoustID-Tabelle: „service currently unavailable"
-#: (HTTP 503). Wortlaut wie in :mod:`acoustid_api.errors`.
+#: Die Codes der AcoustID-Fehlertabelle, die der Waechter selbst erzeugt.
+#: Sie sind die Teilmenge von ``acoustid_api.errors.ERROR_CODES``, die auf
+#: seinem Weg entstehen kann — nachgehalten, weil Waechter und API getrennte
+#: Images sind (Modul-Docstring).
+#:
+#: =====  ======  ===============================================
+#: Code   HTTP    Wann
+#: =====  ======  ===============================================
+#: 2      400     ``client`` fehlt im ``apikey``-Modus (Phase 18)
+#: 4      400     ``client`` ist kein gueltiger Key (Phase 18)
+#: 13     503     Stack nicht bereit / API weggebrochen (Phase 15)
+#: 14     429     IP-Rate-Limit ueberschritten (Phase 18)
+#: 19     413     Rumpf zu gross, um den Key zu lesen (Phase 18)
+#: =====  ======  ===============================================
+ERROR_MISSING_PARAMETER: Final = 2
+ERROR_INVALID_API_KEY: Final = 4
 ERROR_SERVICE_UNAVAILABLE: Final = 13
-_ERROR_MESSAGE: Final = "service currently unavailable, try again later"
+ERROR_RATE_LIMIT: Final = 14
+ERROR_REQUEST_TOO_LARGE: Final = 19
+
+#: Die festen Meldungstexte zu diesen Codes — **wortgleich** zu
+#: :mod:`acoustid_api.errors` und damit zum Original. Zwei tragen einen
+#: Platzhalter, den der Aufrufer fuellt (``client`` bzw. die Rate).
+#:
+#: Der Wortlaut ist Vertragsteil: Clients werten zwar den Code aus, aber die
+#: Vergleichbarkeit mit den Original-Antworten ist genau der Punkt, an dem
+#: „bug-fuer-bug kompatibel" ueberpruefbar bleibt. Und er ist zugleich die
+#: gewuenschte Zurueckhaltung: kein Text nennt einen Containernamen, eine
+#: URL oder einen Grund, den nur der Betreiber angeht.
+ERROR_MESSAGES: Final[dict[int, str]] = {
+    ERROR_MISSING_PARAMETER: 'missing required parameter "{name}"',
+    ERROR_INVALID_API_KEY: "invalid API key",
+    ERROR_SERVICE_UNAVAILABLE: "service currently unavailable, try again later",
+    ERROR_RATE_LIMIT: "rate limit ({rate:f} requests per second) exceeded, try again later",
+    ERROR_REQUEST_TOO_LARGE: "request too large",
+}
 
 #: Leseschranke einer weitergeleiteten Anfrage. Grosszuegig: ein Batch mit
 #: hundert Fingerprints rechnet synchron im Threadpool der API (Hinweis aus
@@ -104,15 +153,29 @@ DEFAULT_TIMEOUT_S: Final = 120.0
 DEFAULT_CONNECT_TIMEOUT_S: Final = 5.0
 
 
-def error_response(status_code: int, message: str, *, retry_after_s: int | None = None) -> Response:
+def error_response(
+    status_code: int,
+    message: str,
+    *,
+    code: int = ERROR_SERVICE_UNAVAILABLE,
+    retry_after_s: int | None = None,
+) -> Response:
     """Eine eigene Antwort im AcoustID-Fehlerformat.
 
     Args:
-        status_code: HTTP-Status (503 beim Wecken, §7).
-        message: Klartext fuer den Client.
+        status_code: HTTP-Status (503 beim Wecken, 400/429/413 in Phase 18).
+        message: Meldungstext — aus :data:`ERROR_MESSAGES`, nie ein
+            interner Grund (Modul-Docstring).
+        code: Fehlercode der AcoustID-Tabelle.
         retry_after_s: Setzt ``Retry-After`` in Sekunden.
+
+    ``Retry-After`` schickt das Original **nicht** (auch nicht bei 429). Der
+    Waechter setzt es trotzdem, weil ARCHITECTURE §7 „Fehlerverhalten" es
+    fuer beide Faelle ausdruecklich verlangt: er weiss, anders als das
+    Original, ungefaehr *wann* es wieder geht. Ein zusaetzlicher Kopf bricht
+    keinen Client — Picard etwa ignoriert ihn schlicht (Phase-1-Bericht).
     """
-    payload = {"status": "error", "error": {"code": ERROR_SERVICE_UNAVAILABLE, "message": message}}
+    payload = {"status": "error", "error": {"code": code, "message": message}}
     headers = {"Access-Control-Allow-Origin": "*"}
     if retry_after_s is not None:
         headers["Retry-After"] = str(retry_after_s)

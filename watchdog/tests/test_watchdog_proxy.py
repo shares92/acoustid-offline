@@ -293,10 +293,16 @@ def test_wake_timeout_answers_503(daemon: FakeDaemon, env_settings: EnvSettings)
     assert daemon.all_running is True
 
 
-def test_start_failure_answers_503_with_the_reason_and_recovers(
+def test_start_failure_answers_503_without_naming_internals(
     env_settings: EnvSettings, upstream: RecordingProxyTransport
 ) -> None:
-    """Stack-Start-Fehler -> 503 + Fehlertext + Ereignis (§7, Phase 16).
+    """Stack-Start-Fehler -> 503 + Ereignis (§7, Phase 16), Text generisch.
+
+    Seit Phase 18 nennt die Antwort **keine Interna** mehr: bis dahin stand
+    der Containername im Fehlertext — im LAN unkritisch, bei einer nach
+    aussen exponierten Instanz eine Auskunft ueber den inneren Aufbau an
+    jeden, der fragt. Der Grund steht jetzt nur noch im Ereignis-Log; der
+    Client bekommt den Wortlaut, den auch das Original zu Code 13 schickt.
 
     Und der Weg zurueck: der Betreiber legt den fehlenden Container an, die
     naechste Anfrage weckt — ohne Neustart des Waechters.
@@ -320,8 +326,11 @@ def test_start_failure_answers_503_with_the_reason_and_recovers(
 
         assert response.status_code == 503
         assert response.json()["error"]["code"] == 13
-        # Der Fehlertext nennt den Grund, nicht nur „nicht bereit".
-        assert "acoustid-api" in response.json()["error"]["message"]
+        # Der Wortlaut des Originals — und kein Wort ueber den Aufbau.
+        assert response.json()["error"]["message"] == (
+            "service currently unavailable, try again later"
+        )
+        assert "acoustid-api" not in response.text
         assert service.state.state is StackState.ERROR
         assert upstream.requests == []
 
@@ -332,6 +341,8 @@ def test_start_failure_answers_503_with_the_reason_and_recovers(
         )
         assert failure.level is EventLevel.ERROR
         assert failure.source == "wake"
+        # Der Grund ist nicht verloren — er steht im Ereignis-Log.
+        assert "acoustid-api" in str(failure.extra)
 
         daemon.containers["acoustid-api"] = False  # Container ist da
         assert client.get("/v2/lookup?client=abc").status_code == 200

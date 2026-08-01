@@ -24,6 +24,14 @@ tatsaechlich steuert — und nur diese drei sprechen ueberhaupt nach aussen:
 * **Reverse-Proxy** (:mod:`acoustid_watchdog.proxy`) — der Weg von
   ``/v2/*`` zum API-Dienst.
 
+Seit Phase 18 haengen zwei Waechter am Eingang des Proxy-Pfads — beide
+ebenfalls ohne jeden Kontakt zum Stack:
+
+* **Key-Pruefung** (:mod:`acoustid_watchdog.auth`) — der ``apikey``-Modus,
+  aus der Tabelle ``api_key`` der Zustandsdatenbank.
+* **IP-Rate-Limit** (:mod:`acoustid_watchdog.ratelimit`) — ein gleitendes
+  Minutenfenster im Speicher, aktiv in beiden Auth-Modi.
+
 Seit Phase 17 liegt neben der Zustandsdatenbank die **Cache-Datei**
 (:mod:`acoustid_watchdog.cache`) — bewusst eine eigene Ablage, damit die
 Massenschreibvorgaenge des Lookup-Caches den Zustand nicht belasten
@@ -57,6 +65,7 @@ from typing import Any, Self
 
 from acoustid_watchdog import __version__
 from acoustid_watchdog.admin import ensure_admin_user
+from acoustid_watchdog.auth import ApiKeyAuthenticator
 from acoustid_watchdog.cache import LookupCache
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.docker import DockerClient
@@ -68,6 +77,7 @@ from acoustid_watchdog.lifecycle import (
     StatePoller,
 )
 from acoustid_watchdog.proxy import ReverseProxy
+from acoustid_watchdog.ratelimit import IpRateLimiter
 from acoustid_watchdog.reload import ReloadMarker
 from acoustid_watchdog.state import StackStateTracker, StackStatus
 from acoustid_watchdog.store import Database
@@ -154,6 +164,12 @@ class WatchdogService:
         self.docker = docker if docker is not None else DockerClient()
         self.probe = probe if probe is not None else ReadinessProbe()
         self.proxy = proxy if proxy is not None else ReverseProxy(API_BASE_URL)
+        # Die beiden Waechter am Eingang (Phase 18). Beide leben im
+        # Speicher bzw. auf der Zustandsdatenbank und beruehren den Stack
+        # nie — deshalb duerfen sie vor dem Cache stehen (Invariante §8.2).
+        self.auth = ApiKeyAuthenticator(self.db)
+        self.ratelimit = IpRateLimiter()
+
         self.stack = StackController(self.docker)
         self.wake = WakeCoordinator(
             self.stack,
