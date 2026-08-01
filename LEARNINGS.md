@@ -429,3 +429,21 @@ Anwenden: Zähler nach dem benennen, was sie messen (hier wäre
 `lesart_wechsel` o. ä. klarer); im Docstring die Nicht-Bedeutung
 explizit ausschließen; bei Auffälligkeiten die Rohgröße unabhängig
 nachzählen statt der Metrik zu vertrauen.
+
+## [Technik] Compose: gleicher Projektname teilt Named Volumes — `down -v` räumt sie mit ab
+
+Was: docker-compose.watchdog.yml trägt bewusst denselben Projektnamen
+wie die Stack-Datei, damit beide dasselbe Named Volume `watchdog-data`
+sehen (Compose präfigiert Volumenamen mit dem Projektnamen). Ein
+`down` auf der einen Datei lässt die Dienste der anderen stehen (nur
+„orphan containers"-Meldung), aber **`down -v` löscht auch das
+geteilte Volume** — hier mitsamt config.yaml, SQLite-Zustand und Keys.
+Warum: Die Volume-Teilung über den Projektnamen ist bequem, koppelt
+aber die Lebensdauer der Daten an JEDE beteiligte Compose-Datei — die
+Dateitrennung suggeriert eine Isolation, die für `-v` nicht gilt.
+Anwenden: Bei mehreren Compose-Dateien mit geteiltem Volume die
+`down -v`-Falle in beide Dateiköpfe schreiben; im echten Betrieb
+Host-Bind-Mounts bevorzugen (Unraid: `ACOUSTID_WATCHDOG_DATA` auf
+einen Cache-Share), dann greift das Named Volume gar nicht erst.
+Alternativen (`external`-Volume, eigener Projektname) erzwingen eine
+Startreihenfolge und wurden deshalb verworfen (DECISIONS 2026-08-01).

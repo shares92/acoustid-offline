@@ -472,7 +472,12 @@ Details: [docs/research/phase1-mb-schema.md](docs/research/phase1-mb-schema.md).
 ### config.yaml (Wächter, Cache)
 Alle Laufzeit-Einstellungen (siehe §6). Vom Wächter gelesen/geschrieben;
 der API-Layer erhält die relevante Teilmenge beim Start bzw. per
-Reload-Signal vom Wächter.
+Reload-Signal vom Wächter. Das Reload-Signal ist eine Markierungsdatei
+`config.yaml.reload` neben der Konfiguration (JSON mit monoton
+wachsendem Zähler, atomar geschrieben; Sendeseite Phase 14,
+`watchdog/app/reload.py`) — sie läuft über denselben read-only-Mount,
+aus dem der Stack die config.yaml liest; Empfangsseite im API-Dienst
+ab Phase 15.
 
 ## 6. Konfiguration — Schlüssel, Defaults, feste Werte
 

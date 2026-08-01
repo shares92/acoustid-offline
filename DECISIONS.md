@@ -779,3 +779,47 @@ Alternativen: Bau schon in Phase 14 (verworfen — Paket nicht mehr
 disjunkt, kein Abnehmer vor Phase 15); bestehende Route/TCP als Probe
 (verworfen — fragil, verwechselt „Prozess lauscht" mit „Backends
 bereit"). (Betreiber-Entscheid 2026-08-01.)
+
+## 2026-08-01: Phase-14-Wächter-Details (Grundgerüst, SQLite & /status)
+
+Entscheidung: (1) **Eigener SQLite-Migrationsläufer über `PRAGMA
+user_version`** statt Mitnutzung von shared/db — eine Einzeldatei-DB
+braucht weder Advisory-Locks noch Drift-Prüfung; eine Verbindung
+hinter RLock, WAL, Zeitstempel ISO-8601-UTC wie im JSON-Log.
+(2) **Ringpuffer exakt über die sortierte Auswahl** (`DELETE … WHERE id
+NOT IN (SELECT id … ORDER BY id DESC LIMIT n)`), nicht über
+`id <= MAX(id) - n` — AUTOINCREMENT-Lücken machten die Rechenvariante
+zu großzügig; Schreiben+Beschneiden in einer Transaktion.
+`EVENT_LOG_LIMIT = 5000` bleibt Konstante, kein §6-Schlüssel (§6 ist
+eine abgestimmte Liste; Bedarfsfall Phase 27). (3) **Klartext-Passwort
+nur ins Containerlog**, nie ins persistente event_log (läge dort hinter
+genau der Anmeldung, für die es gilt); event_log erhält nur den
+Vermerk. (4) **Datenstand für /status aus der eigenen
+`update_run`-Kopie**, nie aus `import_state` (liegt auf dem Array —
+Invariante §8.2 „weckt nie" ist damit baulich erfüllt); Phase 19 füllt
+die Kopie aus dem Importer-Report. (5) **Reload-Signal als
+Markierungsdatei** `config.yaml.reload` neben der config.yaml (JSON,
+monoton wachsender Zähler, atomar via Temp-Datei+rename, 0644) — vor
+Phase 15 existiert kein anderer Kanal; Empfangsseite im API-Dienst ist
+Phase 15 (Vormerkung im Phasenblock). (6) **Stack-Zustand nur im
+Speicher** — ein persistierter Wert wäre nach Neustart bestenfalls
+veraltet; ab Phase 15 wird er aus Docker erhoben. (7) **Kein neues
+AOFF_-Env für den SQLite-Pfad**: `watchdog.sqlite3` wird aus
+`AOFF_DATA_DIR` abgeleitet (shared/env.py und .env.example sind
+testgekoppelt und bleiben unberührt). (8) **docker-compose.watchdog.yml
+trägt denselben Projektnamen** `acoustid-offline` wie die Stack-Datei,
+damit beide das Volume `watchdog-data` teilen; `down -v`-Falle im
+Dateikopf dokumentiert, auf Unraid entschärft ein Host-Bind-Mount
+(`ACOUSTID_WATCHDOG_DATA`) das Risiko. (9) **Container-Healthcheck des
+Wächters ist /status selbst** (python/urllib; Basisimage hat weder curl
+noch wget) — prüft die Kette bis in die SQLite und weckt nichts.
+Begründung: Alle Wege halten die Invariante §8.2 baulich ein (kein
+Postgres-, Index-, MB- oder Docker-Pfad im Wächter der Phase 14) und
+vermeiden Migrationen/Env-Erweiterungen ohne Abnehmer.
+Alternativen: shared/db-Runner für SQLite (verworfen — falsche
+Maschinerie); Limit als Config-Schlüssel (verworfen — §6 nicht
+eigenmächtig erweitern); Passwort ins event_log (verworfen — Leck);
+Datenstand aus import_state (verworfen — Array-Zugriff); eigener
+Compose-Projektname + external Volume (verworfen — Wächter startete
+erst nach dem Stack); Bind-Mount als Compose-Default (verworfen —
+Musterbruch zu den übrigen Diensten).

@@ -7,29 +7,24 @@ liegen in der Git-Historie dieser Datei und im Session-Archiv
 (`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status (2026-08-01): Phasen 0–13 abgeschlossen — API-Block komplett.
-Repo https://github.com/shares92/acoustid-offline, HEAD `abd1225`,
-Arbeitsbaum sauber, CI grün (1349 Tests, drei Jobs: Lint+Unit,
-Integration PG+Index, Bit-Verifikation pg_acoustid). Warten auf Go für
-Phase 14 (Wächter-Grundgerüst).**
+**Status (2026-08-01): Phasen 0–14 abgeschlossen — Wächter-Grundgerüst
+steht. Repo https://github.com/shares92/acoustid-offline, Phase-14-
+Commit `7ce2cd5` (danach Doku-Sweep), Arbeitsbaum sauber, CI grün
+(1443 Tests, drei Jobs: Lint+Unit 1191+43 übersprungen, Integration
+PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 Netz-Tests laufen nie
+in CI). Warten auf Go für Phase 15 (Wächter — Proxy, Docker-Steuerung
+& Wecken).**
 
-## Session-Übergabe (Session-Ende 2026-08-01)
+## Session-Übergabe (Stand 2026-08-01, nach Phase 14)
 
-**Kurzbeschreibung:** Session vom 25.07. (Steuerungsdateien aus dem
-Handoff erzeugt, Recherche-Phasen 0–1, Bauphasen 2–6) mit Fortsetzung
-am 01.08.: Das Go „weiter mit Phase 7" traf auf ein Repo, das durch
-parallele Sessions bereits auf Phase 13 stand — statt Doppelbau wurde
-die bestehende Phase 7 vollständig nachverifiziert (1338 Tests grün
-gegen echte Container, Batch-Messreihe, Entescape-Durchstich bis in
-die DB). Ertrag: ein LEARNINGS-Eintrag, ein DECISIONS-Prozessentscheid
-(Stand-Vorprüfung), Gedächtnis-/Doku-Abgleich.
-
-Die parallele Bau-Session (Probelauf-Anleitung + Phasen 10–13, Commits
-8fad234…ebdbdcc) ist inzwischen ebenfalls sauber beendet; ihr Review:
-`sessions/2026-07-26-phasen-10-13-api-block.md`. Neu aus ihrem
-Abschluss: LEARNINGS-Folgefund zur CI-Beobachtung (Registry-Flakes,
-`cancel-in-progress`-„cancelled" ist kein Fehler). Am offenen Stand
-ändert sich nichts — Punkt 1 unten (Go Phase 14) bleibt der Einstieg.
+**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Go für
+Phase 14 erteilt, Healthcheck-Mitentscheid getroffen (interner
+API-Endpunkt ja, Bau erst Phase 15 — DECISIONS 2026-08-01), Phase 14
+durch Opus-Bau-Agent im Worktree gebaut (Stand-Vorprüfung bestanden),
+vom Orchestrator verifiziert (Code-Review + Suite + ruff lokal),
+ff-Merge `7ce2cd5`, CI-Lauf beobachtet und grün, 5-Phasen-Doku-Sweep
+(10–14) erledigt. Der Bau-Agent hat zusätzlich am echten Container
+verifiziert (Erststart, /status, Neustart-Idempotenz, Healthcheck).
 
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
@@ -39,17 +34,23 @@ Epochen-Lesart, transaktionaler Import, Index-Feed, Bootstrap-Job mit
 meta/MB-Resolver, /v2/submit off/local/local+upstream mit
 Upstream-Queue, /v2/lookup/batch, /v2/submission_status) — alles
 bug-für-bug-kompatibel dokumentiert (docs/api-lookup.md,
-docs/api-submit.md, docs/importer-job.md).
-**Existiert noch nicht:** der gesamte Wächter (Phasen 14–22: Proxy,
-Wecken, Cache, Auth, Scheduler, Notify, Backup, Metrics), die Admin-UI
-(23–27, Designpaket abgenommen unter docs/design/), E2E/Release
-(28–29). `watchdog/app/` ist ein leeres Skeleton. Nie gelaufen:
-Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
+docs/api-submit.md, docs/importer-job.md). **Neu (Phase 14):**
+Wächter-Grundgerüst `acoustid_watchdog` (FastAPI, nur `GET /status`
+— weckt baulich nie), SQLite-Zustandsdatenbank mit eigenem
+`user_version`-Migrationsläufer (api_key, admin_user, update_run,
+event_log mit Ringpuffer 5000), Erststart (config.yaml-Anlage,
+argon2-Admin-Passwort nur ins Containerlog), Reload-Signal-Sendeseite
+(`config.yaml.reload`, monotoner Zähler), docker-compose.watchdog.yml.
+**Existiert noch nicht:** Wächter-Kern (Phasen 15–22: Proxy, Wecken,
+Zustandsmaschine, Cache, Auth, Scheduler, Notify, Backup, Metrics),
+Admin-UI (23–27, Designpaket abgenommen unter docs/design/),
+E2E/Release (28–29). Nie gelaufen: Voll-Bootstrap am echten
+Datenbestand, echter Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung Phase 14** einholen (Wächter-Grundgerüst;
-   Phasenblock unten inkl. Healthcheck-Mitentscheid) — die Go-Frage
-   vom 01.08. wurde vom Betreiber verworfen, kein Go erteilt.
+1. **Go-Entscheidung Phase 15** einholen (Proxy, Docker-Steuerung &
+   Wecken; inkl. Bau des internen API-Healthcheck-Endpunkts und der
+   Reload-Empfangsseite — Hinweise im Phasenblock unten).
 2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
    Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
    daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
@@ -63,12 +64,10 @@ Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
-Arbeitsregeln), dann per AskUserQuestion das Go für Phase 14 einholen
-(Optionen: Phase 14 / Unraid-Probelauf / beides parallel) und bei Go
-einen Opus-Bau-Agenten mit dem Phase-14-Block unten beauftragen —
-inklusive Stand-Vorprüfung im Auftragstext (DECISIONS 2026-08-01).
-Nach Abschluss von Phase 14 ist der volle 5-Phasen-Doku-Sweep mit
-Diff-Anzeige fällig (Phasen 10–14).
+Arbeitsregeln), dann per AskUserQuestion das Go für Phase 15 einholen
+und bei Go einen Opus-Bau-Agenten mit dem Phase-15-Block unten
+beauftragen — inklusive Stand-Vorprüfung im Auftragstext (DECISIONS
+2026-08-01). Nächster voller Doku-Sweep: nach Phase 19.
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
@@ -103,7 +102,7 @@ Diff-Anzeige fällig (Phasen 10–14).
 - Nach Abschluss jeder 5. Phase: PROGRESS.md, DECISIONS.md und (falls
   relevant) ARCHITECTURE.md und LEARNINGS.md eigenständig aktualisieren
   und die Diffs zeigen, bevor es weitergeht. (Nächster Sweep: nach
-  Phase 14.)
+  Phase 19.)
 - Jede UI-Phase endet mit Sicht-Check am gerenderten Ergebnis
   (Screenshot vs. Design, Desktop + schmale Breite).
 - Admin-UI (Phasen 23–27): Das abgenommene Designpaket unter
@@ -112,7 +111,7 @@ Diff-Anzeige fällig (Phasen 10–14).
 
 ---
 
-## Ergebnisse der abgeschlossenen Phasen 0–13
+## Ergebnisse der abgeschlossenen Phasen 0–14
 
 Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 `abd1225`); Entscheide: DECISIONS.md; Berichte: docs/research/.
@@ -133,31 +132,9 @@ Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 | 11 | API: /v2/submit off/local | ead4790, b15c60b | local_submission, synchrone Indexierung, Doc-ID u32-Finding [2^31, 2^32-1], docs/api-submit.md |
 | 12 | API: Upstream & Queue | 657ee14 | drain_queue/retry_forward, ≤3 req/s, 7-Fehler-Grenze → upstream_forward_gave_up, Mock-Upstream-Tests |
 | 13 | API: Batch & submission_status | 1d8874a | queries/responses-Vertrag (Teilfehler bei 200, Limit 100→19/413, meta-Bündelung); Status nie 404 |
+| 14 | Wächter: Grundgerüst, SQLite & /status | 7ce2cd5 | Paket `acoustid_watchdog` (FastAPI), SQLite-Migrationsläufer (`PRAGMA user_version`), event_log-Ringpuffer 5000 exakt, /status baulich weckfrei, Erststart-Passwort argon2 nur ins Containerlog, Reload-Marke `config.yaml.reload`, compose+Healthcheck; am echten Container verifiziert |
 
 ---
-
-## Phase 14: Wächter — Grundgerüst, SQLite & /status
-
-Ziel: Dauerläufer-Skeleton mit Zustandshaltung; `/status` weckt nie.
-
-Aufgaben:
-- [ ] FastAPI-App watchdog/; SQLite-Schema: `api_key`, `admin_user`,
-      `update_run`, `event_log` (Ringpuffer-Begrenzung)
-- [ ] config.yaml lesen/schreiben über shared; Reload-Signal-Mechanik
-      Richtung API vorbereiten
-- [ ] `GET /status`: Stack-Zustand, Datenstand, letzter Update-Lauf,
-      Version — ausschließlich aus Wächter-Daten
-- [ ] Erststart: Admin-Passwort generieren (argon2-Hash) + ins Log
-- [ ] compose: docker-compose.watchdog.yml
-
-Definition of Done: /status- und Erststart-Tests grün; Event-Log
-begrenzt korrekt.
-
-Hinweis (aus Phase 9): Der api-Container hat bewusst noch keinen
-Healthcheck-Endpunkt (§7 sieht keinen vor). Spätestens fürs
-Wake-on-request (Phase 15) braucht der Wächter eine
-Bereitschaftsprüfung der API — in dieser Phase mitentscheiden, ob dafür
-ein interner Endpunkt in die API kommt.
 
 ## Phase 15: Wächter — Proxy, Docker-Steuerung & Wecken
 
@@ -179,6 +156,16 @@ Hinweis (aus Phase 13): `GET /v2/lookup/batch` liefert FastAPIs
 nacktes 405 ohne AcoustID-Fehlerformat (einzige solche Antwort; kein
 passender 19er-Code). Falls ein einheitliches Fehlerbild gewünscht
 ist, wäre der Proxy hier der Ort.
+
+Hinweis (aus Phase 14, Entscheide 2026-08-01): (1) Der **interne
+Healthcheck-Endpunkt der API** wird in dieser Phase gebaut (DECISIONS
+2026-08-01: nicht öffentlich dokumentiert, prüft DB- und
+Index-Anbindung leichtgewichtig) — er ist die Bereitschaftsprüfung
+des Wake-on-request. (2) Die **Empfangsseite des Reload-Signals**
+gehört hierher: der API-Dienst liest die Marke `config.yaml.reload`
+(JSON mit monotonem Zähler `generation`, liegt neben der config.yaml
+im read-only /watchdog-Mount; Sendeseite `watchdog/app/reload.py`)
+beim Start und periodisch.
 
 ## Phase 16: Wächter — Zustandsmaschine, Idle-Stopp & Startfehler
 
@@ -400,6 +387,11 @@ Aufgaben:
 - [ ] Datenerfassung ergänzen, wo nötig (DB-/Index-Größe beim
       Update-Lauf, sofern nicht schon in Phase 19 erfasst)
 - [ ] Sicht-Check
+
+Hinweis (aus Phase 14): Das Ereignis-Log ist auf
+`EVENT_LOG_LIMIT = 5000` Einträge begrenzt (Konstante in
+`watchdog/app/events.py`, kein §6-Schlüssel) — braucht die Logansicht
+mehr Historie, dort erhöhen.
 
 Definition of Done: Beide Seiten funktional mit echten Wächter-Daten
 (Fixtures für Zeitreihen); Sicht-Check bestanden.
