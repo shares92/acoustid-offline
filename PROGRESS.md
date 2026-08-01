@@ -7,24 +7,26 @@ liegen in der Git-Historie dieser Datei und im Session-Archiv
 (`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status (2026-08-01): Phasen 0–14 abgeschlossen — Wächter-Grundgerüst
-steht. Repo https://github.com/shares92/acoustid-offline, Phase-14-
-Commit `7ce2cd5` (danach Doku-Sweep), Arbeitsbaum sauber, CI grün
-(1443 Tests, drei Jobs: Lint+Unit 1191+43 übersprungen, Integration
-PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 Netz-Tests laufen nie
-in CI). Warten auf Go für Phase 15 (Wächter — Proxy, Docker-Steuerung
-& Wecken).**
+**Status (2026-08-01): Phasen 0–15 abgeschlossen — Wake-on-request
+funktioniert E2E. Repo https://github.com/shares92/acoustid-offline,
+Phase-15-Commit `3f9daee` (danach Doku-Update), Arbeitsbaum sauber,
+CI grün (1506 Tests, drei Jobs: Lint+Unit 1251+43 übersprungen,
+Integration PG+Index 198, Bit-Verifikation pg_acoustid 8; je 3
+network-/compose-Tests laufen nie in CI, der Compose-E2E-Wecktest lief
+lokal zweifach grün). Warten auf Go für Phase 16 (Wächter —
+Zustandsmaschine, Idle-Stopp & Startfehler).**
 
-## Session-Übergabe (Stand 2026-08-01, nach Phase 14)
+## Session-Übergabe (Stand 2026-08-01, nach Phase 15)
 
-**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Go für
-Phase 14 erteilt, Healthcheck-Mitentscheid getroffen (interner
-API-Endpunkt ja, Bau erst Phase 15 — DECISIONS 2026-08-01), Phase 14
-durch Opus-Bau-Agent im Worktree gebaut (Stand-Vorprüfung bestanden),
-vom Orchestrator verifiziert (Code-Review + Suite + ruff lokal),
-ff-Merge `7ce2cd5`, CI-Lauf beobachtet und grün, 5-Phasen-Doku-Sweep
-(10–14) erledigt. Der Bau-Agent hat zusätzlich am echten Container
-verifiziert (Erststart, /status, Neustart-Idempotenz, Healthcheck).
+**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14 und
+15 nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
+Stand-Vorprüfung jeweils bestanden), vom Orchestrator verifiziert
+(Code-Review + Suite + ruff; Phase 15 zusätzlich E2E-Wecktest gegen
+echte Container doppelt gefahren — Agent und Orchestrator), ff-Merges
+`7ce2cd5`/`3f9daee`, alle CI-Läufe beobachtet und grün,
+5-Phasen-Doku-Sweep (10–14) und Doku-Update nach 15 erledigt.
+Healthcheck-Mitentscheid: interner API-Endpunkt `/_health`, gebaut in
+Phase 15 (DECISIONS 2026-08-01).
 
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
@@ -34,23 +36,29 @@ Epochen-Lesart, transaktionaler Import, Index-Feed, Bootstrap-Job mit
 meta/MB-Resolver, /v2/submit off/local/local+upstream mit
 Upstream-Queue, /v2/lookup/batch, /v2/submission_status) — alles
 bug-für-bug-kompatibel dokumentiert (docs/api-lookup.md,
-docs/api-submit.md, docs/importer-job.md). **Neu (Phase 14):**
-Wächter-Grundgerüst `acoustid_watchdog` (FastAPI, nur `GET /status`
-— weckt baulich nie), SQLite-Zustandsdatenbank mit eigenem
-`user_version`-Migrationsläufer (api_key, admin_user, update_run,
-event_log mit Ringpuffer 5000), Erststart (config.yaml-Anlage,
-argon2-Admin-Passwort nur ins Containerlog), Reload-Signal-Sendeseite
-(`config.yaml.reload`, monotoner Zähler), docker-compose.watchdog.yml.
-**Existiert noch nicht:** Wächter-Kern (Phasen 15–22: Proxy, Wecken,
-Zustandsmaschine, Cache, Auth, Scheduler, Notify, Backup, Metrics),
-Admin-UI (23–27, Designpaket abgenommen unter docs/design/),
+docs/api-submit.md, docs/importer-job.md). **Wächter (Phasen 14–15):**
+Grundgerüst `acoustid_watchdog` (SQLite-Zustandsdatenbank mit
+`user_version`-Migrationsläufer, event_log-Ringpuffer 5000, `GET
+/status` baulich weckfrei, Erststart mit argon2-Passwort nur ins
+Containerlog), Reverse-Proxy `/v2/*` (streamend, roh — 405-Eigenheit
+bleibt durchgereicht), Docker-Steuerung über den Socket (3 Routen,
+httpx über uds, keine Fremdbibliothek), Wake-on-request
+(Einzel-Weckvorgang via Task+shield, Timeout → 503+Retry-After 30,
+E2E-verifiziert: Weckdauer ~1,3 s lokal), interner API-Healthcheck
+`GET /_health` (DB+Index, ohne MB), Reload-Signal komplett
+(Sendeseite Marke `config.yaml.reload` + Empfangsseite
+`api/app/reload.py`, 10-s-Intervall, Teilmenge submit.*/
+mb.keep_submitted_mbid).
+**Existiert noch nicht:** Wächter-Rest (Phasen 16–22:
+Zustandsmaschine, Idle-Stopp, Cache, Auth, Scheduler, Notify, Backup,
+Metrics), Admin-UI (23–27, Designpaket abgenommen unter docs/design/),
 E2E/Release (28–29). Nie gelaufen: Voll-Bootstrap am echten
 Datenbestand, echter Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung Phase 15** einholen (Proxy, Docker-Steuerung &
-   Wecken; inkl. Bau des internen API-Healthcheck-Endpunkts und der
-   Reload-Empfangsseite — Hinweise im Phasenblock unten).
+1. **Go-Entscheidung Phase 16** einholen (Zustandsmaschine, Idle-Stopp
+   & Startfehler; Hinweise im Phasenblock unten, u. a. Erkennung des
+   von Hand gestoppten Stacks).
 2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
    Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
    daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
@@ -64,8 +72,8 @@ Datenbestand, echter Upstream-Submit.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
-Arbeitsregeln), dann per AskUserQuestion das Go für Phase 15 einholen
-und bei Go einen Opus-Bau-Agenten mit dem Phase-15-Block unten
+Arbeitsregeln), dann per AskUserQuestion das Go für Phase 16 einholen
+und bei Go einen Opus-Bau-Agenten mit dem Phase-16-Block unten
 beauftragen — inklusive Stand-Vorprüfung im Auftragstext (DECISIONS
 2026-08-01). Nächster voller Doku-Sweep: nach Phase 19.
 
@@ -133,39 +141,9 @@ Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 | 12 | API: Upstream & Queue | 657ee14 | drain_queue/retry_forward, ≤3 req/s, 7-Fehler-Grenze → upstream_forward_gave_up, Mock-Upstream-Tests |
 | 13 | API: Batch & submission_status | 1d8874a | queries/responses-Vertrag (Teilfehler bei 200, Limit 100→19/413, meta-Bündelung); Status nie 404 |
 | 14 | Wächter: Grundgerüst, SQLite & /status | 7ce2cd5 | Paket `acoustid_watchdog` (FastAPI), SQLite-Migrationsläufer (`PRAGMA user_version`), event_log-Ringpuffer 5000 exakt, /status baulich weckfrei, Erststart-Passwort argon2 nur ins Containerlog, Reload-Marke `config.yaml.reload`, compose+Healthcheck; am echten Container verifiziert |
+| 15 | Wächter: Proxy, Docker-Steuerung & Wecken | 3f9daee | Reverse-Proxy `/v2/*` roh/streamend (405-Parität bleibt), DockerClient (3 Routen, httpx über uds, unversioniert), WakeCoordinator (ein Weckvorgang via Task+shield; Timeout → 503+Retry-After 30, Zustand bleibt `starting`), API `GET /_health` (DB+Index, ohne MB) + Reload-Empfang (10 s, Teilmenge, Rest zurückgeschrieben+Warnung), E2E-Wecktest (Marker `compose`, opt-in): Weckdauer ~1,3 s lokal |
 
 ---
-
-## Phase 15: Wächter — Proxy, Docker-Steuerung & Wecken
-
-Ziel: Kernstück On-Demand-Betrieb: Anfrage weckt den Stack.
-
-Aufgaben:
-- [ ] Reverse-Proxy `/v2/*` → acoustid-api
-- [ ] Docker-Steuerung über /var/run/docker.sock: Stack-Container
-      starten/stoppen — bewusst minimaler Code
-- [ ] Wake-on-request: Anfrage halten bis Stack bereit; nach
-      `wake.hold_timeout_s` → `503` + `Retry-After`
-- [ ] Compose-E2E-Test: Anfrage bei schlafendem Stack → Wecken →
-      Antwort
-
-Definition of Done: E2E-Wecktest grün; docker.sock-Codepfad minimal und
-isoliert.
-
-Hinweis (aus Phase 13): `GET /v2/lookup/batch` liefert FastAPIs
-nacktes 405 ohne AcoustID-Fehlerformat (einzige solche Antwort; kein
-passender 19er-Code). Falls ein einheitliches Fehlerbild gewünscht
-ist, wäre der Proxy hier der Ort.
-
-Hinweis (aus Phase 14, Entscheide 2026-08-01): (1) Der **interne
-Healthcheck-Endpunkt der API** wird in dieser Phase gebaut (DECISIONS
-2026-08-01: nicht öffentlich dokumentiert, prüft DB- und
-Index-Anbindung leichtgewichtig) — er ist die Bereitschaftsprüfung
-des Wake-on-request. (2) Die **Empfangsseite des Reload-Signals**
-gehört hierher: der API-Dienst liest die Marke `config.yaml.reload`
-(JSON mit monotonem Zähler `generation`, liegt neben der config.yaml
-im read-only /watchdog-Mount; Sendeseite `watchdog/app/reload.py`)
-beim Start und periodisch.
 
 ## Phase 16: Wächter — Zustandsmaschine, Idle-Stopp & Startfehler
 
@@ -181,6 +159,19 @@ Aufgaben:
 - [ ] Tests: Idle-Stopp, Stopp-Blockade bei laufendem Job, Fehlerpfad
 
 Definition of Done: Zustandsübergänge vollständig getestet.
+
+Hinweis (aus Phase 15): Zwei bekannte Lücken der Phase-15-Wecklogik
+gehören hierher. (1) **Von Hand gestoppter Stack:** der Wächter hält
+die Bereitschaft im Speicher; die erste Anfrage danach läuft ins Leere
+(503 + `invalidate()`), erst die zweite weckt — die Zustandsmaschine
+soll den Zustand aus Docker erheben (Poller), dann verschwindet der
+Fall (Klärungspunkt-Entscheid 2026-08-01: bewusst nicht in Phase 15
+gelöst). (2) **Weck-Frist:** die Weck-Aufgabe im `WakeCoordinator`
+erbt die Frist der Anfrage, die sie startet — ein später dazukommender
+Wartender kann die 503 früher als nach seiner eigenen vollen Haltezeit
+sehen (praktisch harmlos: neuer Vorgang bei nächster Anfrage,
+`docker start` idempotent). Beim Umbau auf die Zustandsmaschine
+mitziehen oder bewusst dokumentiert lassen.
 
 ## Phase 17: Wächter — Lookup-Cache
 
@@ -214,6 +205,11 @@ Aufgaben:
 
 Definition of Done: Auth-/Limit-Tests grün, auch in Kombination mit
 Cache-Hits.
+
+Hinweis (aus Phase 15): Der 503-Fehlertext des Wächters (Wecken
+fehlgeschlagen / API nicht erreichbar) enthält interne Details wie
+Containernamen — im LAN unkritisch; hier, wo Exponierung nach außen
+Thema wird, ggf. generischer fassen.
 
 ## Phase 19: Wächter — Scheduler & Update-Zyklus
 

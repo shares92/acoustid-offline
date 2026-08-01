@@ -476,8 +476,12 @@ Reload-Signal vom Wächter. Das Reload-Signal ist eine Markierungsdatei
 `config.yaml.reload` neben der Konfiguration (JSON mit monoton
 wachsendem Zähler, atomar geschrieben; Sendeseite Phase 14,
 `watchdog/app/reload.py`) — sie läuft über denselben read-only-Mount,
-aus dem der Stack die config.yaml liest; Empfangsseite im API-Dienst
-ab Phase 15.
+aus dem der Stack die config.yaml liest. Empfangsseite seit Phase 15:
+`api/app/reload.py` prüft alle 10 s und übernimmt die zur Anfragezeit
+gelesene Teilmenge (`submit.mode`, `submit.upstream_app_key`,
+`mb.keep_submitted_mbid`); `index.query_hashes` und `mb.dsn` werden
+bewusst nicht übernommen, sondern auf den laufenden Wert
+zurückgeschrieben und als Warnung geloggt.
 
 ## 6. Konfiguration — Schlüssel, Defaults, feste Werte
 
@@ -581,6 +585,11 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
 - **`GET /status`** — Wächter-Endpoint, weckt nie: Stack-Zustand
   (schlafend/startend/bereit/Fehler), Datenstand (letzte Delta-Sequenz),
   letzter Update-Lauf, Version.
+- **`GET /_health`** (api-Container, **intern**, kein Vertragsteil,
+  Phase 15) — Bereitschaftsprüfung für das Wake-on-request des
+  Wächters: DB (`SELECT 1`) + Index (`/<name>/_health`), bewusst ohne
+  MusicBrainz (§8.7); nur im Compose-Netz erreichbar (kein
+  veröffentlichter Port, der Proxy reicht nur `/v2/*` weiter).
 - **`GET /metrics`** — Prometheus-Format, nur wenn `metrics.enabled`.
 - **`/admin/...`** — Admin-UI (server-rendered), Passwort-geschützt.
 

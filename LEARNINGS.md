@@ -447,3 +447,17 @@ Host-Bind-Mounts bevorzugen (Unraid: `ACOUSTID_WATCHDOG_DATA` auf
 einen Cache-Share), dann greift das Named Volume gar nicht erst.
 Alternativen (`external`-Volume, eigener Projektname) erzwingen eine
 Startreihenfolge und wurden deshalb verworfen (DECISIONS 2026-08-01).
+
+## [Technik] pytest: gleichnamige Test-Hilfsmodule kollidieren über Paketgrenzen
+
+Was: Ein `watchdog/tests/stubs.py` hätte mit dem bestehenden
+`api/tests/stubs.py` kollidiert (beide Test-Verzeichnisse liegen ohne
+`__init__.py` im selben pytest-`sys.path`; das zweite Modul gleichen
+Namens wird nie importiert bzw. wirft je nach Importmodus). Lösung:
+Hilfsmodule paket-eindeutig benennen (`watchdog_stubs.py`).
+Warum: Dieselbe Falle wie bei den gleichnamigen `app`-Paketen, nur auf
+Testebene — sie schlägt erst zu, wenn der zweite Service Tests
+bekommt, und sieht dann wie ein Import-Rätsel aus.
+Anwenden: Test-Hilfsmodule in Multi-Service-Repos von Anfang an mit
+Service-Präfix benennen; bei ImportError/AttributeError in Tests zuerst
+auf Namenskollisionen über Verzeichnisgrenzen prüfen.

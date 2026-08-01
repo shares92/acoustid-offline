@@ -823,3 +823,56 @@ Datenstand aus import_state (verworfen — Array-Zugriff); eigener
 Compose-Projektname + external Volume (verworfen — Wächter startete
 erst nach dem Stack); Bind-Mount als Compose-Default (verworfen —
 Musterbruch zu den übrigen Diensten).
+
+## 2026-08-01: Phase-15-Details (Proxy, Docker-Steuerung, Wecken, Healthcheck, Reload)
+
+Entscheidung: (1) **Docker-Steuerung ohne Fremdbibliothek** — die
+Engine-API ist gewöhnliches HTTP, httpx spricht Unix-Sockets nativ
+(`HTTPTransport(uds=…)`); genau drei Routen (inspect/start/stop),
+Pfade **ohne** Versionspräfix (unversioniert = aktuelle
+Daemon-Version; ein festes Präfix bräche gegen zu alte UND zu neue
+Daemons). Die `docker`-Bibliothek brächte Images/Netze/Exec in den
+Container mit der größten Angriffsfläche — „minimaler Code" ist die
+Mitigation aus DECISIONS 2026-07-25. (2) **Keine neuen
+AOFF_-Variablen**: Socket-Pfad, API-URL, Container-Namen sind
+Modulkonstanten (Muster Phase 14, Punkt 7); Tests injizieren über
+Konstruktorparameter. (3) **Healthcheck-Pfad `GET /_health`** —
+Unterstrich-Präfix wie beim acoustid-index, außerhalb /v2/ kollisions-
+frei; prüft DB (`SELECT 1`) und Index (`/<name>/_health`), bewusst
+NICHT MusicBrainz (§8.7 — sonst stempelte ein MB-Ausfall den Stack als
+nicht bereit); kein AcoustID-Fehlerformat, jeder Misserfolg → 503.
+(4) **Reload-Teilmenge konservativ**: sofort übernommen werden
+`submit.mode`, `submit.upstream_app_key` (inkl. Neubau des
+UpstreamForwarder — sonst fehlte er nach dem Wechsel auf
+local+upstream) und `mb.keep_submitted_mbid`; `index.query_hashes`
+(Index-Neuaufbau, §6) und `mb.dsn` (Pool+Selfcheck nur beim Start)
+werden auf den laufenden Wert zurückgeschrieben und als Warnung
+geloggt — `service.config` beschreibt immer, was der Prozess wirklich
+tut. Intervall 10 s. (5) **Ein Weckvorgang über asyncio.Task +
+`wait_for(shield(task), timeout)`** — kein Lock, das im Fehlerfall
+hinge; jede Anfrage bringt ihre eigene Haltezeit mit. Bei Weck-Timeout
+bleibt der Zustand `starting` (der Stack startet vermutlich weiter);
+`error` nur bei echtem Docker-Startfehler. `Retry-After` fest 30 s
+(kein §6-Schlüssel; die Restdauer kennt niemand). (6) **Proxy reicht
+alles roh durch** (Streaming beidseitig, roher Query-String,
+Hop-by-Hop-Filter, rohe Antwort-Kopfzeilen) — auch das nackte 405 von
+`GET /v2/lookup/batch` bleibt (Phase-13-Eigenheit; ein Proxy-eigenes
+Fehlerbild wäre eine zweite Spezifikation). Eigene Antworten nur ohne
+fremde Vorlage: 503+Retry-After im AcoustID-Format Code 13.
+(7) **E2E-Wecktest als Marker `compose`** (opt-in wie `network`, läuft
+nie in CI — `--integration=require` würde ihn auf jedem Runner mit
+Docker-Socket erzwingen); CI-Struktur unverändert. (8) **api-Container
+hat jetzt einen Compose-Healthcheck über `/_health`** (Spiegel von
+Phase-14-Punkt 9). (9) **Bekannte, bewusst offene Lücken** →
+Phase-16-Hinweis: von Hand gestoppter Stack (erste Anfrage 503 +
+invalidate, erst die zweite weckt) und die geerbte Weck-Frist des
+ersten Wartenden.
+Begründung: Kleinste Angriffsfläche am docker.sock, Paritätstreue des
+Proxys, degradierter Betrieb bleibt möglich, keine Env-/§6-
+Erweiterungen ohne Abnehmer.
+Alternativen: docker-py (verworfen — Funktionsumfang=Angriffsfläche);
+versioniertes API-Präfix (verworfen — bricht beidseitig); MB im
+Healthcheck (verworfen — §8.7); mb.dsn hot-reload (verworfen —
+zweiter Verbindungslebenszyklus ohne Abnehmer); Retry-After aus
+hold_timeout (verworfen — Scheingenauigkeit); Docker-Poller schon in
+Phase 15 (verworfen — griffe der Phase-16-Zustandsmaschine vor).
