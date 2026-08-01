@@ -1,0 +1,540 @@
+"""Idle-Stopp und Zustandsabgleich — die beiden Dauerlaeufer (Phase 16).
+
+Wie in den Weck-Tests laeuft jedes Szenario ohne ``pytest-asyncio`` ueber
+:func:`asyncio.run`. Die Zeit steht dabei still: der Idle-Stopp bekommt
+eine **gestellte Uhr** (:class:`FakeClock`), sonst wuerde ein Test der
+15-Minuten-Frist fuenfzehn Minuten dauern.
+
+Geprueft wird gegen den echten :class:`WakeCoordinator` mit der
+Docker-Attrappe — die Stopps gehen also wirklich durch Pfadbildung,
+Reihenfolge und Statusauswertung des Docker-Moduls.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+
+import httpx
+from watchdog_stubs import FakeDaemon, FakeProbe, docker_client
+
+from acoustid_watchdog.docker import DockerClient
+from acoustid_watchdog.events import EventLevel
+from acoustid_watchdog.lifecycle import (
+    ActivityTracker,
+    DatabaseJobs,
+    IdleStopper,
+    StatePoller,
+)
+from acoustid_watchdog.runs import RunKind, RunResult, finish_run, start_run
+from acoustid_watchdog.state import StackStateTracker
+from acoustid_watchdog.store import Database
+from acoustid_watchdog.wake import STACK_CONTAINERS, StackController, WakeCoordinator
+from shared.config import Config
+from shared.models import StackState
+
+TIMEOUT_S = Config().idle.timeout_min * 60  # 15 min, ARCHITECTURE §6
+
+
+class FakeClock:
+    """Eine Uhr, die nur vorgeht, wenn der Test sie vorstellt."""
+
+    def __init__(self) -> None:
+        self.now = 1_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class FakeJobs:
+    """Auskunft ueber laufende Jobs (ab Phase 19/21 echte Laeufe)."""
+
+    def __init__(self, *jobs: str) -> None:
+        self.jobs = list(jobs)
+
+    def running_jobs(self) -> list[str]:
+        return list(self.jobs)
+
+
+class BlockingController(StackController):
+    """Ein Controller, dessen ``stop`` haengt, bis der Test ihn freigibt."""
+
+    def __init__(self, docker: DockerClient) -> None:
+        super().__init__(docker)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def stop(self) -> list[str]:
+        self.entered.set()
+        self.release.wait(timeout=5)
+        return super().stop()
+
+
+def running_daemon() -> FakeDaemon:
+    return FakeDaemon(dict.fromkeys(STACK_CONTAINERS, True))
+
+
+def sleeping_daemon() -> FakeDaemon:
+    return FakeDaemon(dict.fromkeys(STACK_CONTAINERS, False))
+
+
+def ready_coordinator(
+    daemon: FakeDaemon,
+    *,
+    probe: FakeProbe | None = None,
+    events: list[tuple[EventLevel, str]] | None = None,
+    controller: StackController | None = None,
+) -> tuple[WakeCoordinator, StackStateTracker]:
+    """Koordinator auf einem laufenden Stack, Zustand bereits ``bereit``."""
+    state = StackStateTracker.sleeping()
+    coordinator = WakeCoordinator(
+        controller if controller is not None else StackController(docker_client(daemon)),
+        probe or FakeProbe(),  # type: ignore[arg-type]
+        state,
+        log_event=(lambda level, message, extra=None: events.append((level, message)))
+        if events is not None
+        else None,
+        poll_interval_s=0.01,
+    )
+    if daemon.all_running:
+        # Derselbe Weg wie beim Start des Waechters: Zustand aus Docker.
+        coordinator.refresh()
+    return coordinator, state
+
+
+def stopper(
+    coordinator: WakeCoordinator,
+    state: StackStateTracker,
+    activity: ActivityTracker,
+    jobs: FakeJobs | None = None,
+) -> IdleStopper:
+    return IdleStopper(coordinator, state, activity, jobs or FakeJobs(), Config)
+
+
+# --- Die Uhr ----------------------------------------------------------------
+
+
+def test_activity_tracker_measures_the_gap() -> None:
+    clock = FakeClock()
+    activity = ActivityTracker(clock=clock)
+
+    clock.advance(30)
+    assert activity.idle_s == 30
+
+    activity.touch()
+    assert activity.idle_s == 0
+    assert activity.requests == 1
+
+
+def test_a_fresh_tracker_counts_as_just_used() -> None:
+    """Sonst waere der erste Blick nach einem Neustart sofort faellig."""
+    assert ActivityTracker().idle_s < 1
+
+
+# --- Job-Auskunft -----------------------------------------------------------
+
+
+def test_database_jobs_sees_running_runs(db: Database) -> None:
+    """Die Schnittstelle, ueber die sich Phase 19/21 anmelden."""
+    jobs = DatabaseJobs(db)
+    assert jobs.running_jobs() == []
+
+    run_id = start_run(db, RunKind.UPDATE)
+    assert jobs.running_jobs() == [f"Update #{run_id}"]
+
+    finish_run(db, run_id, RunResult.SUCCESS)
+    assert jobs.running_jobs() == []
+
+
+def test_database_jobs_sees_backups_too(db: Database) -> None:
+    run_id = start_run(db, RunKind.BACKUP)
+    assert DatabaseJobs(db).running_jobs() == [f"Backup #{run_id}"]
+
+
+# --- Idle-Stopp -------------------------------------------------------------
+
+
+def test_idle_stop_fires_after_the_timeout() -> None:
+    """Der Kern der Phase: ohne Nutzung geht der Stack wieder schlafen."""
+    daemon = running_daemon()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = ready_coordinator(daemon, events=events)
+    clock = FakeClock()
+    activity = ActivityTracker(clock=clock)
+    idle = stopper(coordinator, state, activity)
+
+    assert state.state is StackState.READY
+    clock.advance(TIMEOUT_S)
+
+    assert asyncio.run(idle.check()) is True
+    assert daemon.all_running is False
+    assert state.state is StackState.SLEEPING
+    assert coordinator.ready is False
+    assert coordinator.stops == 1
+    # Gestoppt wird in umgekehrter Startreihenfolge — erst der Leser.
+    assert [name for action, name in daemon.calls if action == "stop"] == [
+        "acoustid-api",
+        "acoustid-index",
+        "acoustid-db",
+    ]
+    assert [message for _, message in events] == [
+        "Stack wird schlafen gelegt",
+        "Stack schlaeft",
+    ]
+
+
+def test_idle_stop_waits_for_the_full_timeout() -> None:
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    clock = FakeClock()
+    idle = stopper(coordinator, state, ActivityTracker(clock=clock))
+
+    clock.advance(TIMEOUT_S - 1)
+
+    assert asyncio.run(idle.check()) is False
+    assert daemon.all_running is True
+    assert state.state is StackState.READY
+
+
+def test_activity_postpones_the_idle_stop() -> None:
+    """Jede ``/v2``-Anfrage schiebt den Auto-Stopp (§6 „Idle-Definition")."""
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    clock = FakeClock()
+    activity = ActivityTracker(clock=clock)
+    idle = stopper(coordinator, state, activity)
+
+    clock.advance(TIMEOUT_S - 60)
+    activity.touch()  # eine Anfrage kurz vor Ablauf
+    clock.advance(TIMEOUT_S - 60)
+
+    assert asyncio.run(idle.check()) is False
+    assert daemon.all_running is True
+
+    clock.advance(60)
+    assert asyncio.run(idle.check()) is True
+    assert daemon.all_running is False
+
+
+def test_a_running_job_blocks_the_stop(db: Database) -> None:
+    """Invariante §8.5: kein Stopp, solange ein Import-/Backup-Job laeuft."""
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    clock = FakeClock()
+    activity = ActivityTracker(clock=clock)
+    run_id = start_run(db, RunKind.UPDATE)
+    idle = IdleStopper(coordinator, state, activity, DatabaseJobs(db), Config)
+
+    clock.advance(TIMEOUT_S)
+    assert asyncio.run(idle.check()) is False
+    assert daemon.all_running is True
+    assert idle.blocked_by_jobs == 1
+
+    # Der Job hat die Leerlaufuhr zurueckgesetzt: nach ihm bekommt der
+    # Betreiber wieder das volle Fenster.
+    finish_run(db, run_id, RunResult.SUCCESS)
+    assert asyncio.run(idle.check()) is False
+    assert daemon.all_running is True
+
+    clock.advance(TIMEOUT_S)
+    assert asyncio.run(idle.check()) is True
+    assert daemon.all_running is False
+
+
+def test_only_a_ready_stack_is_stopped() -> None:
+    """Was schlaeft, startet oder im Fehler steht, wird nicht gestoppt."""
+    for state_value in (StackState.SLEEPING, StackState.STARTING, StackState.ERROR):
+        daemon = running_daemon()
+        coordinator, state = ready_coordinator(daemon)
+        state.try_to(StackState.STARTING)
+        if state_value is not StackState.STARTING:
+            state.try_to(state_value)
+        clock = FakeClock()
+        idle = stopper(coordinator, state, ActivityTracker(clock=clock))
+
+        clock.advance(TIMEOUT_S)
+
+        assert asyncio.run(idle.check()) is False, state_value
+        assert daemon.all_running is True
+
+
+def test_no_stop_while_a_wake_is_running() -> None:
+    """Ein Weckvorgang und ein Stopp schliessen einander aus."""
+    daemon = sleeping_daemon()
+    probe = FakeProbe(ready_after=10**6)
+    coordinator, state = ready_coordinator(daemon, probe=probe)
+    clock = FakeClock()
+    idle = stopper(coordinator, state, ActivityTracker(clock=clock))
+    clock.advance(TIMEOUT_S)
+
+    async def scenario() -> bool:
+        task = asyncio.create_task(coordinator.ensure_ready(timeout_s=5))
+        await asyncio.sleep(0.05)  # Weckvorgang laeuft an
+        state.try_to(StackState.READY)  # als waere er gerade fertig geworden
+        stopped = await idle.check()
+        task.cancel()
+        return stopped
+
+    assert asyncio.run(scenario()) is False
+    assert coordinator.stops == 0
+
+
+def test_a_failed_stop_becomes_an_error_state() -> None:
+    daemon = running_daemon()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = ready_coordinator(daemon, events=events)
+    clock = FakeClock()
+    idle = stopper(coordinator, state, ActivityTracker(clock=clock))
+
+    daemon.fail_on.add("acoustid-api")
+    clock.advance(TIMEOUT_S)
+
+    assert asyncio.run(idle.check()) is False
+    assert state.state is StackState.ERROR
+    assert state.status.detail is not None
+    assert "acoustid-api" in state.status.detail
+    assert (EventLevel.ERROR, "Stack-Stopp fehlgeschlagen") in events
+
+
+def test_an_unreadable_configuration_falls_back_to_the_default() -> None:
+    """Eine kaputte ``config.yaml`` darf den Betrieb nicht anhalten."""
+
+    def kaputt() -> Config:
+        raise RuntimeError("config.yaml unlesbar")
+
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    idle = IdleStopper(coordinator, state, ActivityTracker(), FakeJobs(), kaputt)
+
+    assert idle.timeout_s == TIMEOUT_S
+
+
+def test_a_changed_timeout_takes_effect_without_a_restart() -> None:
+    """``idle.timeout_min`` wird bei jeder Pruefung frisch gelesen."""
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    clock = FakeClock()
+    config = Config()
+    idle = IdleStopper(coordinator, state, ActivityTracker(clock=clock), FakeJobs(), lambda: config)
+
+    clock.advance(120)
+    assert asyncio.run(idle.check()) is False
+
+    config = config.model_copy(update={"idle": config.idle.model_copy(update={"timeout_min": 1})})
+    assert asyncio.run(idle.check()) is True
+
+
+# --- Eine Anfrage waehrend des Stopps ---------------------------------------
+
+
+def test_a_request_during_stopping_waits_and_then_wakes() -> None:
+    """Konservativ: wie schlafend — erst faellt der Stack, dann weckt sie ihn.
+
+    Der Stopp wird nicht ueberholt (ein halb gestoppter Stack ist kein
+    bedienbarer Stack, und `docker stop`/`docker start` kaemen sich ins
+    Gehege); die Anfrage wird auch nicht abgewiesen, solange ihre Haltezeit
+    reicht.
+    """
+    daemon = running_daemon()
+    controller = BlockingController(docker_client(daemon))
+    coordinator, state = ready_coordinator(daemon, controller=controller)
+    clock = FakeClock()
+    idle = stopper(coordinator, state, ActivityTracker(clock=clock))
+    clock.advance(TIMEOUT_S)
+
+    async def scenario() -> list[StackState]:
+        seen: list[StackState] = []
+        stopping = asyncio.create_task(idle.check())
+        await asyncio.to_thread(controller.entered.wait, 5)
+        seen.append(state.state)  # stoppt
+
+        request = asyncio.create_task(coordinator.ensure_ready(timeout_s=5))
+        await asyncio.sleep(0.05)
+        seen.append(state.state)  # immer noch stoppt — nicht ueberholt
+
+        controller.release.set()
+        assert await stopping is True
+        assert await request is True
+        seen.append(state.state)
+        return seen
+
+    assert asyncio.run(scenario()) == [
+        StackState.STOPPING,
+        StackState.STOPPING,
+        StackState.READY,
+    ]
+    assert daemon.all_running is True
+    assert coordinator.stops == 1
+    assert coordinator.wakes == 1
+
+
+# --- Zustandsabgleich -------------------------------------------------------
+
+
+def test_poller_notices_a_stack_stopped_by_hand() -> None:
+    """Die Phase-15-Luecke: `/status` sagt die Wahrheit, ohne Anfrage."""
+    daemon = running_daemon()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = ready_coordinator(daemon, events=events)
+    poller = StatePoller(coordinator)
+
+    assert state.state is StackState.READY
+    daemon.containers["acoustid-api"] = False  # von Hand gestoppt
+
+    assert asyncio.run(poller.check()) is StackState.SLEEPING
+    assert state.state is StackState.SLEEPING
+    # Und die Bereitschaft ist verworfen: die naechste Anfrage weckt sofort,
+    # statt in eine tote API zu laufen.
+    assert coordinator.ready is False
+    assert (EventLevel.WARNING, "Stack wurde ausserhalb des Waechters gestoppt") in events
+
+
+def test_the_first_request_after_a_manual_stop_wakes() -> None:
+    """Der eigentliche Gewinn: keine 503 mehr fuer die erste Anfrage."""
+    daemon = running_daemon()
+    coordinator, _ = ready_coordinator(daemon)
+    poller = StatePoller(coordinator)
+
+    for name in STACK_CONTAINERS:
+        daemon.containers[name] = False
+
+    async def scenario() -> bool:
+        await poller.check()
+        return await coordinator.ensure_ready(timeout_s=5)
+
+    assert asyncio.run(scenario()) is True
+    assert daemon.all_running is True
+    assert coordinator.wakes == 1
+
+
+def test_poller_notices_a_stack_started_by_hand() -> None:
+    daemon = sleeping_daemon()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = ready_coordinator(daemon, events=events)
+
+    assert state.state is StackState.SLEEPING
+    for name in STACK_CONTAINERS:
+        daemon.containers[name] = True
+
+    assert asyncio.run(StatePoller(coordinator).check()) is StackState.READY
+    assert coordinator.ready is True
+    assert (EventLevel.INFO, "Stack wurde ausserhalb des Waechters gestartet") in events
+
+
+def test_poller_keeps_quiet_while_a_wake_is_running() -> None:
+    """Waehrend eines Vorgangs sind die Container in Bewegung."""
+    daemon = sleeping_daemon()
+    probe = FakeProbe(ready_after=10**6)
+    coordinator, state = ready_coordinator(daemon, probe=probe)
+    poller = StatePoller(coordinator)
+
+    async def scenario() -> StackState | None:
+        task = asyncio.create_task(coordinator.ensure_ready(timeout_s=5))
+        await asyncio.sleep(0.05)
+        seen = await poller.check()
+        task.cancel()
+        return seen
+
+    assert asyncio.run(scenario()) is None
+    assert poller.checks == 0
+    assert state.state is StackState.STARTING
+
+
+def test_poller_leaves_a_half_started_stack_alone() -> None:
+    """Laeuft alles, antwortet aber noch nichts: der Zustand bleibt stehen."""
+    daemon = running_daemon()
+    # Die Container laufen, die API antwortet noch nicht (Postgres-Recovery,
+    # Index-mmap) — genau der Moment, in dem „schlafend" falsch waere.
+    coordinator, state = ready_coordinator(daemon, probe=FakeProbe(ready_after=10**6))
+    state.try_to(StackState.STARTING)
+
+    assert asyncio.run(StatePoller(coordinator).check()) is StackState.STARTING
+    assert coordinator.ready is False
+
+
+def test_poller_keeps_an_error_visible() -> None:
+    """Ein Startfehler verschwindet nicht von selbst aus `/status`."""
+    daemon = sleeping_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    state.to(StackState.STARTING)
+    state.to(StackState.ERROR, detail="acoustid-index fehlt")
+
+    assert asyncio.run(StatePoller(coordinator).check()) is StackState.ERROR
+    assert state.status.detail == "acoustid-index fehlt"
+
+
+def test_poller_recovers_from_an_error_when_the_stack_runs_again() -> None:
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    state.to(StackState.STARTING)
+    state.to(StackState.ERROR, detail="acoustid-index fehlt")
+
+    assert asyncio.run(StatePoller(coordinator).check()) is StackState.READY
+    assert state.status.detail is None
+
+
+def test_poller_survives_an_unreachable_daemon() -> None:
+    """Ohne Docker laeuft der Waechter weiter — mit unveraenderter Anzeige."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    state = StackStateTracker(StackState.READY)
+    coordinator = WakeCoordinator(
+        StackController(DockerClient(client=httpx.Client(transport=httpx.MockTransport(handler)))),
+        FakeProbe(),  # type: ignore[arg-type]
+        state,
+    )
+
+    assert asyncio.run(StatePoller(coordinator).check()) is StackState.READY
+
+
+# --- Die Schleifen ----------------------------------------------------------
+
+
+def test_both_loops_stop_on_cancellation() -> None:
+    """Kein haengender Dauerlaeufer beim Herunterfahren."""
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    idle = stopper(coordinator, state, ActivityTracker())
+    poller = StatePoller(coordinator, interval_s=0.01)
+    idle.interval_s = 0.01
+
+    async def scenario() -> None:
+        tasks = [asyncio.create_task(poller.run()), asyncio.create_task(idle.run())]
+        await asyncio.sleep(0.05)
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        assert all(isinstance(result, asyncio.CancelledError) for result in results)
+
+    asyncio.run(scenario())
+    # Die Schleife hat wirklich gearbeitet, nicht nur geschlafen.
+    assert poller.checks > 0
+
+
+def test_a_failing_check_does_not_kill_the_loop() -> None:
+    """Stirbt die Schleife, bliebe der Stack fuer immer wach."""
+    daemon = running_daemon()
+    coordinator, state = ready_coordinator(daemon)
+    idle = stopper(coordinator, state, ActivityTracker())
+    idle.interval_s = 0.01
+    calls: list[int] = []
+
+    async def kaputt() -> bool:
+        calls.append(1)
+        raise RuntimeError("Zustandsdatenbank geschlossen")
+
+    idle.check = kaputt  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        task = asyncio.create_task(idle.run())
+        await asyncio.sleep(0.06)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+    assert len(calls) > 1

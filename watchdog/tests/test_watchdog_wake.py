@@ -10,6 +10,7 @@ gleichzeitige Anfragen prueft.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import httpx
 import pytest
@@ -176,6 +177,35 @@ def test_timeout_raises_with_retry_after() -> None:
     assert (EventLevel.WARNING, "Stack war nicht rechtzeitig bereit") in events
 
 
+def test_a_later_request_gets_its_own_full_hold_time() -> None:
+    """Die Frist des Vorgangs waechst mit dem geduldigsten Wartenden.
+
+    Die zweite der beiden Phase-15-Luecken, geschlossen in Phase 16: vorher
+    erbte der Weckvorgang die Frist der **ersten** Anfrage und endete mit
+    ihr — ein spaeter Dazugekommener sah seine 503 lange vor Ablauf seiner
+    eigenen Haltezeit.
+    """
+    daemon = _sleeping()
+    probe = FakeProbe(ready_after=10**6)  # wird nie bereit
+    coordinator, _ = _coordinator(daemon, probe)
+
+    async def scenario() -> float:
+        first = asyncio.create_task(coordinator.ensure_ready(timeout_s=0.05))
+        await asyncio.sleep(0.02)
+        started_at = time.monotonic()
+        with pytest.raises(StackNotReadyError):
+            await coordinator.ensure_ready(timeout_s=0.5)
+        waited = time.monotonic() - started_at
+        with pytest.raises(StackNotReadyError):
+            await first
+        return waited
+
+    # Der zweite Wartende bekommt seine volle halbe Sekunde, nicht die
+    # Restzeit des ersten.
+    assert asyncio.run(scenario()) >= 0.4
+    assert coordinator.wakes == 1
+
+
 def test_start_failure_becomes_an_error_state() -> None:
     """Fehlt ein Container, ist das ein Startfehler (§7) — mit Klartext."""
     daemon = FakeDaemon({"acoustid-db": False})  # index und api fehlen
@@ -192,6 +222,37 @@ def test_start_failure_becomes_an_error_state() -> None:
     assert state.status.detail is not None
     assert "acoustid-index" in state.status.detail
     assert (EventLevel.ERROR, "Stack-Start fehlgeschlagen") in events
+
+
+def test_the_next_attempt_leads_out_of_the_error_state() -> None:
+    """``error`` ist kein Endzustand (§7, Phase 16).
+
+    Der Betreiber legt den fehlenden Container an — die naechste Anfrage
+    muss den Stack wecken koennen, ohne dass der Waechter neu startet.
+    """
+    daemon = FakeDaemon({"acoustid-db": False, "acoustid-index": False})  # api fehlt
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = _coordinator(daemon, FakeProbe(), events=events)
+
+    async def scenario() -> None:
+        with pytest.raises(StackNotReadyError):
+            await coordinator.ensure_ready(timeout_s=5)
+        assert state.state is StackState.ERROR
+
+        daemon.containers["acoustid-api"] = False  # Container ist wieder da
+        await coordinator.ensure_ready(timeout_s=5)
+
+    asyncio.run(scenario())
+
+    assert state.state is StackState.READY
+    assert state.status.detail is None
+    assert coordinator.wakes == 2
+    assert [message for _, message in events] == [
+        "Stack wird geweckt",
+        "Stack-Start fehlgeschlagen",
+        "Stack wird geweckt",
+        "Stack ist bereit",
+    ]
 
 
 def test_invalidate_forces_a_new_check() -> None:

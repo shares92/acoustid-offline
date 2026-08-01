@@ -38,7 +38,10 @@ def test_fresh_instance_reports_sleeping_and_no_data(client: TestClient) -> None
 def test_status_reflects_the_current_stack_state(
     client: TestClient, service: WatchdogService
 ) -> None:
-    service.state.set(StackState.ERROR, detail="db-Container startet nicht")
+    # Der Fehlerzustand entsteht nur aus einem gescheiterten Start
+    # (Uebergangstabelle in :mod:`acoustid_watchdog.state`).
+    service.state.to(StackState.STARTING)
+    service.state.to(StackState.ERROR, detail="db-Container startet nicht")
     payload = client.get("/status").json()
     assert payload["stack"]["state"] == "error"
     assert payload["stack"]["state_display"] == "fehler"

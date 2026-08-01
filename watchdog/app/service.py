@@ -24,6 +24,13 @@ tatsaechlich steuert — und nur diese drei sprechen ueberhaupt nach aussen:
 * **Reverse-Proxy** (:mod:`acoustid_watchdog.proxy`) — der Weg von
   ``/v2/*`` zum API-Dienst.
 
+Seit Phase 16 kommt der Rest des Lebenszyklus dazu
+(:mod:`acoustid_watchdog.lifecycle`): die Uhr der letzten Anfrage, die
+Auskunft ueber laufende Jobs und die beiden Dauerlaeufer — Idle-Stopp und
+Zustandsabgleich. Gestartet und beendet werden die beiden im Lifespan der
+Anwendung (:mod:`acoustid_watchdog.main`); hier entstehen sie nur, wie
+alles Langlebige.
+
 :meth:`WatchdogService.open` ist zugleich der **Erststart-Pfad**: Datenbank
 anlegen und migrieren, ``config.yaml`` mit den Defaults aus §6 erzeugen,
 Admin-Passwort generieren und ins Containerlog schreiben. Alle drei
@@ -46,9 +53,15 @@ from acoustid_watchdog.admin import ensure_admin_user
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel, log_event
+from acoustid_watchdog.lifecycle import (
+    ActivityTracker,
+    DatabaseJobs,
+    IdleStopper,
+    StatePoller,
+)
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.reload import ReloadMarker
-from acoustid_watchdog.state import StackStateTracker
+from acoustid_watchdog.state import StackStateTracker, StackStatus
 from acoustid_watchdog.store import Database
 from acoustid_watchdog.wake import (
     API_BASE_URL,
@@ -58,8 +71,9 @@ from acoustid_watchdog.wake import (
 )
 from shared.config import Config
 from shared.env import EnvSettings
+from shared.models import StackState
 
-__all__ = ["EVENT_SOURCE", "WAKE_EVENT_SOURCE", "WatchdogService"]
+__all__ = ["EVENT_SOURCE", "STACK_EVENT_SOURCE", "WAKE_EVENT_SOURCE", "WatchdogService"]
 
 _LOG = logging.getLogger(__name__)
 
@@ -70,6 +84,11 @@ EVENT_SOURCE = "watchdog"
 
 #: Quelle der Weck-Ereignisse (Phase 15).
 WAKE_EVENT_SOURCE = "wake"
+
+#: Quelle der Zustandswechsel (Phase 16). Eigene Quelle, weil diese
+#: Ereignisse die Zustandsmaschine erzaehlen — wer den Lebenszyklus
+#: nachvollziehen will, filtert genau danach.
+STACK_EVENT_SOURCE = "stack"
 
 
 class WatchdogService:
@@ -102,6 +121,11 @@ class WatchdogService:
         self.db = db
         self.config_store = config_store
         self.state = state if state is not None else StackStateTracker.sleeping()
+        # Jeder Zustandswechsel wird zum Ereignis — auch der, den kein
+        # Weckvorgang ausgeloest hat (Poller, Idle-Stopp). Der Anschluss
+        # sitzt hier und nicht im Tracker, weil nur der Dienst die
+        # Zustandsdatenbank kennt.
+        self.state.on_transition = self._log_transition
 
         self.docker = docker if docker is not None else DockerClient()
         self.probe = probe if probe is not None else ReadinessProbe()
@@ -115,6 +139,19 @@ class WatchdogService:
             # Logansicht (Phase 27) danach filtern kann.
             log_event=partial(self.log_event, source=WAKE_EVENT_SOURCE),
         )
+
+        # Lebenszyklus (Phase 16): Uhr, Job-Auskunft und die beiden
+        # Dauerlaeufer. Die Aufgaben selbst startet der Lifespan.
+        self.activity = ActivityTracker()
+        self.jobs = DatabaseJobs(self.db)
+        self.idle = IdleStopper(
+            self.wake,
+            self.state,
+            self.activity,
+            self.jobs,
+            lambda: self.config,
+        )
+        self.poller = StatePoller(self.wake)
 
     @classmethod
     def from_env(cls, env: EnvSettings | None = None) -> Self:
@@ -238,3 +275,24 @@ class WatchdogService:
     ) -> None:
         """Schreibt ein Ereignis ins ``event_log`` und ins Containerlog."""
         log_event(self.db, level, source, message, extra)
+
+    def _log_transition(self, previous: StackStatus, current: StackStatus) -> None:
+        """Schreibt jeden Zustandswechsel ins Ereignis-Log (Phase 16).
+
+        Die Mitschrift des Lebenszyklus: aus ihr laesst sich hinterher
+        lesen, wann der Stack wach war und warum er es wurde — auch dann,
+        wenn niemand zugesehen hat. Der Wortlaut ist der der Admin-UI
+        (ARCHITECTURE §9), damit Logansicht und Statuskarte dieselbe
+        Sprache sprechen.
+        """
+        level = EventLevel.ERROR if current.state is StackState.ERROR else EventLevel.INFO
+        self.log_event(
+            level,
+            f"Stack-Zustand: {current.state.display_name}",
+            {
+                "state": current.state.value,
+                "state_previous": previous.state.value,
+                "detail": current.detail,
+            },
+            source=STACK_EVENT_SOURCE,
+        )

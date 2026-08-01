@@ -1,13 +1,18 @@
 """HTTP-Schicht des Waechters (FastAPI) — ARCHITECTURE §4, §7.
 
-Stand Phase 15 traegt sie zwei Routen:
+Stand Phase 16 traegt sie zwei Routen:
 
 ===============  ======  =================================================
 ``/status``      GET     Stack-Zustand, Datenstand, letzter Update-Lauf,
                          Version — **weckt nie** (§7, §8.2)
 ``/v2/{...}``    alle    Reverse-Proxy auf ``acoustid-api``, **mit
-                         Weck-Logik** (§7 „Fehlerverhalten")
+                         Weck-Logik** (§7 „Fehlerverhalten") und der
+                         Aktivitaetsmeldung fuer den Idle-Stopp
 ===============  ======  =================================================
+
+Dazu kommen die beiden Dauerlaeufer des Lebenszyklus
+(:mod:`acoustid_watchdog.lifecycle`): sie leben im Lifespan der Anwendung,
+werden beim Herunterfahren abgebrochen und abgewartet.
 
 Die beiden sind bewusst gegenlaeufig gebaut: `/status` fasst den Stack unter
 keinen Umstaenden an, `/v2/*` weckt ihn immer, wenn er schlaeft. Genau
@@ -33,6 +38,7 @@ beschrieben.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -82,9 +88,24 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
             app.state.service = WatchdogService.from_env(settings).open()
         else:
             app.state.service = service
+        # Die beiden Dauerlaeufer des Lebenszyklus (Phase 16). Sie gehoeren
+        # zur laufenden Anwendung, nicht zum Dienst: nur hier gibt es einen
+        # Ereignisschleifen-Kontext, in dem sie leben und wieder sterben
+        # koennen. Beide schlafen zuerst und pruefen dann — ein kurzer Test
+        # mit eingebettetem Dienst loest also keinen einzigen Aufruf aus.
+        running: WatchdogService = app.state.service
+        tasks = [
+            asyncio.create_task(running.poller.run(), name="stack-poller"),
+            asyncio.create_task(running.idle.run(), name="idle-stopper"),
+        ]
         try:
             yield
         finally:
+            for task in tasks:
+                task.cancel()
+            # Auf das Ende warten, sonst meldet asyncio beim Herunterfahren
+            # „Task was destroyed but it is pending".
+            await asyncio.gather(*tasks, return_exceptions=True)
             if owns_service:
                 await app.state.service.aclose()
 
@@ -148,8 +169,18 @@ async def _proxy(request: Request) -> Response:
       wieder prueft (der Stack kann von Hand gestoppt worden sein).
 
     Alles andere — auch jeder Fehler der API — geht unveraendert durch.
+
+    Hier steht ausserdem die eine Zeile, an der der Idle-Stopp haengt: jede
+    Anfrage unter ``/v2/`` ist **Aktivitaet** (ARCHITECTURE §6
+    „Idle-Definition") und verschiebt den Auto-Stopp. Gezaehlt wird die
+    ankommende Anfrage, nicht die fertige Antwort — sonst hielte ein Client,
+    der mitten in der Uebertragung abbricht, den Stack nicht wach, obwohl er
+    ihn gerade benutzt hat. `/status` und die Admin-UI zaehlen bewusst
+    nicht: sie beruehren das Array nie (Invariante §8.2) und duerfen es
+    folglich auch nicht wachhalten.
     """
     service: WatchdogService = request.app.state.service
+    service.activity.touch()
     try:
         hold_timeout_s = service.config.wake.hold_timeout_s
     except Exception:

@@ -1,19 +1,62 @@
-"""Zustand des schlafenden Stacks, wie der Waechter ihn kennt (§7, §9).
+"""Zustandsmaschine des Stacks (§7, §9) — fuenf Zustaende, feste Uebergaenge.
 
-Die fuenf Zustaende stehen schon fest (:class:`shared.models.StackState`:
-``sleeping``, ``starting``, ``ready``, ``stopping``, ``error``); die
-vollstaendige Zustandsmaschine mit ihren Uebergaengen und dem Idle-Stopp ist
-Phase 16, die Docker-Steuerung dahinter Phase 15. Phase 14 braucht davon
-genau so viel, wie `/status` und spaeter der Statusindikator der Admin-UI
-ablesen: **welcher Zustand gilt, seit wann, und warum** (bei ``error`` der
-Fehlertext).
+Der Lebenszyklus einer schlafenden Instanz in einer Tabelle::
+
+    schlafend --Anfrage--> startet --bereit--> bereit --Leerlauf--> stoppt
+        ^                     |                  |                    |
+        |                     `--Startfehler--> fehler                |
+        `-----------------------------------------------------------'
+
+Phase 14 hielt davon nur die Anzeige („welcher Zustand gilt, seit wann,
+warum"), Phase 15 setzte sie beim Wecken. Phase 16 macht daraus eine
+richtige Maschine: **welcher Wechsel erlaubt ist, steht hier** — einmal,
+als Tabelle (:data:`ALLOWED_TRANSITIONS`), und nicht verteilt ueber die
+Aufrufer.
+
+**Warum ueberhaupt eine Uebergangstabelle.** Ohne sie kann jeder Aufrufer
+jeden Zustand setzen, und ein Fehler faellt erst in der Anzeige auf — z. B.
+„bereit", waehrend der Stack gerade gestoppt wird, oder „fehler" aus dem
+Nichts. Mit ihr ist jeder Weg belegt: jede Kante der Tabelle hat genau
+einen Aufrufer, und jede fehlende Kante ist eine gepruefte Zusage.
+
+============  ==========================================================
+von           nach (und wer den Wechsel ausloest)
+============  ==========================================================
+``sleeping``  ``starting`` (eine Anfrage weckt),
+              ``ready`` (Poller: von Hand gestarteter Stack)
+``starting``  ``ready`` (bereit), ``error`` (Docker-Startfehler),
+              ``sleeping`` (Poller: kein Weckvorgang mehr, Stack steht)
+``ready``     ``stopping`` (Idle-Stopp), ``starting`` (erneutes Wecken
+              nach verworfener Bereitschaft), ``sleeping`` (Poller: von
+              Hand gestoppter Stack)
+``stopping``  ``sleeping`` (Stopp fertig), ``error`` (Stopp gescheitert)
+``error``     ``starting`` (naechster Weckversuch — der Weg aus dem
+              Fehler heraus), ``ready`` (Poller: Stack laeuft wieder)
+============  ==========================================================
+
+**Nicht erlaubt** sind unter anderem: ``sleeping`` -> ``stopping`` (was
+steht, wird nicht gestoppt), ``ready`` -> ``error`` (ein Fehlerzustand
+entsteht nur bei einem gescheiterten Start oder Stopp), ``stopping`` ->
+``starting`` (erst faellt der Stack ganz, dann weckt ihn die naechste
+Anfrage — :meth:`acoustid_watchdog.wake.WakeCoordinator.stop_stack`) und
+``error`` -> ``stopping`` (ein Stack im Fehlerzustand gilt nicht als
+laufend).
+
+**Streng oder nachsichtig.** Zwei Wege, bewusst getrennt:
+
+* :meth:`StackStateTracker.to` **wirft** bei einem verbotenen Wechsel. Den
+  Weg nehmen die Stellen, die ihren Ausgangszustand kennen (Wecken,
+  Stoppen) — dort waere ein verbotener Wechsel ein Programmfehler.
+* :meth:`StackStateTracker.try_to` **protokolliert** und laesst den Zustand
+  stehen. Den Weg nimmt der Hintergrund-Poller: er erhebt, was Docker
+  sagt, und darf einen laufenden Weck- oder Stoppvorgang nicht ueberholen.
 
 **Warum im Speicher und nicht in der SQLite.** Der Zustand beschreibt, was
 die Container gerade tun — beim Start des Waechters ist ein gespeicherter
 Wert bestenfalls veraltet und schlimmstenfalls falsch (der Betreiber kann
-den Stack zwischenzeitlich von Hand gestartet haben). Ab Phase 15 wird er
-beim Start aus Docker erhoben; bis dahin ist ``sleeping`` die richtige und
-einzige Annahme: nichts im Waechter kann etwas anderes bewirkt haben.
+den Stack zwischenzeitlich von Hand gestartet haben). Er wird deshalb beim
+Start aus Docker erhoben und danach laufend nachgefuehrt
+(:class:`acoustid_watchdog.lifecycle.StatePoller`).
 
 ``sleeping`` ist ausdruecklich der **Gutzustand**, kein Mangel
 (ARCHITECTURE §9) — der ganze Betrieb ist darauf ausgelegt, dass das Array
@@ -24,15 +67,45 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Self
+from typing import Any, Final, Self
 
 from acoustid_watchdog.store import utc_now
 from shared.models import StackState
 
-__all__ = ["StackStateTracker", "StackStatus"]
+__all__ = [
+    "ALLOWED_TRANSITIONS",
+    "InvalidStackTransitionError",
+    "StackStateTracker",
+    "StackStatus",
+]
 
 _LOG = logging.getLogger(__name__)
+
+
+#: Erlaubte Zustandswechsel (Begruendung je Kante: Modul-Docstring).
+#: Ein Wechsel auf **denselben** Zustand ist immer erlaubt und aendert
+#: hoechstens den Fehlertext; er steht deshalb in keiner Zeile.
+ALLOWED_TRANSITIONS: Final[dict[StackState, frozenset[StackState]]] = {
+    StackState.SLEEPING: frozenset({StackState.STARTING, StackState.READY}),
+    StackState.STARTING: frozenset({StackState.READY, StackState.ERROR, StackState.SLEEPING}),
+    StackState.READY: frozenset({StackState.STARTING, StackState.STOPPING, StackState.SLEEPING}),
+    StackState.STOPPING: frozenset({StackState.SLEEPING, StackState.ERROR}),
+    StackState.ERROR: frozenset({StackState.STARTING, StackState.READY}),
+}
+
+
+class InvalidStackTransitionError(RuntimeError):
+    """Ein Zustandswechsel, den :data:`ALLOWED_TRANSITIONS` nicht kennt."""
+
+    def __init__(self, source: StackState, target: StackState) -> None:
+        super().__init__(
+            f"Zustandswechsel {source.value} -> {target.value} ist nicht vorgesehen "
+            f"(erlaubt: {', '.join(sorted(s.value for s in ALLOWED_TRANSITIONS[source]))})"
+        )
+        self.source = source
+        self.target = target
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,18 +129,36 @@ class StackStatus:
 
 
 class StackStateTracker:
-    """Haelt den aktuellen Stack-Zustand — threadsicher und schreibarm."""
+    """Fuehrt den Stack-Zustand — threadsicher, mit Uebergangspruefung."""
 
     def __init__(
-        self, state: StackState = StackState.SLEEPING, *, since: str | None = None
+        self,
+        state: StackState = StackState.SLEEPING,
+        *,
+        since: str | None = None,
+        on_transition: Callable[[StackStatus, StackStatus], None] | None = None,
     ) -> None:
+        """
+        Args:
+            state: Anfangszustand.
+            since: Zeitpunkt, seit dem er gilt (Vorgabe: jetzt).
+            on_transition: ``(vorher, nachher)`` — wird nach **jedem**
+                wirklichen Wechsel gerufen, ausserhalb der Sperre. Der
+                Anschluss ans Ereignis-Log (:class:`WatchdogService`); ohne
+                Angabe bleibt es beim Containerlog.
+        """
         self._lock = threading.Lock()
         self._status = StackStatus(state=state, since=since or utc_now())
+        #: Frei setzbar, damit auch ein von aussen mitgegebener Tracker
+        #: (Tests, eingebettete Nutzung) ans Ereignis-Log kommt.
+        self.on_transition = on_transition
 
     @classmethod
     def sleeping(cls) -> Self:
         """Der Startwert eines frisch gestarteten Waechters."""
         return cls(StackState.SLEEPING)
+
+    # --- Lesen --------------------------------------------------------------
 
     @property
     def status(self) -> StackStatus:
@@ -79,27 +170,81 @@ class StackStateTracker:
     def state(self) -> StackState:
         return self.status.state
 
-    def set(self, state: StackState, *, detail: str | None = None) -> StackStatus:
-        """Setzt den Zustand; liefert die neue Momentaufnahme.
+    def allows(self, target: StackState) -> bool:
+        """Waere ein Wechsel auf ``target`` gerade erlaubt?"""
+        current = self.state
+        return target is current or target in ALLOWED_TRANSITIONS[current]
 
-        Ein Wechsel auf denselben Zustand laesst ``since`` stehen — sonst
-        wuerde jede Pruefschleife die Anzeige „seit 0 Sekunden" erzeugen —
-        und wird nicht protokolliert. Nur ein aendernder Wechsel ist ein
-        Ereignis.
+    # --- Schreiben ----------------------------------------------------------
+
+    def to(self, target: StackState, *, detail: str | None = None) -> StackStatus:
+        """Wechselt den Zustand; liefert die neue Momentaufnahme.
+
+        Ein Wechsel auf denselben Zustand mit demselben Detail laesst
+        ``since`` stehen — sonst erzeugte jede Pruefschleife die Anzeige
+        „seit 0 Sekunden" — und ist kein Ereignis; die Antwort ist dann die
+        unveraenderte Momentaufnahme.
+
+        Raises:
+            InvalidStackTransitionError: Der Wechsel steht nicht in
+                :data:`ALLOWED_TRANSITIONS`.
         """
+        status = self._switch(target, detail, strict=True)
+        return status if status is not None else self.status
+
+    def try_to(self, target: StackState, *, detail: str | None = None) -> StackStatus | None:
+        """Wie :meth:`to`, aber ohne Ausnahme bei verbotenem Wechsel.
+
+        Returns:
+            Die neue Momentaufnahme, oder ``None``, wenn der Wechsel
+            verboten war (dann bleibt der Zustand stehen und im Log steht
+            der Grund). Ein Wechsel „auf sich selbst" liefert ebenfalls
+            ``None`` — es hat sich nichts geaendert.
+        """
+        return self._switch(target, detail, strict=False)
+
+    def _switch(
+        self, target: StackState, detail: str | None, *, strict: bool
+    ) -> StackStatus | None:
         with self._lock:
             previous = self._status
-            if previous.state is state and previous.detail == detail:
-                return previous
-            self._status = StackStatus(state=state, since=utc_now(), detail=detail)
-            new_status = self._status
+            if previous.state is target and previous.detail == detail:
+                return None
+            if target is not previous.state and target not in ALLOWED_TRANSITIONS[previous.state]:
+                if strict:
+                    raise InvalidStackTransitionError(previous.state, target)
+                _LOG.warning(
+                    "Zustandswechsel verworfen",
+                    extra={
+                        "stack_state": previous.state.value,
+                        "stack_state_wanted": target.value,
+                    },
+                )
+                return None
+            self._status = StackStatus(state=target, since=utc_now(), detail=detail)
+            current = self._status
 
         _LOG.info(
             "Stack-Zustand gewechselt",
             extra={
-                "stack_state": new_status.state.value,
+                "stack_state": current.state.value,
                 "stack_state_previous": previous.state.value,
                 "stack_detail": detail,
             },
         )
-        return new_status
+        self._announce(previous, current)
+        return current
+
+    def _announce(self, previous: StackStatus, current: StackStatus) -> None:
+        """Meldet den Wechsel ans Ereignis-Log — ausserhalb der Sperre.
+
+        Ein Fehler beim Protokollieren darf die Zustandsfuehrung nicht
+        anhalten: der Zustand ist die Wahrheit ueber die Container, das
+        Ereignis nur seine Mitschrift.
+        """
+        if self.on_transition is None:
+            return
+        try:
+            self.on_transition(previous, current)
+        except Exception:  # pragma: no cover - defensiv
+            _LOG.exception("Zustandswechsel konnte nicht protokolliert werden")

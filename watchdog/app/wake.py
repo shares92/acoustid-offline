@@ -9,8 +9,9 @@ Der Kern des On-Demand-Betriebs. Drei Bausteine, bewusst getrennt:
   (interner Healthcheck, DECISIONS 2026-08-01). Sie ist der einzige
   verlaessliche Punkt, an dem „bereit" mehr heisst als „Prozess laeuft":
   der Endpunkt prueft Datenbank **und** Suchindex.
-* :class:`WakeCoordinator` — haelt Anfragen, waehrend gestartet wird, und
-  sorgt dafuer, dass gleichzeitige Anfragen **einen** Weckvorgang ausloesen.
+* :class:`WakeCoordinator` — haelt Anfragen, waehrend gestartet wird,
+  sorgt dafuer, dass gleichzeitige Anfragen **einen** Weckvorgang ausloesen,
+  legt den Stack wieder schlafen und erhebt seinen Zustand aus Docker.
 
 **Warum genau ein Weckvorgang.** Ein zweiter, gleichzeitiger Start waere
 nicht nur Verschwendung: er wuerde `docker start` waehrend eines laufenden
@@ -18,13 +19,23 @@ Starts erneut absetzen und die Zustandsanzeige flackern lassen. Der
 Koordinator haelt deshalb genau eine Aufgabe; jede weitere Anfrage haengt
 sich mit ihrer **eigenen** Frist daran (``wake.hold_timeout_s``, §6). Wer
 zuerst kam, wartet nicht laenger als wer spaeter kam — jeder bekommt seine
-volle Haltezeit ab dem eigenen Eintreffen.
+volle Haltezeit ab dem eigenen Eintreffen, und **der Vorgang selbst laeuft
+mindestens so lange wie sein geduldigster Wartender** (Phase 16: die Frist
+des Vorgangs wird beim Dazukommen verlaengert, sie wird nicht mehr von der
+ersten Anfrage geerbt).
 
-**Was hier NICHT steht.** Die vollstaendige Zustandsmaschine, der
-Idle-Stopp und die Feinheiten der Startfehler sind Phase 16. Dieses Modul
-setzt den Zustand nur so weit, wie das Wecken ihn zwangslaeufig aendert
-(``sleeping`` -> ``starting`` -> ``ready``, bei einem Docker-Fehler
-``error``), und stoppt nur auf ausdruecklichen Auftrag.
+**Wecken und Stoppen schliessen einander aus.** Beides laeuft als genau
+eine Aufgabe, und ein Weckvorgang wartet zuerst einen laufenden Stopp ab
+(:meth:`WakeCoordinator.stop_stack`). Eine Anfrage, die waehrend
+``stopping`` eintrifft, wird also nicht abgewiesen und ueberholt den Stopp
+auch nicht: sie wartet, bis der Stack steht, und weckt ihn dann wieder —
+konservativ, weil ein halb gestoppter Stack kein bedienbarer Stack ist und
+`docker stop`/`docker start` sich sonst ins Gehege kaemen.
+
+**Was hier NICHT steht.** Wann der Idle-Stopp faellig ist und wann der
+Zustand nachgefuehrt wird, entscheiden die beiden Dauerlaeufer in
+:mod:`acoustid_watchdog.lifecycle`; die erlaubten Zustandswechsel stehen in
+:mod:`acoustid_watchdog.state`.
 """
 
 from __future__ import annotations
@@ -33,6 +44,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from typing import Any, Final
 
 import httpx
@@ -230,9 +242,20 @@ class WakeCoordinator:
         self._state = state
         self._log_event = log_event
         self._poll_interval_s = poll_interval_s
-        self._ready = asyncio.Event()
+        # Bewusst ein einfaches Flag und kein ``asyncio.Event``: niemand
+        # *wartet* darauf (gewartet wird auf die Weck-Aufgabe), gelesen und
+        # gesetzt wird es dagegen auch aus dem Threadpool — und
+        # ``Event.set()`` ist nicht threadsicher.
+        self._ready = False
         self._task: asyncio.Task[None] | None = None
+        self._stop_task: asyncio.Task[bool] | None = None
+        #: Frist des laufenden Weckvorgangs (``time.monotonic``); wird von
+        #: jedem Dazukommenden auf seine eigene Haltezeit verlaengert.
+        self._deadline = 0.0
         self._wakes = 0
+        self._stops = 0
+        #: Aufeinanderfolgende erfolglose Docker-Abfragen (:meth:`observe`).
+        self._docker_failures = 0
 
     @property
     def wakes(self) -> int:
@@ -245,9 +268,24 @@ class WakeCoordinator:
         return self._wakes
 
     @property
+    def stops(self) -> int:
+        """Wie viele Stoppvorgaenge dieser Prozess begonnen hat."""
+        return self._stops
+
+    @property
     def ready(self) -> bool:
         """Gilt der Stack als bereit (letzte Pruefung war erfolgreich)?"""
-        return self._ready.is_set()
+        return self._ready
+
+    @property
+    def busy(self) -> bool:
+        """Laeuft gerade ein Weck- oder Stoppvorgang?
+
+        Die Frage des Hintergrund-Pollers: waehrend eines Vorgangs sind die
+        Container in Bewegung, und was Docker in diesem Moment meldet, sagt
+        ueber den Zustand weniger aus als der Vorgang selbst.
+        """
+        return _running(self._task) or _running(self._stop_task)
 
     # --- Anfragepfad --------------------------------------------------------
 
@@ -263,7 +301,7 @@ class WakeCoordinator:
         Raises:
             StackNotReadyError: Frist abgelaufen oder Start fehlgeschlagen.
         """
-        if self._ready.is_set():
+        if self._ready:
             return False
 
         task = self._join(timeout_s)
@@ -285,8 +323,8 @@ class WakeCoordinator:
         Stack kann von Hand gestoppt worden sein. Die naechste Anfrage
         prueft dann wieder — und weckt, wenn noetig.
         """
-        if self._ready.is_set():
-            self._ready.clear()
+        if self._ready:
+            self._ready = False
             _LOG.info("Bereitschaft verworfen — naechste Anfrage prueft erneut")
 
     # --- Weckvorgang --------------------------------------------------------
@@ -297,58 +335,72 @@ class WakeCoordinator:
         Zwischen Pruefung und ``create_task`` liegt kein ``await``; damit
         koennen zwei gleichzeitige Anfragen den Vorgang nicht doppelt
         ausloesen — ohne Sperre, die im Fehlerfall haengen bleiben koennte.
+
+        Die Frist des Vorgangs waechst mit jedem Dazukommenden auf dessen
+        eigene Haltezeit (Phase-15-Luecke, geschlossen in Phase 16): sonst
+        endete der Vorgang nach der Frist der **ersten** Anfrage, und ein
+        spaeter Wartender saehe seine 503 vor Ablauf seiner eigenen Zeit.
         """
+        deadline = time.monotonic() + timeout_s
         task = self._task
         if task is None or task.done():
-            task = asyncio.create_task(self._wake(timeout_s))
+            self._deadline = deadline
+            task = asyncio.create_task(self._wake())
             # Ohne diesen Abholer meldet asyncio „exception was never
             # retrieved", wenn alle Wartenden vorher in ihre Frist gelaufen
             # sind. Die Ausnahme selbst haben sie laengst gesehen.
             task.add_done_callback(_swallow)
             self._task = task
+        else:
+            self._deadline = max(self._deadline, deadline)
         return task
 
-    async def _wake(self, max_wait_s: float) -> None:
+    async def _wake(self) -> None:
         """Startet den Stack und wartet auf seine Bereitschaft.
 
-        Args:
-            max_wait_s: Obergrenze fuer diesen Vorgang. Sie stammt von der
-                Anfrage, die ihn ausgeloest hat; spaeter dazugekommene
-                Anfragen bringen ihre eigene Frist mit (:meth:`ensure_ready`).
+        Die Obergrenze ist ``self._deadline`` — sie gehoert dem Vorgang,
+        nicht einer einzelnen Anfrage, und wird waehrend des Wartens
+        weitergelesen (:meth:`_join`).
         """
+        # Ein laufender Stopp geht vor: erst faellt der Stack ganz, dann
+        # wird er wieder geweckt. `shield`, damit unsere eigene Frist den
+        # Stopp nicht abbricht.
+        stop_task = self._stop_task
+        if _running(stop_task) and stop_task is not None:
+            _LOG.info("Weckvorgang wartet auf den laufenden Stopp")
+            with suppress(Exception):
+                await asyncio.shield(stop_task)
+
         self._wakes += 1
         started_at = time.monotonic()
-        self._state.set(StackState.STARTING)
+        self._state.to(StackState.STARTING)
         self._event(EventLevel.INFO, "Stack wird geweckt")
 
         try:
             started = await run_in_threadpool(self._controller.start)
         except DockerError as exc:
             detail = str(exc)
-            self._state.set(StackState.ERROR, detail=detail)
+            self._state.to(StackState.ERROR, detail=detail)
             self._event(EventLevel.ERROR, "Stack-Start fehlgeschlagen", {"error": detail})
             raise StackNotReadyError(f"Stack konnte nicht gestartet werden: {detail}") from exc
 
-        _LOG.info(
-            "Stack-Container gestartet",
-            extra={"containers_started": started, "max_wait_s": max_wait_s},
-        )
+        _LOG.info("Stack-Container gestartet", extra={"containers_started": started})
 
-        deadline = started_at + max_wait_s
         while True:
             if await run_in_threadpool(self._probe.ready):
                 waited_s = round(time.monotonic() - started_at, 1)
-                self._ready.set()
-                self._state.set(StackState.READY)
+                self._ready = True
+                self._state.to(StackState.READY)
                 self._event(
                     EventLevel.INFO,
                     "Stack ist bereit",
                     {"waited_s": waited_s, "containers_started": started},
                 )
                 return
-            if time.monotonic() >= deadline:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
                 break
-            await asyncio.sleep(min(self._poll_interval_s, max(deadline - time.monotonic(), 0)))
+            await asyncio.sleep(min(self._poll_interval_s, remaining))
 
         # Kein Fehlerzustand: der Stack startet vermutlich noch, nur eben
         # laenger als eine Anfrage warten darf. `starting` bleibt stehen,
@@ -359,36 +411,155 @@ class WakeCoordinator:
             "Stack war nicht rechtzeitig bereit",
             {"waited_s": waited_s},
         )
-        raise StackNotReadyError(f"Stack wurde nicht binnen {max_wait_s:g} s bereit")
+        raise StackNotReadyError(f"Stack wurde nicht binnen {waited_s:g} s bereit")
 
-    # --- Start des Waechters ------------------------------------------------
+    # --- Schlafen legen -----------------------------------------------------
+
+    async def stop_stack(self, *, reason: str) -> bool:
+        """Legt den Stack schlafen (Idle-Stopp, spaeter der Admin-Knopf).
+
+        Args:
+            reason: Warum gestoppt wird (``"idle"``, spaeter ``"manual"``) —
+                geht als Feld ins Ereignis-Log.
+
+        Returns:
+            ``True``, wenn **dieser** Aufruf den Stack gestoppt hat;
+            ``False``, wenn der Stack nicht bereit war, gerade geweckt wird,
+            ein anderer Stopp schon lief oder der Stopp scheiterte (dann
+            steht der Zustand auf ``error``).
+        """
+        stop_task = self._stop_task
+        if _running(stop_task) and stop_task is not None:
+            # Ein zweiter Stopp haette nichts zu tun; das Ergebnis gehoert
+            # dem ersten.
+            with suppress(Exception):
+                await asyncio.shield(stop_task)
+            return False
+        if _running(self._task):
+            _LOG.info("Stopp verworfen — der Stack wird gerade geweckt")
+            return False
+        if self._state.state is not StackState.READY:
+            return False
+
+        task = asyncio.create_task(self._stop(reason))
+        task.add_done_callback(_swallow)
+        self._stop_task = task
+        return await task
+
+    async def _stop(self, reason: str) -> bool:
+        """Stoppt die Stack-Container und fuehrt den Zustand nach."""
+        self._stops += 1
+        # **Vor** dem ersten `docker stop`: ab jetzt ist der Stack nicht
+        # mehr bereit, auch wenn noch alles laeuft. Eine Anfrage, die genau
+        # hier eintrifft, wartet auf das Ende des Stopps und weckt dann.
+        self._ready = False
+        self._state.to(StackState.STOPPING)
+        self._event(EventLevel.INFO, "Stack wird schlafen gelegt", {"reason": reason})
+
+        started_at = time.monotonic()
+        try:
+            stopped = await run_in_threadpool(self._controller.stop)
+        except DockerError as exc:
+            detail = str(exc)
+            self._state.to(StackState.ERROR, detail=detail)
+            self._event(
+                EventLevel.ERROR,
+                "Stack-Stopp fehlgeschlagen",
+                {"error": detail, "reason": reason},
+            )
+            return False
+
+        self._state.to(StackState.SLEEPING)
+        self._event(
+            EventLevel.INFO,
+            "Stack schlaeft",
+            {
+                "reason": reason,
+                "containers_stopped": stopped,
+                "took_s": round(time.monotonic() - started_at, 1),
+            },
+        )
+        return True
+
+    # --- Zustand aus Docker erheben -----------------------------------------
 
     def refresh(self) -> StackState:
         """Erhebt den Zustand einmal aus Docker (Start des Waechters).
 
         Der Zustand liegt nur im Speicher (DECISIONS 2026-08-01, Punkt 6) —
         nach einem Neustart des Waechters muss er neu erhoben werden, sonst
-        zeigt `/status` „schlafend", waehrend der Stack laeuft. Bewusst
-        genuegsam: laufen alle Container **und** antwortet der Healthcheck,
-        gilt der Stack als bereit; alles andere ist ``schlafend``, bis eine
-        Anfrage weckt.
+        zeigt `/status` „schlafend", waehrend der Stack laeuft.
+        """
+        return self.observe(announce=False)
 
-        Ein nicht erreichbarer Docker-Daemon ist hier kein Startfehler: der
-        Waechter muss auch dann laufen (``/status``, Admin-UI), damit der
-        Betreiber ueberhaupt sieht, dass etwas nicht stimmt.
+    def observe(self, *, announce: bool = True) -> StackState:
+        """Gleicht den gefuehrten Zustand mit Docker ab.
+
+        Die Antwort auf die Phase-15-Luecke „von Hand gestoppter Stack":
+        beim Start (:meth:`refresh`) und danach im Takt des Pollers
+        (:class:`acoustid_watchdog.lifecycle.StatePoller`) fragt der
+        Waechter die Container und korrigiert seine Anzeige. Erst dadurch
+        zeigt `/status` die Wahrheit — und die erste Anfrage nach einem
+        Stopp von Hand weckt, statt ins Leere zu laufen.
+
+        Bewusst zurueckhaltend, damit die Anzeige nicht flackert:
+
+        * **Kein Container laeuft** -> ``schlafend``. Das ist eindeutig und
+          kommt direkt vom Daemon.
+        * **Alles laeuft und der Healthcheck antwortet** -> ``bereit``.
+        * **Alles dazwischen** (halb gestartet, laeuft aber noch nicht
+          gesund) -> der gefuehrte Zustand bleibt stehen. Wer gerade
+          hochfaehrt, ist ``startet``; ein einzelner verpasster Healthcheck
+          macht aus ``bereit`` noch kein ``schlafend`` (dafuer gibt es den
+          Weg ueber :meth:`invalidate` im Proxy).
+
+        Ein nicht erreichbarer Docker-Daemon ist kein Fehlerzustand des
+        Stacks: der Waechter muss auch dann laufen (``/status``, Admin-UI),
+        damit der Betreiber ueberhaupt sieht, dass etwas nicht stimmt.
+
+        Args:
+            announce: Auffaellige Aenderungen zusaetzlich als Ereignis
+                melden. Beim Start ist das unerwuenscht — dort ist jeder
+                Zustand „neu", ohne dass jemand etwas getan haette.
         """
         try:
             running = self._controller.all_running()
         except DockerError as exc:
-            _LOG.warning(
+            self._docker_failures += 1
+            # Nur der erste Fehlschlag einer Serie ist eine Warnung wert;
+            # ein dauerhaft fehlender Socket wuerde sonst das Log fluten.
+            log = _LOG.warning if self._docker_failures == 1 else _LOG.debug
+            log(
                 "Stack-Zustand nicht ermittelbar — Docker antwortet nicht",
-                extra={"error": str(exc)},
+                extra={"error": str(exc), "attempts": self._docker_failures},
             )
             return self._state.state
-        if running and self._probe.ready():
-            self._ready.set()
-            return self._state.set(StackState.READY).state
-        return self._state.set(StackState.SLEEPING).state
+        if self._docker_failures:
+            _LOG.info("Docker antwortet wieder", extra={"attempts": self._docker_failures})
+            self._docker_failures = 0
+
+        previous = self._state.state
+        if not running:
+            self.invalidate()
+            if previous is StackState.ERROR:
+                # Der Fehlerzustand bleibt stehen, bis ihn ein Weckversuch
+                # aufloest oder der Stack nachweislich wieder laeuft.
+                # „schlafend" waere die schoenere, aber falsche Anzeige —
+                # und der Betreiber saehe den Fehler nur noch im Log.
+                return previous
+            changed = self._state.try_to(StackState.SLEEPING)
+            if changed is not None and announce and previous is StackState.READY:
+                self._event(EventLevel.WARNING, "Stack wurde ausserhalb des Waechters gestoppt")
+            return self._state.state
+
+        if not self._probe.ready():
+            return self._state.state
+
+        self._ready = True
+        changed = self._state.try_to(StackState.READY)
+        if changed is not None and announce and previous is not StackState.STARTING:
+            self._event(EventLevel.INFO, "Stack wurde ausserhalb des Waechters gestartet")
+        return self._state.state
 
     # --- Hilfen -------------------------------------------------------------
 
@@ -399,7 +570,12 @@ class WakeCoordinator:
             _LOG.log(level.logging_level, message, extra=extra or {})
 
 
-def _swallow(task: asyncio.Task[None]) -> None:
-    """Holt die Ausnahme einer beendeten Weck-Aufgabe ab."""
+def _swallow(task: asyncio.Task[Any]) -> None:
+    """Holt die Ausnahme einer beendeten Weck-/Stopp-Aufgabe ab."""
     if not task.cancelled():
         task.exception()
+
+
+def _running(task: asyncio.Task[Any] | None) -> bool:
+    """Gibt es diese Aufgabe, und ist sie noch unterwegs?"""
+    return task is not None and not task.done()

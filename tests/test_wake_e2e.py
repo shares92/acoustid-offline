@@ -1,4 +1,4 @@
-"""E2E: eine Anfrage weckt den schlafenden Stack (Phase 15).
+"""E2E: eine Anfrage weckt den schlafenden Stack (Phasen 15 und 16).
 
 Der Nachweis, den die Definition of Done verlangt — und der einzige Test im
 Repo, der das **ganze** Zusammenspiel gegen echte Container faehrt:
@@ -13,11 +13,13 @@ den Zustand aus Docker und findet einen schlafenden Stack vor. Die eine
 folgende ``/v2/lookup``-Anfrage muss ihn wecken und beantwortet werden.
 
 **Warum der Waechter zuletzt startet.** Er haelt den Stack-Zustand im
-Speicher (DECISIONS 2026-08-01, Punkt 6) und erhebt ihn beim Start. Wuerde
-er waehrend eines laufenden Stacks starten und der Stack danach von Hand
-gestoppt, haette er einen veralteten Stand — die erste Anfrage liefe ins
-Leere, erst die zweite wuerde wecken. Die laufende Zustandsverfolgung ist
-Phase 16; dieser Test prueft die Weck-Mechanik, nicht sie.
+Speicher (DECISIONS 2026-08-01, Punkt 6) und erhebt ihn beim Start.
+
+Seit Phase 16 fuehrt er ihn ausserdem nach: der letzte Test hier stoppt den
+Stack **von Hand** (wie der Betreiber ueber die Unraid-Oberflaeche) und
+prueft, dass der Waechter das von selbst merkt — `/status` sagt danach
+``schlafend``, und die **erste** folgende Anfrage weckt, statt ins Leere zu
+laufen.
 
 **Laufen lassen** (Docker noetig, Images werden gebaut, dauert Minuten)::
 
@@ -273,3 +275,41 @@ def test_watchdog_passes_the_api_error_through(sleeping_stack: None) -> None:
         "status": "error",
         "error": {"code": 2, "message": 'missing required parameter "fingerprint"'},
     }
+
+
+def test_a_stack_stopped_by_hand_is_noticed(sleeping_stack: None) -> None:
+    """Phase 16: der Waechter merkt einen Stopp, den er nicht veranlasst hat.
+
+    Der Betreiber stoppt den Stack ueber die Unraid-Oberflaeche — bis
+    Phase 15 blieb der Waechter danach auf ``bereit`` stehen, die erste
+    Anfrage lief in eine tote API (503) und erst die zweite weckte. Der
+    Zustandsabgleich im Hintergrund (Takt: 15 s) schliesst die Luecke.
+
+    Der Test laeuft absichtlich zuletzt: er nimmt dem Stack die Laufzeit
+    weg, die die vorherigen Tests brauchen.
+    """
+    assert _status()["stack"]["state"] == "ready"
+
+    _compose(_STACK_FILES, "stop")
+    assert not any(_docker_running(name) for name in STACK_CONTAINERS)
+
+    # Ohne eine einzige Anfrage: der Waechter korrigiert seine Anzeige von
+    # selbst. Grosszuegig gewartet — der Takt ist 15 s, die Maschine kann
+    # unter Last stehen.
+    _wait(
+        "Waechter meldet den Stack als schlafend",
+        lambda: _status()["stack"]["state"] == "sleeping",
+        timeout_s=90,
+        interval_s=3.0,
+    )
+
+    # Und die **erste** Anfrage danach weckt wieder, statt 503 zu geben.
+    response = httpx.get(
+        f"{WATCHDOG_URL}/v2/lookup",
+        params={"client": "e2e", "fingerprint": encode_fingerprint([1, 2, 3]), "duration": 10},
+        timeout=180,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "ok"
+    assert _status()["stack"]["state"] == "ready"

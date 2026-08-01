@@ -74,11 +74,24 @@ def test_fresh_service_reports_a_sleeping_stack(service: WatchdogService) -> Non
 
 def test_state_change_updates_since_only_on_a_real_change(service: WatchdogService) -> None:
     before = service.state.status
-    assert service.state.set(StackState.SLEEPING) == before
+    assert service.state.to(StackState.SLEEPING) == before
 
-    started = service.state.set(StackState.STARTING)
+    started = service.state.to(StackState.STARTING)
     assert started.state is StackState.STARTING
     assert started.since >= before.since
+
+
+def test_every_state_change_is_an_event(service: WatchdogService) -> None:
+    """Der Lebenszyklus steht hinterher im Ereignis-Log (Phase 16)."""
+    service.state.to(StackState.STARTING)
+    service.state.to(StackState.READY)
+
+    events = [event for event in recent_events(service.db, limit=10) if event.source == "stack"]
+    assert [event.message for event in events] == [
+        "Stack-Zustand: bereit",
+        "Stack-Zustand: startet",
+    ]
+    assert events[0].extra == {"state": "ready", "state_previous": "starting", "detail": None}
 
 
 def test_update_config_writes_the_file_signal_and_event(service: WatchdogService) -> None:
@@ -103,6 +116,12 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     Weck-Koordination dazu. Alle vier sprechen nur mit dem Docker-Daemon
     bzw. mit dem API-Dienst — und zwar erst, wenn eine ``/v2``-Anfrage
     kommt. Kein Postgres, kein Suchindex, kein MusicBrainz.
+
+    Seit Phase 16 kommen die Lebenszyklus-Teile dazu: Aktivitaetsuhr,
+    Job-Auskunft, Idle-Stopp und Zustandsabgleich. Die Uhr rechnet, die
+    Job-Auskunft liest die eigene SQLite, die beiden Dauerlaeufer benutzen
+    Docker-Steuerung und Bereitschaftsfrage — auch hier keine Verbindung
+    zum Array.
     """
     attributes = set(vars(service))
     assert attributes == {
@@ -115,5 +134,9 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "proxy",
         "stack",
         "wake",
+        "activity",
+        "jobs",
+        "idle",
+        "poller",
     }
     assert not {"pool", "index", "mb", "matcher"} & attributes

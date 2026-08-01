@@ -1,0 +1,296 @@
+"""Die beiden Dauerlaeufer des Waechters (Phase 16).
+
+Wach werden kann der Stack von selbst — schlafen gehen nicht. Dafuer und
+fuer die Frage „stimmt meine Anzeige ueberhaupt noch?" laufen im Waechter
+zwei Hintergrundaufgaben, beide im Lifespan der Anwendung gestartet und
+beendet (:mod:`acoustid_watchdog.main`):
+
+======================  ===================================================
+:class:`IdleStopper`    legt den Stack nach ``idle.timeout_min`` ohne
+                        Nutzung schlafen — aber nur im Ruhezustand
+                        (Invariante §8.5)
+:class:`StatePoller`    gleicht den gefuehrten Zustand mit Docker ab, damit
+                        ein von Hand gestoppter oder gestarteter Stack
+                        auffaellt (Phase-15-Luecke)
+======================  ===================================================
+
+**Was „Leerlauf" heisst** (ARCHITECTURE §6, „Feste Werte"): *keine
+API-Anfrage im Timeout-Fenster UND kein laufender Import-/Backup-Job.*
+Beide Haelften stehen hier als eigene, kleine Bausteine:
+
+* :class:`ActivityTracker` — wann zuletzt eine Anfrage durch den Proxy
+  lief. Nur ``/v2/*`` zaehlt; `/status` und die Admin-UI beruehren das
+  Array nie und duerfen es folglich auch nicht wachhalten (Invariante
+  §8.2).
+* :class:`JobSource` — „laeuft gerade ein Job?". Heute beantwortet
+  :class:`DatabaseJobs` die Frage aus der Lauf-Historie ``update_run``:
+  ein Lauf ohne Ergebnis laeuft noch (:func:`acoustid_watchdog.runs.
+  running_runs`). Genau dort melden sich ab Phase 19 (Update-Zyklus) und
+  Phase 21 (Backup) an — sie legen den Lauf ohnehin mit
+  :func:`~acoustid_watchdog.runs.start_run` an, bevor sie arbeiten. Der
+  Idle-Stopp braucht dafuer keine Zeile Aenderung.
+
+**Ein laufender Job schiebt den Leerlauf auf.** Er sperrt den Stopp nicht
+nur fuer den Moment, er setzt die Leerlaufuhr zurueck: sonst faellt der
+Stack in dem Augenblick schlafen, in dem ein langer Import fertig wird —
+die ganze Timeout-Frist waere ja waehrend des Laufs verstrichen. Nach dem
+Job hat der Betreiber (und die Admin-UI) wieder das volle Fenster.
+
+**Warum zwei Aufgaben und nicht eine.** Sie haben verschiedene Takte und
+verschiedene Kosten: der Zustandsabgleich fragt Docker (billig, aber nach
+aussen) und soll zeitnah greifen, der Idle-Stopp rechnet nur mit einer Uhr
+und darf gemuetlich sein. Zusammengelegt muesste einer der beiden im
+falschen Takt laufen.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+import time
+from collections.abc import Callable
+from typing import Final, Protocol
+
+from starlette.concurrency import run_in_threadpool
+
+from acoustid_watchdog.runs import running_runs
+from acoustid_watchdog.state import StackStateTracker
+from acoustid_watchdog.store import Database
+from acoustid_watchdog.wake import WakeCoordinator
+from shared.config import Config, IdleConfig
+from shared.models import StackState
+
+__all__ = [
+    "DEFAULT_IDLE_CHECK_INTERVAL_S",
+    "DEFAULT_STATE_POLL_INTERVAL_S",
+    "ActivityTracker",
+    "DatabaseJobs",
+    "IdleStopper",
+    "JobSource",
+    "StatePoller",
+]
+
+_LOG = logging.getLogger(__name__)
+
+#: Abstand zweier Zustandsabgleiche mit Docker. Ein Abgleich kostet drei
+#: ``inspect``-Aufrufe auf dem lokalen Socket (und einen Healthcheck, wenn
+#: alles laeuft) — Millisekunden. 15 Sekunden sind der Kompromiss aus „ein
+#: von Hand gestoppter Stack faellt schnell auf" (die Admin-UI pollt
+#: `/status` alle 5 s, §6) und „der Waechter ist leise": im Normalbetrieb
+#: sind das vier Aufrufe je Minute auf einen Unix-Socket, ohne eine Zeile
+#: Log. Bewusst **kein** §6-Schluessel: der Betreiber hat keinen Grund,
+#: daran zu drehen (Muster aus DECISIONS 2026-08-01, Punkt 2).
+DEFAULT_STATE_POLL_INTERVAL_S: Final = 15.0
+
+#: Abstand zweier Faelligkeitspruefungen des Idle-Stopps. Die kleinste
+#: sinnvolle Frist ist eine Minute (``idle.timeout_min``), die Vorgabe 15;
+#: eine halbe Minute Aufloesung genuegt also und kostet nichts (eine
+#: SQLite-Abfrage, sonst nur eine Subtraktion).
+DEFAULT_IDLE_CHECK_INTERVAL_S: Final = 30.0
+
+
+class ActivityTracker:
+    """Wann zuletzt eine ``/v2/``-Anfrage lief — die Uhr des Idle-Stopps."""
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        """
+        Args:
+            clock: Zeitquelle; ``time.monotonic``, weil eine Zeitumstellung
+                oder ein NTP-Sprung den Stack nicht schlafen legen darf.
+                Tests geben eine eigene Uhr mit.
+        """
+        self._clock = clock
+        self._lock = threading.Lock()
+        # Ein frisch gestarteter Waechter gilt als „gerade benutzt": sonst
+        # waere die erste Pruefung nach einem Neustart sofort faellig.
+        self._last = clock()
+        self._requests = 0
+
+    def touch(self) -> None:
+        """Merkt eine Anfrage vor (Aufrufer: der Proxy-Pfad in ``main``)."""
+        with self._lock:
+            self._last = self._clock()
+            self._requests += 1
+
+    @property
+    def idle_s(self) -> float:
+        """Sekunden seit der letzten Anfrage."""
+        with self._lock:
+            return max(self._clock() - self._last, 0.0)
+
+    @property
+    def requests(self) -> int:
+        """Wie viele Anfragen dieser Prozess gesehen hat (Diagnose, Tests)."""
+        with self._lock:
+            return self._requests
+
+
+class JobSource(Protocol):
+    """„Laeuft gerade ein Job?" — die Sperre aus Invariante §8.5.
+
+    Absichtlich winzig und nicht an SQLite gebunden: Phase 19 (Update) und
+    Phase 21 (Backup) melden ihre Laeufe ueber die Lauf-Historie an, ein
+    Test ueber eine Attrappe.
+    """
+
+    def running_jobs(self) -> list[str]:
+        """Beschreibungen der laufenden Jobs; leere Liste = nichts laeuft."""
+        ...
+
+
+class DatabaseJobs:
+    """Laufende Jobs aus der Lauf-Historie ``update_run``."""
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+
+    def running_jobs(self) -> list[str]:
+        """Jeder Lauf ohne Ergebnis laeuft noch (:mod:`acoustid_watchdog.runs`)."""
+        return [f"{run.kind.display_name} #{run.id}" for run in running_runs(self.db)]
+
+
+class IdleStopper:
+    """Legt den Stack schlafen, wenn niemand ihn braucht (§8.5)."""
+
+    def __init__(
+        self,
+        coordinator: WakeCoordinator,
+        state: StackStateTracker,
+        activity: ActivityTracker,
+        jobs: JobSource,
+        config: Callable[[], Config],
+        *,
+        interval_s: float = DEFAULT_IDLE_CHECK_INTERVAL_S,
+    ) -> None:
+        """
+        Args:
+            coordinator: Weck- und Stopp-Koordination.
+            state: Zustandsanzeige — gestoppt wird nur aus ``bereit``.
+            activity: Uhr der letzten Anfrage.
+            jobs: Auskunft ueber laufende Import-/Backup-Jobs.
+            config: Zugriff auf die **aktuelle** Laufzeit-Konfiguration
+                (``idle.timeout_min`` wird bei jeder Pruefung frisch
+                gelesen, damit eine Aenderung in der Admin-UI ohne Neustart
+                greift — wie ``wake.hold_timeout_s`` im Proxy).
+            interval_s: Abstand zweier Faelligkeitspruefungen.
+        """
+        self._coordinator = coordinator
+        self._state = state
+        self._activity = activity
+        self._jobs = jobs
+        self._config = config
+        self.interval_s = interval_s
+        #: Wie oft ein laufender Job den Stopp aufgeschoben hat (Tests,
+        #: spaeter die Kennzahlen der Phase 22).
+        self.blocked_by_jobs = 0
+
+    # --- Einzelschritt ------------------------------------------------------
+
+    @property
+    def timeout_s(self) -> float:
+        """``idle.timeout_min`` in Sekunden, aus der laufenden Konfiguration.
+
+        Eine unlesbare ``config.yaml`` darf den Betrieb nicht anhalten; dann
+        gilt der Vorgabewert aus §6 — dieselbe Haltung wie im Proxy.
+        """
+        try:
+            timeout_min = self._config().idle.timeout_min
+        except Exception:
+            _LOG.exception("Laufzeit-Konfiguration nicht lesbar, Vorgabewert wird benutzt")
+            timeout_min = IdleConfig().timeout_min
+        return timeout_min * 60.0
+
+    async def check(self) -> bool:
+        """Eine Faelligkeitspruefung.
+
+        Returns:
+            ``True``, wenn diese Runde den Stack schlafen gelegt hat.
+        """
+        if self._state.state is not StackState.READY:
+            # Was nicht bereit ist, wird nicht gestoppt: schlafend ist schon
+            # das Ziel, startet/stoppt gehoert einem laufenden Vorgang, und
+            # ein Stack im Fehlerzustand laeuft nicht verlaesslich.
+            return False
+        if self._coordinator.busy:
+            return False
+
+        jobs = await run_in_threadpool(self._jobs.running_jobs)
+        if jobs:
+            # Ein laufender Job ist Nutzung, nicht nur eine Sperre — die
+            # Leerlaufuhr beginnt nach ihm von vorn (Modul-Docstring).
+            self._activity.touch()
+            self.blocked_by_jobs += 1
+            _LOG.debug("Idle-Stopp aufgeschoben, Job laeuft", extra={"jobs": jobs})
+            return False
+
+        idle_s = self._activity.idle_s
+        timeout_s = self.timeout_s
+        if idle_s < timeout_s:
+            return False
+
+        _LOG.info(
+            "Leerlauf erreicht, Stack wird schlafen gelegt",
+            extra={"idle_s": round(idle_s), "timeout_s": round(timeout_s)},
+        )
+        return await self._coordinator.stop_stack(reason="idle")
+
+    # --- Schleife -----------------------------------------------------------
+
+    async def run(self) -> None:
+        """Prueft bis zum Abbruch periodisch auf Leerlauf.
+
+        Laeuft als Hintergrundaufgabe im Lifespan; der Abbruch beim
+        Herunterfahren ist ``CancelledError`` und beendet sie sofort.
+        """
+        while True:
+            await asyncio.sleep(self.interval_s)
+            try:
+                await self.check()
+            except Exception:
+                # Eine Hintergrundschleife darf an nichts sterben — sonst
+                # bliebe der Stack fuer immer wach.
+                _LOG.exception("Idle-Pruefung fehlgeschlagen")
+
+
+class StatePoller:
+    """Fuehrt den Stack-Zustand aus Docker nach (Phase-15-Luecke)."""
+
+    def __init__(
+        self,
+        coordinator: WakeCoordinator,
+        *,
+        interval_s: float = DEFAULT_STATE_POLL_INTERVAL_S,
+    ) -> None:
+        self._coordinator = coordinator
+        self.interval_s = interval_s
+        #: Wie viele Abgleiche stattgefunden haben (Tests, Diagnose).
+        self.checks = 0
+
+    async def check(self) -> StackState | None:
+        """Ein Abgleich mit Docker.
+
+        Returns:
+            Der Zustand nach dem Abgleich, oder ``None``, wenn dieser Takt
+            uebersprungen wurde, weil gerade geweckt oder gestoppt wird.
+
+        Waehrend eines Weck- oder Stoppvorgangs sind die Container in
+        Bewegung; eine Momentaufnahme aus Docker wuerde dann nur die
+        Anzeige flackern lassen (``startet`` -> ``schlafend`` -> ``bereit``)
+        und im schlimmsten Fall einen laufenden Vorgang uebergehen.
+        """
+        if self._coordinator.busy:
+            return None
+        self.checks += 1
+        # Der Abgleich spricht ueber den Socket mit Docker und ggf. per HTTP
+        # mit der API — beides synchron, also in den Threadpool.
+        return await run_in_threadpool(self._coordinator.observe)
+
+    async def run(self) -> None:
+        """Gleicht bis zum Abbruch periodisch mit Docker ab."""
+        while True:
+            await asyncio.sleep(self.interval_s)
+            try:
+                await self.check()
+            except Exception:
+                _LOG.exception("Zustandsabgleich fehlgeschlagen")

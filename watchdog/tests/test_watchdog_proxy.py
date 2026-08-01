@@ -20,12 +20,14 @@ from fastapi.testclient import TestClient
 from watchdog_stubs import FakeDaemon, RecordingProxyTransport, docker_client, probe, streamed
 
 from acoustid_watchdog.config_store import ConfigStore
+from acoustid_watchdog.events import EventLevel, recent_events
 from acoustid_watchdog.main import create_app
 from acoustid_watchdog.proxy import HOP_BY_HOP_HEADERS, ReverseProxy
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.store import Database
 from acoustid_watchdog.wake import API_BASE_URL
 from shared.env import EnvSettings
+from shared.models import StackState
 
 FINGERPRINT = "AQABz0qUkZK4oOfhL-CPc4e5C_wW2H2QH9uPLsdxHT2"
 
@@ -289,6 +291,75 @@ def test_wake_timeout_answers_503(daemon: FakeDaemon, env_settings: EnvSettings)
     assert forwarded == []
     # Die Container wurden trotzdem gestartet — sie brauchen nur laenger.
     assert daemon.all_running is True
+
+
+def test_start_failure_answers_503_with_the_reason_and_recovers(
+    env_settings: EnvSettings, upstream: RecordingProxyTransport
+) -> None:
+    """Stack-Start-Fehler -> 503 + Fehlertext + Ereignis (§7, Phase 16).
+
+    Und der Weg zurueck: der Betreiber legt den fehlenden Container an, die
+    naechste Anfrage weckt — ohne Neustart des Waechters.
+    """
+    # `acoustid-api` gibt es nicht: der Weckvorgang scheitert am Daemon.
+    daemon = FakeDaemon({"acoustid-db": False, "acoustid-index": False})
+    service = WatchdogService(
+        env_settings,
+        Database.for_data_dir(env_settings.data_dir),
+        ConfigStore.from_path(env_settings.config_path),
+        docker=docker_client(daemon),
+        probe=probe(lambda request: httpx.Response(200 if daemon.all_running else 503)),
+        proxy=ReverseProxy(
+            API_BASE_URL,
+            client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
+        ),
+    ).open()
+
+    with TestClient(create_app(service)) as client:
+        response = client.get("/v2/lookup?client=abc")
+
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == 13
+        # Der Fehlertext nennt den Grund, nicht nur „nicht bereit".
+        assert "acoustid-api" in response.json()["error"]["message"]
+        assert service.state.state is StackState.ERROR
+        assert upstream.requests == []
+
+        failure = next(
+            event
+            for event in recent_events(service.db, limit=20)
+            if event.message == "Stack-Start fehlgeschlagen"
+        )
+        assert failure.level is EventLevel.ERROR
+        assert failure.source == "wake"
+
+        daemon.containers["acoustid-api"] = False  # Container ist da
+        assert client.get("/v2/lookup?client=abc").status_code == 200
+
+    assert service.state.state is StackState.READY
+    assert daemon.all_running is True
+
+
+def test_every_v2_request_counts_as_activity(client: TestClient) -> None:
+    """Die Uhr des Idle-Stopps haengt am Proxy-Pfad (§6 „Idle-Definition")."""
+    service: WatchdogService = client.app.state.service
+    before = service.activity.requests
+
+    client.get("/v2/lookup?client=abc")
+    client.get("/v2/lookup?client=abc")
+
+    assert service.activity.requests == before + 2
+    assert service.activity.idle_s < 1
+
+
+def test_status_is_no_activity(client: TestClient) -> None:
+    """`/status` beruehrt das Array nie und haelt es folglich nicht wach."""
+    service: WatchdogService = client.app.state.service
+    before = service.activity.requests
+
+    client.get("/status")
+
+    assert service.activity.requests == before
 
 
 def test_status_never_touches_docker(client: TestClient, daemon: FakeDaemon) -> None:
