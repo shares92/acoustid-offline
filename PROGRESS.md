@@ -1,435 +1,133 @@
 # PROGRESS.md — acoustid-offline
 
-Phasenplan als Checkliste. Quelle: docs/HANDOFF.md; technische Referenz:
+Übergabe- und Steuerungsdatei: Statuskopf, Session-Übergabe, kompakte
+Ergebnisliste der abgeschlossenen Phasen und der vollständige Plan der
+offenen Phasen. Die ausführlichen Aufgabenblöcke erledigter Phasen
+liegen in der Git-Historie dieser Datei und im Session-Archiv
+(`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status: Phasen 0–13 abgeschlossen (2026-07-26) — der API-Block
-(9–13) ist damit vollständig. Repo öffentlich unter
-https://github.com/shares92/acoustid-offline, CI grün (1349 Tests,
-drei Jobs: Lint+Unit, Integration PG+Index, Bit-Verifikation
-pg_acoustid). Warten auf Go für Phase 14 (Wächter-Grundgerüst).
-Phase 13 in Kürze: `POST /v2/lookup/batch` (Objekt-Hülle mit
-`queries`, Antwort `responses` mit `index` in Anfragereihenfolge,
-Teilfehler je Eintrag bei HTTP 200, Limit 100 ⇒ 19/413,
-meta-Bündelung: ein MB-Roundtrip-Bündel je MetaPlan für alle
-Einträge) und `GET/POST /v2/submission_status` (`new` ⇒ `"pending"`,
-ab `indexed` ⇒ `"imported"` + `result.id`; unbekannte IDs still
-`"pending"`, nie 404; max. 100 IDs). Davor: Phase 12 Upstream-Queue
-(Echtlauf-Vormerkung Phase 28), Phase 11 /v2/submit + u32-Finding,
-Phase 10 MB-Resolver. Offen bleibt der Phase-8-Rest (Unraid-Probelauf,
-Anleitung docs/probelauf-unraid.md). Offener DoD-Rest aus Phase 8: der
-Probelauf am echten Datenbestand (auf der Unraid-Hardware des
-Betreibers) steht aus — der Probelauf-Modus selbst ist gebaut und
-getestet; Referenz lokal ~9,2 MB gz/s ⇒ Hochrechnung grob 12–13 h
-reine DB-Zeit für 414 GB. Die Schritt-für-Schritt-Anleitung liegt
-seit 2026-07-25 vor: docs/probelauf-unraid.md. Exit-Codes und
-Report-Format: docs/importer-job.md; Lookup-API: docs/api-lookup.md.
-Admin-UI (Phasen 23–27): Designpaket vollständig und abgenommen —
-`support.js` wurde am 2026-07-25 nachgeliefert (Paket „Admin-UI-2"),
-Prototyp verifiziert (initialisiert sauber, Zustände per
-Prototyp-Steuerung durchschaltbar, Responsive-Breakpoint greift, keine
-Konsolenfehler). Der Design-Blocker ist damit aufgehoben; gebaut wird
-die UI weiterhin erst in ihren Phasen. Das Paket liegt versioniert
-unter docs/design/ (Betreiber-Entscheid 2026-07-25).**
+**Status (2026-08-01): Phasen 0–13 abgeschlossen — API-Block komplett.
+Repo https://github.com/shares92/acoustid-offline, HEAD `abd1225`,
+Arbeitsbaum sauber, CI grün (1349 Tests, drei Jobs: Lint+Unit,
+Integration PG+Index, Bit-Verifikation pg_acoustid). Warten auf Go für
+Phase 14 (Wächter-Grundgerüst).**
+
+## Session-Übergabe (Session-Ende 2026-08-01)
+
+**Kurzbeschreibung:** Session vom 25.07. (Steuerungsdateien aus dem
+Handoff erzeugt, Recherche-Phasen 0–1, Bauphasen 2–6) mit Fortsetzung
+am 01.08.: Das Go „weiter mit Phase 7" traf auf ein Repo, das durch
+parallele Sessions bereits auf Phase 13 stand — statt Doppelbau wurde
+die bestehende Phase 7 vollständig nachverifiziert (1338 Tests grün
+gegen echte Container, Batch-Messreihe, Entescape-Durchstich bis in
+die DB). Ertrag: ein LEARNINGS-Eintrag, ein DECISIONS-Prozessentscheid
+(Stand-Vorprüfung), Gedächtnis-/Doku-Abgleich.
+
+**Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
+(Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
+Index-Client (msgpack), Importer komplett (Download, Parser mit
+Epochen-Lesart, transaktionaler Import, Index-Feed, Bootstrap-Job mit
+9 Exit-Codes und Probelauf-Modus), API komplett (/v2/lookup mit
+meta/MB-Resolver, /v2/submit off/local/local+upstream mit
+Upstream-Queue, /v2/lookup/batch, /v2/submission_status) — alles
+bug-für-bug-kompatibel dokumentiert (docs/api-lookup.md,
+docs/api-submit.md, docs/importer-job.md).
+**Existiert noch nicht:** der gesamte Wächter (Phasen 14–22: Proxy,
+Wecken, Cache, Auth, Scheduler, Notify, Backup, Metrics), die Admin-UI
+(23–27, Designpaket abgenommen unter docs/design/), E2E/Release
+(28–29). `watchdog/app/` ist ein leeres Skeleton. Nie gelaufen:
+Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
+
+**Offene Punkte (priorisiert):**
+1. **Go-Entscheidung Phase 14** einholen (Wächter-Grundgerüst;
+   Phasenblock unten inkl. Healthcheck-Mitentscheid) — die Go-Frage
+   vom 01.08. wurde vom Betreiber verworfen, kein Go erteilt.
+2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
+   Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
+   daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
+3. **Task-Chip offen** (task_e5db0b72): DB-Assertion für die
+   entescapte 2011er-Meta-Zeile in den dbimport-Integrationstests
+   (`importer/tests/`; manuell am 01.08. bereits bestätigt).
+4. **Daten-Flaute seit 2026-07-22** bei data.acoustid.org vor
+   Produktivstart erneut prüfen (ARCHITECTURE §12).
+5. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst Phase 28
+   (Vormerkungen stehen in den Phasenblöcken).
+
+**Nächster konkreter Schritt für eine frische Session:** `git log
+--oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
+Arbeitsregeln), dann per AskUserQuestion das Go für Phase 14 einholen
+(Optionen: Phase 14 / Unraid-Probelauf / beides parallel) und bei Go
+einen Opus-Bau-Agenten mit dem Phase-14-Block unten beauftragen —
+inklusive Stand-Vorprüfung im Auftragstext (DECISIONS 2026-08-01).
+Nach Abschluss von Phase 14 ist der volle 5-Phasen-Doku-Sweep mit
+Diff-Anzeige fällig (Phasen 10–14).
+
+**Fallstricke — nicht ändern / beachten:**
+- ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
+  (anweisungsgleich mit Migrations-SQL bzw. deckungsgleich mit
+  Parser-SPECS) — nie freihändig editieren.
+- Bug-für-Bug-Paritäten der API sind Absicht (Abweichungstabellen in
+  docs/api-lookup.md / docs/api-submit.md) — vermeintliche
+  „Original-Bugs" nicht fixen.
+- `compare2`/`extract_query`/Chromaprint-Encoder nur mit
+  Bit-Verifikation (CI-Job `extension`) ändern.
+- Index-Image bleibt per Digest gepinnt; Doc-ID-Bereich für
+  Submissions ist [2^31, 2^32-1] (u32-Grenze real).
+- Fixtures (`tests/fixtures/acoustid-dumps/*.jsonl.gz`) nie committen
+  (Lizenzentscheid); Beschaffung über fetch_fixtures.py.
+- Skripte/Container nie mit CWD=Repo-Root starten
+  (Namespace-Paket-Falle); psycopg wird in shared bewusst lazy geladen.
+- Lokale Integrationstests auf Apple Silicon brauchen colima mit
+  `--vz-rosetta`; CI-Flakes durch Docker-Hub-Timeouts → `gh run rerun
+  --failed` genügt.
 
 ## Arbeitsregeln
 
 - Session-Start: zuerst ARCHITECTURE.md und PROGRESS.md lesen, dann
-  fragen, welche Phase dran ist.
+  fragen, welche Phase dran ist. **Zusätzlich seit 2026-08-01: vor
+  jedem Bau-Agenten-Start `git log` + Statuskopf prüfen; Bau-Aufträge
+  enthalten die Vorprüfung „Phase bereits umgesetzt? → nicht bauen,
+  sondern prüfen und melden" (DECISIONS 2026-08-01).**
 - Implementierung einer Phase erst nach explizitem Go des Auftraggebers.
 - Keine Annahmen außerhalb des Handoffs — bei Unklarheit nachfragen.
-- Nach jeder abgeschlossenen Phase: Haken + kurzer Statusvermerk hier,
-  Doku aktuell halten, bevor die nächste Phase beginnt.
+- Nach jeder abgeschlossenen Phase: Statusvermerk hier, Doku aktuell
+  halten, bevor die nächste Phase beginnt; danach Pause + Go-Frage.
 - Nach Abschluss jeder 5. Phase: PROGRESS.md, DECISIONS.md und (falls
   relevant) ARCHITECTURE.md und LEARNINGS.md eigenständig aktualisieren
-  und die Diffs zeigen, bevor es weitergeht.
+  und die Diffs zeigen, bevor es weitergeht. (Nächster Sweep: nach
+  Phase 14.)
 - Jede UI-Phase endet mit Sicht-Check am gerenderten Ergebnis
   (Screenshot vs. Design, Desktop + schmale Breite).
-- Phasen 23–27 waren blockiert, bis das Ergebnis der separaten
-  Claude-Design-Session (auf Basis docs/DESIGN_HANDOFF.md) vorliegt
-  (Betreiber-Vorgabe 2026-07-25). Das Designpaket liegt seit 2026-07-25
-  vor; Reststand (fehlende Prototyp-Runtime `support.js`) siehe
-  Statuskopf. Designentscheidungen werden weiterhin nicht
-  vorweggenommen — das Paket ist die Referenz.
+- Admin-UI (Phasen 23–27): Das abgenommene Designpaket unter
+  docs/design/ (inkl. Prototyp-Runtime support.js, verifiziert) ist
+  die Referenz — Designentscheidungen werden nicht neu getroffen.
 
 ---
 
-## Phase 0: Recherche — Dump-Format & Bootstrap-Strategie
+## Ergebnisse der abgeschlossenen Phasen 0–13
 
-Ziel: Das größte Projektrisiko (unverifiziertes Delta-Format, unklarer
-Erst-Import) beseitigen, bevor Code entsteht. Reine Recherche.
+Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
+`abd1225`); Entscheide: DECISIONS.md; Berichte: docs/research/.
 
-Aufgaben:
-- [x] data.acoustid.org sichten: Delta-Dateien (Benennung,
-      Sequenznummern, Veröffentlichungsrhythmus, Kompression) dokumentiert
-      (ARCHITECTURE §5.1)
-- [x] Tabellen-/Feldstruktur der JSON-Deltas vollständig erfasst —
-      dreifach belegt (Exporter-Code, Live-Daten, Fixtures); 7 Ströme
-      statt der 3 aus dem Handoff-Modell
-- [x] Geklärt: KEIN Voll-Snapshot — Replay aller Deltas seit 2011-08-19
-      (414 GB gz, 38.178 Dateien); Volumen beziffert
-- [x] Exakte Postgres-Spalten abgeleitet und in ARCHITECTURE.md §5.2
-      eingetragen (alle 7 Zieltabellen + import_state)
-- [x] Bootstrap-Strategie als DECISIONS-Eintrag; Zeitabschätzung bewusst
-      auf den Probelauf in Phase 8 verlagert — nirgends existiert eine
-      belegte E2E-Importdauer (Betreiber-Entscheid 2026-07-25)
+| Phase | Titel | Commit(s) | Kernergebnis |
+|---|---|---|---|
+| 0 | Recherche Dump-Format & Bootstrap | — | Kein Voll-Snapshot: Replay aller Tagesdeltas seit 2011-08-19 (414 GB gz, 38.178 Dateien); exakte Schemata (§5.1/§5.2); Fixtures |
+| 1 | Recherche Index/Upstream/MB | — | acoustid-index ausgeleuchtet (Cache-Pool-Entscheid), API-Vertrag inkl. `/v2/submission_status`-Korrektur, MB-Query-Schicht-Entwurf (docs/research/) |
+| 2 | Repo-Grundgerüst & CI | 15c78e4, 6fde05c | uv-Workspace Python 3.14, öffentliches Repo, CI (setup-uv-Tag-Fix), MIT, fetch_fixtures.py |
+| 3 | Shared: Config/Modelle/Logging | 481315c | Alle §6-Schlüssel (pydantic, Secrets 0600, YAML-Sexagesimal-Fix), EnvSettings, JSON-Logging |
+| 4 | DB-Schema & Migrationen | 1f294c4 | Eigener Runner, Gruppen core/indexes, lz4 in core, postgres:18; DDL testgekoppelt an §5.2 |
+| 5 | Index-Client | 620aa5a | msgpack-Client (query/wire/client/errors), Digest-Pin, AOFF_INDEX_NAME, 12-Befunde-Addendum |
+| 6 | Importer: Download & Parser | 0893abe | Epochen-Lesart COPY-Escaping (≤2024-12-04, HOCH), Range-Resume (iter_raw), Arbeitsliste mit Lücken-Meldung |
+| 7 | Importer: DB-Import & Index-Feed | 85d7d40 | Datei=Transaktion inkl. import_state, Resume, Feed 1000er nach id; **nachverifiziert 2026-08-01** (1338 Tests) |
+| 8 | Bootstrap, Guard & One-Shot-Job | c915fb8 | Bulk-Pfad (core→Import→indexes→Feed), 9 Exit-Codes, Report-Schema, Probelauf-Modus; **DoD-Rest: Unraid-Lauf offen** |
+| 9 | API: /v2/lookup Kern | 027597c | Match-Pipeline mit compare2-Nachbau, Bit-Verifikations-CI (fand Phase-5-Fehler), docs/api-lookup.md |
+| 10 | API: MB-Resolver & meta | a467064, ea008a6 | shared/mb (Circuit-Breaker, Selfcheck, Staleness), meta bug-für-bug, Online-Redirects, degradierter Betrieb |
+| 11 | API: /v2/submit off/local | ead4790, b15c60b | local_submission, synchrone Indexierung, Doc-ID u32-Finding [2^31, 2^32-1], docs/api-submit.md |
+| 12 | API: Upstream & Queue | 657ee14 | drain_queue/retry_forward, ≤3 req/s, 7-Fehler-Grenze → upstream_forward_gave_up, Mock-Upstream-Tests |
+| 13 | API: Batch & submission_status | 1d8874a | queries/responses-Vertrag (Teilfehler bei 200, Limit 100→19/413, meta-Bündelung); Status nie 404 |
 
-Definition of Done: erfüllt 2026-07-25 — Schema in ARCHITECTURE §5,
-Bootstrap-/Import-Entscheide in DECISIONS, 9 Fixture-Dateien (8,9 MB,
-Tag 2026-07-22 komplett + Edge Cases) unter
-tests/fixtures/acoustid-dumps/; Handoff-§11.1/§11.2 geschlossen.
-
-## Phase 1: Recherche — acoustid-index, Upstream-Submit, MB-Schema
-
-Ziel: Restliche offene Punkte aus Handoff §11 schließen.
-
-Aufgaben:
-- [x] acoustid-index vollständig ausgeleuchtet: Zig-`main` via GHCR
-      (Digest-Pin), API inkl. msgpack, fsync-Oplog/Crash-Verhalten,
-      Kennzahlen 40–55 GB + „muss in den RAM" (ARCHITECTURE §5.3,
-      docs/research/phase1-acoustid-index.md)
-- [x] Index-Platzierung entschieden: SSD-Cache-Pool (DECISIONS)
-- [x] Rescoring entschieden: zweistufig, Python-Nachbau `compare2` +
-      `extract_query` mit CI-Bit-Verifikation gegen die
-      Original-Extension (nur Test-Container); `index.query_hashes`
-      konfigurierbar (DECISIONS)
-- [x] Upstream-Submit + kompletter API-Vertrag dokumentiert inkl.
-      Handoff-Korrektur `/v2/submission_status`, Fehlercode-Tabelle,
-      Client-Verhalten Picard/beets (ARCHITECTURE §7,
-      docs/research/phase1-api-formate.md)
-- [x] MB-Schema: 17 Tabellen, 10-Funktionen-Query-Schicht,
-      Redirect-Auflösung, RO-Rolle, Schema-Guard (ARCHITECTURE §5.4,
-      docs/research/phase1-mb-schema.md)
-- [x] Ergebnisse in ARCHITECTURE.md und DECISIONS.md eingetragen
-
-Definition of Done: erfüllt 2026-07-25 — Handoff-§11.3–§11.5
-geschlossen; alle Entscheidungen protokolliert (7 neue
-DECISIONS-Einträge).
-
-## Phase 2: Repo-Grundgerüst & CI
-
-Ziel: Baubare, leere Projektstruktur mit grüner CI.
-
-Aufgaben:
-- [x] git init; .gitignore (inkl. Fixtures — Lizenzentscheid — und
-      .env/config.yaml); Filestruktur gemäß ARCHITECTURE.md §10
-- [x] Python-Paketstruktur als uv-Workspace (Python 3.14, ruff,
-      pytest; Import-Namen `shared`/`acoustid_api`/`acoustid_importer`/
-      `acoustid_watchdog`, siehe DECISIONS)
-- [x] .env.example (AOFF_-Bootstrap-Startsatz) und README-Stub mit
-      Lizenzhinweisen (Code MIT, Daten CC BY-SA 3.0)
-- [x] .github/workflows/ci.yml: Lint + Format-Check + Tests (uv)
-- [x] GitHub-Repo angelegt und verbunden:
-      https://github.com/shares92/acoustid-offline (öffentlich)
-- [x] Steuerungsdateien + docs/ im Repo
-- [x] fetch_fixtures.py für reproduzierbare Fixture-Beschaffung
-
-Definition of Done: erfüllt 2026-07-25 — CI auf GitHub grün
-(Lint + Format + 31 Tests; Fix nötig: setup-uv-Tag v9 → v9.0.0);
-Struktur entspricht §10 (dokumentierte Abweichung: Import-Namen).
-
-## Phase 3: Shared-Paket — Config, Modelle, Logging
-
-Ziel: Gemeinsames Fundament für alle drei Services.
-
-Aufgaben:
-- [x] Config-Schema mit allen §6-Schlüsseln inkl. Projekt-Ergänzungen
-      (pydantic v2, Enums, HH:MM-Validierung, Secrets maskiert,
-      unbekannte Schlüssel Warnung+ignorieren, atomares Schreiben 0600)
-- [x] AOFF_-Env-Bootstrap (`EnvSettings.from_env`, testbar ohne
-      Prozessumgebung; neu: AOFF_LOG_LEVEL; Test hält .env.example und
-      Schema deckungsgleich)
-- [x] Strukturiertes JSON-Logging (`setup_logging`, idempotent) +
-      Modelle (AuthMode, SubmitMode, SubmissionStatus, StackState mit
-      deutschen display_names)
-- [x] 123 neue Unit-Tests (Schema, IO, Env, Logging, Modelle)
-
-Definition of Done: erfüllt 2026-07-25 — 153 Tests grün (lokal + CI);
-alle §6-Schlüssel abgedeckt. Commit 481315c.
-
-## Phase 4: DB-Schema & Migrationen
-
-Ziel: AcoustID-Postgres steht per Compose mit vollständigem Schema.
-
-Aufgaben:
-- [x] Migrationen für alle 7 Dump-Zieltabellen + `import_state` exakt
-      nach §5.2 (`local_submission` bewusst erst in Phase 11 — §5.2
-      „Weitere Tabellen" ersetzt den alten Aufgabentext)
-- [x] Eigener Migrations-Runner (`shared/shared/db/`, kein Alembic):
-      idempotent, je Migration eine Transaktion, Advisory-Lock,
-      Drift-Erkennung per Checksumme, CLI `python -m shared.db`;
-      zwei Gruppen `core`/`indexes` für den Bootstrap-Weg
-- [x] docker-compose.yml: db-Service `acoustid-db` (postgres:18,
-      Healthcheck, benanntes Volume, kein Host-Publish)
-- [x] 33 Integrationstests (Schema-Introspektion inkl. Partialindizes
-      und lz4, Idempotenz, Gruppen, Drift) — lokal gegen echtes PG 18
-      gelaufen und als CI-Job mit Postgres-Service verankert
-
-Definition of Done: erfüllt 2026-07-25 — Migrationstests lokal und in
-CI grün; ein Test hält ARCHITECTURE-§5.2-DDL und Migrations-SQL
-anweisungsgleich. Commit 1f294c4.
-
-## Phase 5: Index-Client
-
-Ziel: acoustid-index läuft per Compose und ist aus Python ansprechbar.
-
-Aufgaben:
-- [x] compose: index-Service per Digest gepinnt (main @ 2025-10-27),
-      UID 6081, kein ports:, wget-Spider-Healthcheck auf
-      `/<name>/_health` (start_period 900 s), Volume-Hinweis Cache-Pool
-- [x] shared-Client `shared/shared/fpindex/` (query/wire/client/errors,
-      msgpack-Kurzform auch für Requests, client-seitige Validierung
-      statt stiller Server-Deckelung, eigene Fehlerhierarchie);
-      `extract_query` als pure Funktion; neu: `AOFF_INDEX_NAME`
-- [x] 145 neue Tests; 18 Integrationstests mit echten
-      Fixture-Vektoren gegen das echte Image (lokal + CI)
-
-Definition of Done: erfüllt 2026-07-25 — Integrationstests lokal und
-in CI grün; 12 empirische Befunde als Addendum im Forschungsbericht.
-Commit 620aa5a. Wichtig für Phase 7/9: Dienst wird erst nach
-`ensure_index()` healthy → importer hängt mit `service_started`,
-api mit `service_healthy` ab.
-
-## Phase 6: Importer — Download & Parser
-
-Ziel: Delta-Dateien werden korrekt geholt und vollständig geparst
-(noch ohne DB-Schreiben).
-
-Aufgaben:
-- [x] Arbeitslisten-Logik (pure): Tage×Ströme ab import_state-Sicht,
-      §5.2-Reihenfolge, Lücken werden gemeldet statt nachgeholt
-- [x] Downloader: .part+Rename, Range-Resume (iter_raw!), Backoff
-      1→10 s ×5, Größenvalidierung gegen index.json + Content-Length,
-      gzip-Prüfung (abschaltbar), Skip validierter Dateien
-- [x] Parser: 7 Ströme streamend, frozen Dataclasses, zentrale
-      Absent-Semantik, Feld-Sanity-Check, **Epochen-Lesart fürs
-      COPY-Escaping (≤2024-12-04)** — HOCH-Befund, §5.1 korrigiert
-- [x] Fixtures: 10. Datei ergänzt (2011-08-19-meta als
-      Alt-Epochen-Beleg); 159 neue Tests inkl. lokalem HTTP-Testserver
-      und optionalen network-Tests
-
-Definition of Done: erfüllt 2026-07-25 — 453 Tests grün (lokal + CI);
-Parser-Durchsatz ~65 MB gz/s gemessen (Anhaltspunkt für Phase 8).
-Commit 0893abe.
-
-## Phase 7: Importer — Transaktionaler DB-Import & Index-Feed
-
-Ziel: Deltas landen transaktional in Postgres und im Index; Import ist
-resumierbar (Invarianten §8.3/§8.4).
-
-Aufgaben:
-- [x] Import: eine Delta-Datei = eine Transaktion inkl.
-      `import_state`-Fortschreibung (`dbimport.import_file`; Verbindung
-      mit offener Transaktion wird abgelehnt, sonst wäre es nur ein
-      Savepoint; Upsert-Statements pure in `upserts.py` mit
-      Disjunktheits-Selbsttest beim Modul-Import)
-- [x] Resume nach Abbruch/Fehler: `import_state`-Zeile entsteht und
-      schließt in derselben Transaktion; erledigt heißt
-      `finished_at IS NOT NULL` (`state.py`, bindet die
-      Phase-6-Arbeitsliste an)
-- [x] Index-Feed über den Index-Client: Arbeitsvorrat
-      `fingerprint_idx_unindexed`, aufsteigend nach `id`, Batches à
-      1000, erst Index-`_update`, dann `indexed_at`
-      (`indexfeed.feed_index`)
-- [x] Integrationstests: 24 gegen echtes PG 18 (voller Fixture-Tag,
-      Alt-Epoche 2011, Reaktivierung, beide Strom-Reihenfolgen,
-      Rollback, Abbruch mitten im Lauf → Resume ohne
-      Duplikate/Lücken), 14 gegen PG + echtes Index-Image
-      (Feed, Wiederfinden per Suche, Teil-Läufe)
-
-Definition of Done: erfüllt 2026-07-25 — 607 Tests grün (lokal + CI);
-154 neue Tests. Detailentscheide in DECISIONS („Phase-7-Import-Details");
-conftest-Marker `db` für Tests, die beide Dienste brauchen.
-Commit 85d7d40.
-
-## Phase 8: Importer — Bootstrap, Platz-Guard & One-Shot-Job
-
-Ziel: Erst-Import gemäß Phase-0-Strategie; Importer verhält sich als
-sauberer One-Shot-Job.
-
-Aufgaben:
-- [x] Bootstrap-Pfad: Guard → Gruppe `core` → Massenimport im
-      Bulk-Modus (nur `synchronous_commit=off`, sitzungsweit, garantiert
-      zurückgenommen) mit entkoppeltem Download-Prefetch → `CHECKPOINT`
-      → Gruppe `indexes` → erst danach Index-Feed (`job.py`, `bulk.py`,
-      `prefetch.py`)
-- [x] Probelauf-Modus: `--end-date` (letzter einzuschließender Tag) mit
-      Messung Dauer/DB-/Index-Größe und linearer Hochrechnung über
-      gz-Bytes im Report (`measure.py`, `report.project`)
-- [x] Plattenplatz-Guard: vor dem Lauf und alle 25 Dateien bzw. 2 GiB;
-      `min_free_gb` als GiB gelesen, `0` schaltet ab; Abbruch mit
-      Exit-Code 3 und intaktem Resume (`diskguard.py`)
-- [x] One-Shot-Verhalten: 9 Exit-Codes (bijektiv zu Ergebnissen, per
-      Test festgehalten), JSON-Report auf stdout oder atomar in Datei
-      (Schema `acoustid-offline/importer-run/1`); CLI
-      `python -m acoustid_importer`, SIGTERM/SIGINT → geordneter
-      Abbruch nach der laufenden Datei — Doku: docs/importer-job.md
-- [x] compose: importer-Service mit Profil `job` + importer/Dockerfile;
-      Container real gebaut und Guard-Abbruch im Container verifiziert
-
-Definition of Done: Bootstrap-/Guard-/Resume-Tests grün (100 neue
-Tests, 707 gesamt, inkl. Beobachtung „kein Sekundärindex während des
-Massenimports"); Exit-Codes und Report dokumentiert. **Offen: Probelauf
-am echten Datenbestand** (Unraid-Hardware; Hochrechnung bislang nur an
-einem Fixture-Tag verifiziert; Anleitung: docs/probelauf-unraid.md).
-Commit c915fb8. Hinweis für Phase 19:
-großzügiges Stop-Timeout setzen (SIGTERM wirkt erst nach der laufenden
-Tagesdatei; Dockers 10-s-Default führt sonst zu SIGKILL → sicheres
-Rollback, aber kein Code 8).
-
-## Phase 9: API — /v2/lookup Kern
-
-Ziel: Kompatibler Lookup ohne `meta` gegen lokale Daten
-(Vertrag: ARCHITECTURE §7 + docs/research/phase1-api-formate.md).
-
-Aufgaben:
-- [x] FastAPI-App api/ (`acoustid_api`): `GET/POST /v2/lookup`,
-      Query+Form-Merge, gzip-Bodys mit 1-MiB-Grenze vor UND nach dem
-      Entpacken → 19/413, Chromaprint-Decoder in
-      `shared.fingerprint.chromaprint` (inkl. Encoder fürs Testen),
-      Original-Batchprotokoll, Limits 20/100, `format=json|jsonp|xml`
-      zeichengenau, CORS `*`
-- [x] Match-Pipeline: `extract_query` → Index `_search` (limit 40,
-      timeout 2000 ms) → `compare2`-Nachbau
-      (`shared.fingerprint.compare`, max_offset 80, inkl. dreier
-      Bug-für-Bug-Eigenheiten des C-Originals), Längenfenster
-      ±`maxdurationdiff` (Default 7), Cutoff >0,4, Kappung auf 10 VOR
-      der Track-Deduplizierung (Original-Verhalten),
-      Merge-Verkettung über `track.new_id` (Tiefe ≤10)
-- [x] CI-Bit-Verifikation: tests/pg_acoustid/ (PG 18 + Original-
-      Extension, Commit-gepinnt, nur Test), eigener CI-Job, Marker
-      `extension`; deckte den Phase-5-Fehler in `extract_query` auf
-      (Startoffset gehört in den Rohvektor — behoben, §5.3 präzisiert)
-- [x] Antwort-/Fehlerformat: 19 Codes + HTTP-Mapping, geprüft gegen
-      wörtliche Original-Beispielantworten
-      (api/tests/original_examples.py)
-- [x] compose: api-Service (db+index `service_healthy`, kein ports:) +
-      api/Dockerfile; 13 Integrationstests gegen echtes PG 18 + Index
-      mit echten Delta-Vektoren
-
-Definition of Done: erfüllt 2026-07-25 — 894 Tests grün (lokal + CI,
-inkl. Bit-Verifikation auf zweiter Plattform); bewusste Abweichungen
-vom Original in docs/api-lookup.md tabelliert (u. a. Indexfehler ⇒
-13/503 statt leerer Liste). Rescoring gemessen: ~0,39 ms je Kandidat
-(40 Kandidaten in 15,7 ms). Detailentscheide in DECISIONS
-(„Phase-9-Lookup-Details"). Commit 027597c.
-
-## Phase 10: API — MB-Resolver & meta
-
-Ziel: Metadaten aus der lokalen MB-Postgres, mit degradiertem Betrieb.
-
-Aufgaben:
-- [x] Gekapselte Read-only-Query-Schicht: `shared/shared/mb/` (in
-      shared — Phase 25 braucht den MB-Verbindungstest); `queries.py`
-      als einzige Datei mit MB-Tabellennamen (Grep-Regel als Test),
-      11 Batch-Abfragen nach Phase-1-Bericht, psycopg3 + psycopg_pool,
-      Circuit-Breaker, Selfcheck beim Start (lazy nachgeholt),
-      Staleness WARN > 36 h / CRIT > 7 d
-- [x] `meta`-Parameter gemäß Original: volle Grammatik, Präzedenz =
-      Wurzelzweig-Kette wie `inject_metadata` (am Original-Quelltext
-      belegt), `sources`/`usermeta` aus eigener DB, `compress`/`m2`
-      bug-für-bug; Online-Redirect-Auflösung bei Misses → kanonische
-      MBID (neuer Schlüssel `mb.keep_submitted_mbid`, Default `false`)
-- [x] Degradierter Betrieb (§8.7): `MbUnavailable` UND
-      `MbSchemaMismatch` ⇒ 200 ohne Metadaten + WARNING;
-      `MbQueryError` ⇒ 5/500 (nicht degradieren)
-- [x] Tests: MB-Mini-Schema-Fixture (17 Tabellen + `release_event`-
-      View, synthetische Daten) gegen echtes PG 18, Ausfall-,
-      Selfcheck-Mismatch- und Truncation-Tests; 154 neue Tests
-
-Definition of Done: erfüllt 2026-07-25 — 1048 Tests grün (Integration
-lokal + CI); MB-down-Test grün; bewusste Abweichungen vom Original in
-docs/api-lookup.md tabelliert. Detailentscheide in DECISIONS
-(„Phase-10-MB-Details"). Commits a467064 + ea008a6.
-
-## Phase 11: API — /v2/submit (off/local)
-
-Ziel: Kompatibler Submit mit lokaler Speicherung und Indexierung.
-
-Aufgaben:
-- [x] Parameter-Parsing gemäß Original: alle Felder aus dem
-      Phase-1-Bericht inkl. `fix_meta`-Normalisierung, stille
-      Verwerfung (erweitert um `foreignid` als Zuordnung), mehrfaches
-      `mbid.N` ⇒ je MBID eine Submission-Zeile, `wait`
-      geparst+ignoriert, Grenzen (`duration` 1…32767)
-- [x] Modi `off`/`local`: `off` ⇒ Fehler 12/400 vor dem Parsen
-      (13/503 verworfen — Client-Retries, Wächter-Semantik);
-      `local` ⇒ speichern + **synchron** indexieren, Reihenfolge
-      `_update` → Statuswechsel; Index nicht erreichbar ⇒ 200,
-      Zeile bleibt `new`, Nachtrag bei der nächsten Anfrage.
-      Migrationen core/0008 + indexes/0105; Doc-ID-Bereich
-      `[2^31, 2^32-1]` (u32 empirisch verifiziert — HOCH-Finding,
-      Client-Guard in fpindex/wire.py; Disjunktheit typbedingt, da
-      `fingerprint.id` Postgres-`integer` ist)
-- [x] Kompatibles Antwortformat: `status` immer `"pending"`, `index`
-      als String nur bei `.N`-Suffix, wörtliche Original-Beispiele
-- [x] Tests: Submit → `new`→`indexed` → Lookup findet die Submission
-      (Integration gegen PG 18 + Index-Image); Modus `off`;
-      Index-Ausfall + Nachtrag; Bereichs-Kollisionsfreiheit;
-      115 Unit- + 23 Integrationstests, gesamt +130
-
-Definition of Done: erfüllt 2026-07-26 — 1178 Tests grün (lokal + CI);
-Statusübergänge persistiert und getestet. Vertrag + Abweichungen:
-docs/api-submit.md; Detailentscheide in DECISIONS
-(„Phase-11-Submit-Details"). Commits ead4790 + b15c60b.
-
-## Phase 12: API — Upstream-Forwarding & Queue
-
-Ziel: Modus `local+upstream` inkl. robuster Fehler-Queue.
-
-Aufgaben:
-- [x] Weiterleitung an api.acoustid.org (`api/app/upstream.py`):
-      Original-Wire-Format, `client` = eigener `upstream_app_key`
-      (maskiert in jeder Fehlermeldung), `user` = Client-Key
-      unverändert, Fingerprint aus dem Vektor neu kodiert
-      (bit-verifizierter Encoder), nur https; eine Anfrage je
-      Einreichungsgruppe (`local_track_id`, mehrfaches `mbid.0`)
-- [x] Statuspfade: nur `indexed` → `forwarded`/`forward_failed`
-      (attempts zählt Läufe, nicht HTTP-Versuche); erster Versuch in
-      der Submit-Anfrage (max. 10 Gruppen, ein Versuch, wirft nie),
-      Wiederholung über `drain_queue` (max. 500, 5 Versuche, Backoff
-      1→30 s, Drossel ≤ 3 req/s prozessweit); Transportfehler
-      pausieren den Lauf, Inhaltsfehler nur die Gruppe; ab dem
-      7. Fehlversuch ERROR-Ereignis `upstream_forward_gave_up` +
-      manueller `retry_forward`-Hook (§8.9)
-- [x] Tests mit Mock-Upstream (httpx-MockTransport + injizierbare
-      Uhr, keine echten Anfragen): Erfolg, Fehlerklassen, Retry,
-      7-Fehler-Grenze, Retry-Hook, Drossel/Backoff deterministisch,
-      Modus-Matrix; 86 neue Tests (72 Unit, 10 Integration, 4 HTTP)
-
-Definition of Done: erfüllt 2026-07-26 — 1264 Tests grün (lokal + CI);
-Queue-Verhalten dokumentiert in docs/api-submit.md (inkl. 8 neuer
-Abweichungen). Keine neue Migration nötig. Detailentscheide in
-DECISIONS („Phase-12-Upstream-Details"). Commit 657ee14.
-
-## Phase 13: API — /v2/lookup/batch & /v2/submission_status
-
-Ziel: Viele Fingerprints in einer Anfrage — ein Weckvorgang; plus der
-kleine Original-Status-Endpoint.
-
-Aufgaben:
-- [x] `POST /v2/lookup/batch` (`api/app/batch.py`): Objekt-Hülle
-      `{"client", "meta", "maxdurationdiff", "queries": […]}`,
-      Antwort `responses` mit `index` in Anfragereihenfolge, je
-      Eintrag eine vollständige AcoustID-Antwort; gemeinsame
-      Betriebsmittel gehören der Anfrage (Index weg ⇒ 13/503 gesamt),
-      Parameterfehler dem Eintrag; meta als Bündel je MetaPlan (ein
-      MB-Roundtrip-Bündel für alle Einträge); `format` ohne Wirkung
-- [x] Limit 100 ⇒ 19/413 vor dem Parsen; leeres `queries` ⇒ 200 + `[]`
-- [x] `GET/POST /v2/submission_status` (`api/app/status.py`):
-      Mehrfach-`id` (max. 100), Formatparität json/jsonp/xml;
-      Mapping `new` ⇒ `"pending"`, `indexed`/`forwarded`/
-      `forward_failed` ⇒ `"imported"` + `result.id` =
-      `local_track_gid`; unbekannte IDs still `"pending"`, nie 404;
-      antwortet auch bei `submit.mode = off`
-- [x] Tests inkl. Teilfehlern: 85 neue (47 Batch-HTTP, 29 Status-HTTP,
-      9 Integration inkl. E2E pending→imported und Batch über beide
-      Doc-ID-Bereiche); Agent lief lokal auch die 8 Extension-Tests
-
-Definition of Done: erfüllt 2026-07-26 — 1349 Tests grün (lokal + CI);
-Verträge dokumentiert in docs/api-lookup.md (Batch) und
-docs/api-submit.md (submission_status). Detailentscheide in DECISIONS
-(„Phase-13-Batch/Status-Details"). Commit 1d8874a.
+---
 
 ## Phase 14: Wächter — Grundgerüst, SQLite & /status
 
@@ -608,7 +306,7 @@ Definition of Done: Metrics-Tests grün.
 
 ## Phase 23: Admin-UI — Grundgerüst & Login
 
-Voraussetzung: Design aus der Claude-Design-Session liegt vor.
+Referenz: abgenommenes Designpaket unter docs/design/.
 
 Ziel: Basis-Layout, Navigation, Login, Statusindikator.
 

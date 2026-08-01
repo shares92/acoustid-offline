@@ -5,6 +5,25 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-01: Stand-Vorprüfung vor jedem Bau-Agenten; Nachverifikation statt Doppelbau
+
+Entscheidung: Jeder Bau-Auftrag an einen Agenten enthält künftig die
+Vorprüfung „Ist die Phase laut PROGRESS-Statuskopf/git log bereits
+umgesetzt? Wenn ja: nicht bauen, sondern prüfen und melden." Der
+Orchestrator prüft vor dem Start zusätzlich selbst `git log` + Statuskopf
+und vertraut weder Sitzungsgedächtnis noch Konversations-Zusammenfassung.
+Begründung: Vorfall am 2026-08-01 — eine Session mit veraltetem Kontext
+(Stand „Phase 6") erhielt das Go „weiter mit Phase 7", während das Repo
+real auf Phase 13 stand; das Projekt läuft in mehreren Sessions parallel
+weiter. Der Bau-Agent erkannte die Lage und lieferte statt eines
+Doppelbaus eine vollständige Nachverifikation der bestehenden Phase 7
+(1338 Tests grün gegen echte Container, Batch-Messreihe, manueller
+Entescape-Durchstich bis in die DB) — dieses Verhalten ist jetzt der
+vorgeschriebene Weg.
+Alternativen: Blind neu bauen (Duplikat bzw. Überschreiben verifizierter
+Arbeit) oder Auftrag kommentarlos abbrechen (verschenkt die günstige
+Gelegenheit zur unabhängigen Prüfung) — beide verworfen.
+
 ## 2026-07-25: Korrektur — COPY-Escaping ist epochenabhängig; Parser-Regeln Phase 6
 
 Entscheidung: Der Parser liest Delta-Dateien epochenabhängig: bis
