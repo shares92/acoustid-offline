@@ -32,8 +32,16 @@ Fehler nimmt (``ERROR_CODES`` in :mod:`acoustid_api.errors`); der Waechter
 haelt sie hier nach, weil beide Dienste getrennte Images sind
 (DECISIONS 2026-07-25 „Getrennte Images").
 
-Auth-Pruefung, Rate-Limit und Lookup-Cache gehoeren ebenfalls an diese
-Stelle, kommen aber erst in den Phasen 17 und 18.
+Seit Phase 17 gibt es **eine** Ausnahme vom Streaming, und zwar nur dort,
+wo der Lookup-Cache sie braucht: :meth:`ReverseProxy.forward_capturing`
+sammelt den Antwortrumpf bis zu einer Grenze ein, damit er eingelagert
+werden kann. Ueberschreitet er sie, faellt der Aufruf still auf den
+Streaming-Pfad zurueck — der Waechter haelt nie eine ganze Antwort im
+Speicher, nur weil es einen Cache gibt. Was der Client bekommt, ist in
+beiden Faellen dasselbe.
+
+Auth-Pruefung und Rate-Limit gehoeren ebenfalls an diese Stelle, kommen
+aber erst in Phase 18.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from typing import Final
 
 import httpx
@@ -51,11 +60,16 @@ from starlette.background import BackgroundTask
 __all__ = [
     "ERROR_SERVICE_UNAVAILABLE",
     "HOP_BY_HOP_HEADERS",
+    "RequestContent",
     "ReverseProxy",
     "error_response",
 ]
 
 _LOG = logging.getLogger(__name__)
+
+#: Was statt ``request.stream()`` weitergereicht werden darf: fertige Bytes
+#: (der gepufferte Rumpf des Lookup-Caches) oder ein Ersatzstrom.
+type RequestContent = bytes | AsyncIterator[bytes] | None
 
 #: Kopfzeilen, die nur fuer **eine** Verbindung gelten (RFC 9110 §7.6.1).
 #: Sie duerfen nicht weitergereicht werden: die Rahmung der Nachricht
@@ -141,28 +155,21 @@ class ReverseProxy:
         if self._owns_client:
             await self._client.aclose()
 
-    async def forward(self, request: Request) -> Response:
+    async def forward(self, request: Request, *, content: RequestContent = None) -> Response:
         """Leitet eine Anfrage weiter und liefert die Antwort zurueck.
+
+        Args:
+            request: Die eingehende Anfrage.
+            content: Ersatz fuer ``request.stream()``. Gesetzt, wenn der
+                Rumpf schon gelesen wurde (Lookup-Cache, Phase 17) —
+                weitergegeben werden dann dieselben Bytes.
 
         Raises:
             httpx.HTTPError: Die API war nicht erreichbar oder brach ab. Der
                 Aufrufer (``main``) entscheidet, was der Client sieht — nur
                 er weiss, ob gerade geweckt wurde.
         """
-        started_at = time.monotonic()
-        upstream_request = self._build_request(request)
-        response = await self._client.send(upstream_request, stream=True)
-
-        _LOG.info(
-            "Anfrage weitergeleitet",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status": response.status_code,
-                "duration_ms": round((time.monotonic() - started_at) * 1000, 1),
-                "client_ip": request.client.host if request.client else None,
-            },
-        )
+        response = await self._send(request, content)
         proxied = StreamingResponse(
             response.aiter_raw(),
             status_code=response.status_code,
@@ -177,7 +184,65 @@ class ReverseProxy:
         proxied.raw_headers = _filtered(response.headers)
         return proxied
 
-    def _build_request(self, request: Request) -> httpx.Request:
+    async def forward_capturing(
+        self, request: Request, *, limit: int, content: RequestContent = None
+    ) -> tuple[Response, bytes | None]:
+        """Wie :meth:`forward`, sammelt den Rumpf aber bis ``limit`` ein.
+
+        Returns:
+            Die Antwort fuer den Client und ihren Rumpf — oder ``None``
+            statt des Rumpfs, wenn er groesser als ``limit`` war. Dann ist
+            die Antwort wieder ein Strom und nichts wird eingelagert.
+
+        Die Bytes gehen roh durch (``aiter_raw``): was eingelagert wird, ist
+        genau das, was die API geschickt hat, samt ihrer ``content-length``
+        und einer etwaigen ``content-encoding``.
+        """
+        response = await self._send(request, content)
+        chunks: list[bytes] = []
+        size = 0
+        try:
+            stream = response.aiter_raw()
+            async for chunk in stream:
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > limit:
+                    # Zu gross: der gelesene Anfang plus der Rest ist wieder
+                    # die ganze Antwort — der Client merkt nichts.
+                    proxied = StreamingResponse(
+                        _chain(chunks, stream),
+                        status_code=response.status_code,
+                        background=BackgroundTask(response.aclose),
+                    )
+                    proxied.raw_headers = _filtered(response.headers)
+                    return proxied, None
+        except BaseException:
+            await response.aclose()
+            raise
+        await response.aclose()
+
+        body = b"".join(chunks)
+        buffered = Response(content=body, status_code=response.status_code)
+        buffered.raw_headers = _filtered(response.headers)
+        return buffered, body
+
+    async def _send(self, request: Request, content: RequestContent) -> httpx.Response:
+        """Schickt die Anfrage an die API und protokolliert die Weiterleitung."""
+        started_at = time.monotonic()
+        response = await self._client.send(self._build_request(request, content), stream=True)
+        _LOG.info(
+            "Anfrage weitergeleitet",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": round((time.monotonic() - started_at) * 1000, 1),
+                "client_ip": request.client.host if request.client else None,
+            },
+        )
+        return response
+
+    def _build_request(self, request: Request, content: RequestContent = None) -> httpx.Request:
         """Baut die Anfrage an die API — Pfad und Query als rohe Bytes."""
         scope = request.scope
         raw_path: bytes = scope.get("raw_path") or scope["path"].encode()
@@ -190,16 +255,25 @@ class ReverseProxy:
             for name, value in request.headers.raw
             if name.decode("latin-1").lower() not in HOP_BY_HOP_HEADERS
         ]
-        # Ohne Rumpf **kein** `content`: httpx wuerde einem leeren Iterator
-        # sonst `Transfer-Encoding: chunked` verpassen — auf einem GET eine
-        # Merkwuerdigkeit, die manche Server abweisen.
-        content = request.stream() if _has_body(request) else None
+        if content is None:
+            # Ohne Rumpf **kein** `content`: httpx wuerde einem leeren
+            # Iterator sonst `Transfer-Encoding: chunked` verpassen — auf
+            # einem GET eine Merkwuerdigkeit, die manche Server abweisen.
+            content = request.stream() if _has_body(request) else None
         return self._client.build_request(
             request.method,
             url,
             headers=headers,
             content=content,
         )
+
+
+async def _chain(head: list[bytes], rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    """Der schon gelesene Anfang, dann der Rest des Stroms."""
+    for chunk in head:
+        yield chunk
+    async for chunk in rest:
+        yield chunk
 
 
 def _has_body(request: Request) -> bool:

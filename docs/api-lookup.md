@@ -27,10 +27,21 @@ ARCHITECTURE §5.3).
 
 Der Dienst hat **keinen veröffentlichten Port** (`expose: 8080`). Davor sitzt
 seit Phase 15 der Wächter als Reverse-Proxy für `/v2/*`; er weckt den Stack
-bei Bedarf und setzt später API-Key-Prüfung, Rate-Limit (Phase 18) und
-Lookup-Cache (Phase 17) durch — die API selbst prüft keine Keys
-(ARCHITECTURE §7, „Durchsetzungsort Auth & Rate-Limit"). Antworten der API
-reicht der Proxy **unverändert** durch, auch Fehlerantworten.
+bei Bedarf, hält seit Phase 17 den **Lookup-Cache** und setzt später
+API-Key-Prüfung und Rate-Limit (Phase 18) durch — die API selbst prüft keine
+Keys (ARCHITECTURE §7, „Durchsetzungsort Auth & Rate-Limit"). Antworten der
+API reicht der Proxy **unverändert** durch, auch Fehlerantworten.
+
+**Was der Cache bedeutet** (ARCHITECTURE §7 „Lookup-Cache"): Eine
+Wiederholung derselben `/v2/lookup`-Anfrage bekommt die frühere Antwort
+bytegleich zurück, ohne dass dieser Dienst sie noch einmal sieht — auch
+dann, wenn der Stack gerade schläft. Der Schlüssel umfasst **alle**
+Anfrageparameter außer `client` und `clientversion` (nur diese beiden prägen
+laut Vertrag die Antwort nicht), ohne Normalisierung von Reihenfolge,
+Groß-/Kleinschreibung oder Vorgabewerten. Geleert wird der Cache nach jeder
+erfolgreichen lokalen Submission und nach jedem erfolgreichen Delta-Import
+(Invariante §8.6) — eine `/v2/submit`-Einreichung wird also nie von einer
+veralteten Lookup-Antwort verdeckt.
 
 Env-Variablen: `AOFF_DB_*`, `AOFF_INDEX_URL`, `AOFF_INDEX_NAME`,
 `AOFF_CONFIG_PATH`, `AOFF_LOG_LEVEL` (siehe `.env.example`). Aus der

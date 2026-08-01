@@ -467,7 +467,7 @@ Details: [docs/research/phase1-mb-schema.md](docs/research/phase1-mb-schema.md).
 | `admin_user` | Login, Passwort-Hash (argon2) |
 | `update_run` | Historie der Import-/Backup-Läufe: Start, Ende, eingespielte Dateien, Zeilen, Ergebnis, Fehlermeldung |
 | `event_log` | Ereignisse (Start/Stopp, Wecken, Fehler, Notifications) mit Level und Zeitstempel, ringpuffer-artig begrenzt |
-| Lookup-Cache | Eigene Tabelle oder Dateicache; Schlüssel = Hash(Fingerprint+Duration+meta-Parameter), Wert = serialisierte Antwort; invalidiert nach Delta-Import und nach lokaler Submission |
+| Lookup-Cache | **Eigene SQLite-Datei** `lookup-cache.sqlite3` neben der Zustandsdatenbank (Phase 17, nicht in dieser Datenbank — Massenschreibvorgänge); Schlüssel = SHA-256 über Pfad und alle Anfrageparameter außer `client`/`clientversion`, Wert = die rohe Antwort (Status, Kopfzeilen ohne `date`/`content-length`, Rumpf); Verdrängung nach LRU bis 90 % von `cache.max_size_mb`; invalidiert nach Delta-Import und nach lokaler Submission |
 
 ### config.yaml (Wächter, Cache)
 Alle Laufzeit-Einstellungen (siehe §6). Vom Wächter gelesen/geschrieben;
@@ -610,6 +610,21 @@ Phase 13 stehen `POST /v2/lookup/batch` (`api/app/batch.py`) und
 `new` ⇒ `"pending"`, ab `indexed` ⇒ `"imported"` mit `result.id` =
 lokale AcoustID). **Der API-Block (Phasen 9–13) ist damit
 vollständig.**
+
+### Lookup-Cache (Phase 17)
+Der Wächter beantwortet ein wiederholtes `GET`/`POST /v2/lookup` aus seiner
+eigenen Cache-Datei — **ohne** Docker-Kontakt, ohne API-Kontakt und ohne
+Weckvorgang (Invariante §8.2 baulich: der Cache-Zweig liegt vor dem
+Wecken). Eingelagert werden nur Antworten mit HTTP 200 **und** JSON-Rumpf
+mit `status: "ok"`; `format=xml`/`jsonp` fallen damit heraus, ebenso jede
+Fehlerantwort. `POST /v2/lookup/batch` wird bewusst **nicht** gecacht
+(Teilfehler stehen dort *innerhalb* einer 200er-Antwort, Phase 13). Eine
+Antwort aus dem Cache ist bytegleich zur ursprünglichen — kein
+`X-Cache`-Vermerk, kein Unterschied zwischen „mit Cache" und „ohne".
+**Ein Treffer zählt nicht als Aktivität** (§6 „Idle-Definition"): er
+braucht das Array nicht, ein Stack, den nur noch Treffer erreichen, darf
+einschlafen. Ein defekter Cache wird weggeworfen und neu angelegt; er hält
+nichts, was sich nicht neu berechnen ließe.
 
 ### Durchsetzungsort Auth & Rate-Limit
 API-Key-Prüfung (`apikey`-Modus) und IP-Rate-Limit setzt der **Wächter**

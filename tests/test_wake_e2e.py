@@ -15,11 +15,16 @@ folgende ``/v2/lookup``-Anfrage muss ihn wecken und beantwortet werden.
 **Warum der Waechter zuletzt startet.** Er haelt den Stack-Zustand im
 Speicher (DECISIONS 2026-08-01, Punkt 6) und erhebt ihn beim Start.
 
-Seit Phase 16 fuehrt er ihn ausserdem nach: der letzte Test hier stoppt den
+Seit Phase 16 fuehrt er ihn ausserdem nach: der vierte Test hier stoppt den
 Stack **von Hand** (wie der Betreiber ueber die Unraid-Oberflaeche) und
 prueft, dass der Waechter das von selbst merkt — `/status` sagt danach
 ``schlafend``, und die **erste** folgende Anfrage weckt, statt ins Leere zu
 laufen.
+
+Seit Phase 17 steht der Gegenbeweis daneben, und er ist der Nachweis der
+Cache-Phase: derselbe Lookup ein zweites Mal weckt **nicht**. Der letzte
+Test legt den Stack von Hand schlafen und bekommt die Antwort trotzdem —
+bytegleich, und danach laeuft immer noch kein Container.
 
 **Laufen lassen** (Docker noetig, Images werden gebaut, dauert Minuten)::
 
@@ -285,8 +290,12 @@ def test_a_stack_stopped_by_hand_is_noticed(sleeping_stack: None) -> None:
     Anfrage lief in eine tote API (503) und erst die zweite weckte. Der
     Zustandsabgleich im Hintergrund (Takt: 15 s) schliesst die Luecke.
 
-    Der Test laeuft absichtlich zuletzt: er nimmt dem Stack die Laufzeit
+    Der Test laeuft absichtlich weit hinten: er nimmt dem Stack die Laufzeit
     weg, die die vorherigen Tests brauchen.
+
+    **Eigene Anfrageparameter** (Phase 17): mit denen des zweiten Tests
+    laege die Antwort im Lookup-Cache, und die Anfrage wuerde gar nicht mehr
+    wecken — dann pruefte dieser Test nichts mehr.
     """
     assert _status()["stack"]["state"] == "ready"
 
@@ -306,10 +315,55 @@ def test_a_stack_stopped_by_hand_is_noticed(sleeping_stack: None) -> None:
     # Und die **erste** Anfrage danach weckt wieder, statt 503 zu geben.
     response = httpx.get(
         f"{WATCHDOG_URL}/v2/lookup",
-        params={"client": "e2e", "fingerprint": encode_fingerprint([1, 2, 3]), "duration": 10},
+        params={"client": "e2e", "fingerprint": encode_fingerprint([4, 5, 6]), "duration": 11},
         timeout=180,
     )
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "ok"
     assert _status()["stack"]["state"] == "ready"
+
+
+def test_a_cached_lookup_is_answered_without_waking(sleeping_stack: None) -> None:
+    """Phase 17: derselbe Lookup ein zweites Mal — bei gestopptem Stack.
+
+    Die Definition of Done der Cache-Phase am echten Stack, in drei
+    Schritten:
+
+    1. Ein Lookup mit frischen Parametern geht an die API und wird
+       eingelagert (der Stack laeuft nach dem vorherigen Test).
+    2. Der Stack wird **von Hand gestoppt** — wie der Betreiber es ueber die
+       Unraid-Oberflaeche taete.
+    3. Dieselbe Anfrage kommt bytegleich zurueck, und danach laeuft immer
+       noch **kein** Container: kein Weckvorgang, kein Docker-Start.
+
+    Der letzte Teil ist der eigentliche Nachweis. Ein Treffer, der doch
+    weckt, wuerde hier nicht nur langsam sein — er waere sichtbar, weil die
+    Container danach liefen.
+
+    Der Test kostet kaum Laufzeit: ein ``compose stop`` und zwei Anfragen.
+    """
+    parameters = {
+        "client": "e2e",
+        "fingerprint": encode_fingerprint([0x00A0FF01, 0x00A0FF02, 0x00A0FF03]),
+        "duration": 137,
+    }
+    _wait("Stack wieder bereit", lambda: _status()["stack"]["state"] == "ready", timeout_s=180)
+
+    first = httpx.get(f"{WATCHDOG_URL}/v2/lookup", params=parameters, timeout=180)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "ok"
+
+    _compose(_STACK_FILES, "stop")
+    assert not any(_docker_running(name) for name in STACK_CONTAINERS)
+
+    started_at = time.monotonic()
+    second = httpx.get(f"{WATCHDOG_URL}/v2/lookup", params=parameters, timeout=180)
+    answered_s = time.monotonic() - started_at
+
+    assert second.status_code == 200, second.text
+    assert second.content == first.content
+    assert second.headers["content-type"] == first.headers["content-type"]
+    # Der Nachweis: der Stack schlaeft immer noch.
+    assert not any(_docker_running(name) for name in STACK_CONTAINERS)
+    print(json.dumps({"cache_hit_seconds": round(answered_s, 2)}))

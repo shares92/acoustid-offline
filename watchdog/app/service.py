@@ -24,6 +24,13 @@ tatsaechlich steuert — und nur diese drei sprechen ueberhaupt nach aussen:
 * **Reverse-Proxy** (:mod:`acoustid_watchdog.proxy`) — der Weg von
   ``/v2/*`` zum API-Dienst.
 
+Seit Phase 17 liegt neben der Zustandsdatenbank die **Cache-Datei**
+(:mod:`acoustid_watchdog.cache`) — bewusst eine eigene Ablage, damit die
+Massenschreibvorgaenge des Lookup-Caches den Zustand nicht belasten
+(DECISIONS 2026-08-01, Phase 14). Auch sie liegt auf dem Cache-Pool und ist
+damit bei schlafendem Stack da; genau deshalb kann eine Anfrage aus ihr
+beantwortet werden, ohne irgendetwas zu wecken.
+
 Seit Phase 16 kommt der Rest des Lebenszyklus dazu
 (:mod:`acoustid_watchdog.lifecycle`): die Uhr der letzten Anfrage, die
 Auskunft ueber laufende Jobs und die beiden Dauerlaeufer — Idle-Stopp und
@@ -50,6 +57,7 @@ from typing import Any, Self
 
 from acoustid_watchdog import __version__
 from acoustid_watchdog.admin import ensure_admin_user
+from acoustid_watchdog.cache import LookupCache
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel, log_event
@@ -73,7 +81,13 @@ from shared.config import Config
 from shared.env import EnvSettings
 from shared.models import StackState
 
-__all__ = ["EVENT_SOURCE", "STACK_EVENT_SOURCE", "WAKE_EVENT_SOURCE", "WatchdogService"]
+__all__ = [
+    "CACHE_EVENT_SOURCE",
+    "EVENT_SOURCE",
+    "STACK_EVENT_SOURCE",
+    "WAKE_EVENT_SOURCE",
+    "WatchdogService",
+]
 
 _LOG = logging.getLogger(__name__)
 
@@ -90,6 +104,12 @@ WAKE_EVENT_SOURCE = "wake"
 #: nachvollziehen will, filtert genau danach.
 STACK_EVENT_SOURCE = "stack"
 
+#: Quelle der Cache-Ereignisse (Phase 17). Geloggt wird nur die
+#: **Invalidierung** — Treffer und Fehlschlaege sind Zaehler (Phase 22), kein
+#: Ereignis: sie kaemen im Sekundentakt und wuerden den Ringpuffer von 5000
+#: Eintraegen an einem Nachmittag leeren.
+CACHE_EVENT_SOURCE = "cache"
+
 
 class WatchdogService:
     """Haelt die langlebigen Ressourcen eines Waechter-Prozesses."""
@@ -104,6 +124,7 @@ class WatchdogService:
         docker: DockerClient | None = None,
         probe: ReadinessProbe | None = None,
         proxy: ReverseProxy | None = None,
+        cache: LookupCache | None = None,
     ) -> None:
         """
         Args:
@@ -116,10 +137,13 @@ class WatchdogService:
                 Fassung mit.
             probe: Bereitschaftsfrage an den API-Healthcheck.
             proxy: Reverse-Proxy auf den API-Dienst.
+            cache: Lookup-Cache; ohne Angabe die Vorgabedatei im
+                Datenverzeichnis.
         """
         self.settings = settings
         self.db = db
         self.config_store = config_store
+        self.cache = cache if cache is not None else LookupCache.for_data_dir(settings.data_dir)
         self.state = state if state is not None else StackStateTracker.sleeping()
         # Jeder Zustandswechsel wird zum Ereignis — auch der, den kein
         # Weckvorgang ausgeloest hat (Poller, Idle-Stopp). Der Anschluss
@@ -174,6 +198,10 @@ class WatchdogService:
     def open(self) -> Self:
         """Erststart und Normalstart — beides derselbe, idempotente Weg."""
         self.db.open()
+        # Der Cache scheitert nie nach aussen: eine unbrauchbare Datei wird
+        # weggeworfen, ein weiterhin unbrauchbarer Cache schaltet sich still
+        # ab (:mod:`acoustid_watchdog.cache`).
+        self.cache.open()
         self.config_store.load()
         first_password = ensure_admin_user(self.db)
 
@@ -185,6 +213,8 @@ class WatchdogService:
                 "config_path": str(self.settings.config_path),
                 "db_path": str(self.db.path),
                 "schema_version": self.db.schema_version,
+                "cache_path": str(self.cache.path),
+                "cache_entries": self.cache.entries,
                 "port": self.settings.port,
                 "first_start": first_password is not None,
             },
@@ -217,13 +247,14 @@ class WatchdogService:
         return self
 
     def close(self) -> None:
-        """Gibt Zustandsdatenbank, Docker-Client und Probe frei.
+        """Gibt Zustandsdatenbank, Cache, Docker-Client und Probe frei.
 
         Der Proxy haelt einen **asynchronen** Pool und wird deshalb in
         :meth:`aclose` geschlossen — das ist der Weg, den der Lifespan der
         Anwendung nimmt.
         """
         self.db.close()
+        self.cache.close()
         self.docker.close()
         self.probe.close()
 
@@ -264,6 +295,46 @@ class WatchdogService:
             {"reason": reason, "reload_generation": marker.generation},
         )
         return marker
+
+    def invalidate_cache(self, reason: str) -> int:
+        """Leert den Lookup-Cache vollstaendig (Invariante §8.6).
+
+        **Der** Weg, auf dem der Cache geleert wird — es gibt keinen
+        zweiten. Drei Abnehmer teilen ihn sich:
+
+        ==================  ==================================================
+        ``submission``      Der Proxy-Pfad nach einer erfolgreichen lokalen
+                            Submission (:mod:`acoustid_watchdog.main`).
+        ``delta_import``    Der Update-Zyklus nach einem erfolgreichen
+                            Delta-Import (Phase 19).
+        ``manual``          „Cache jetzt leeren" aus `/admin/config`
+                            (Phase 25).
+        ==================  ==================================================
+
+        Geleert wird **unabhaengig von ``cache.enabled``**: sonst haette ein
+        zwischenzeitlich abgeschalteter Cache nach dem Wiedereinschalten
+        Antworten von vor dem Import.
+
+        Args:
+            reason: Kurzname des Ausloesers (siehe Tabelle) — er steht im
+                Ereignis und macht im Log nachvollziehbar, warum der Cache
+                leer ist.
+
+        Returns:
+            Zahl der entfernten Eintraege.
+        """
+        removed = self.cache.invalidate_all()
+        if removed:
+            # Nur bei tatsaechlich entfernten Eintraegen: eine Instanz mit
+            # regem Submit-Verkehr wuerde den Ringpuffer sonst mit
+            # Leermeldungen eines schon leeren Caches fuellen.
+            self.log_event(
+                EventLevel.INFO,
+                "Lookup-Cache geleert",
+                {"reason": reason, "removed": removed},
+                source=CACHE_EVENT_SOURCE,
+            )
+        return removed
 
     def log_event(
         self,

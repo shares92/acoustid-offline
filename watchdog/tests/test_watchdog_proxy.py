@@ -340,13 +340,19 @@ def test_start_failure_answers_503_with_the_reason_and_recovers(
     assert daemon.all_running is True
 
 
-def test_every_v2_request_counts_as_activity(client: TestClient) -> None:
-    """Die Uhr des Idle-Stopps haengt am Proxy-Pfad (§6 „Idle-Definition")."""
+def test_every_forwarded_v2_request_counts_as_activity(client: TestClient) -> None:
+    """Die Uhr des Idle-Stopps haengt am Proxy-Pfad (§6 „Idle-Definition").
+
+    Zwei **verschiedene** Anfragen, damit die zweite wirklich weitergeleitet
+    wird: seit Phase 17 zaehlt ein Cache-Treffer bewusst nicht als
+    Aktivitaet (er benutzt das Array ja nicht — siehe
+    ``test_watchdog_cache.py``).
+    """
     service: WatchdogService = client.app.state.service
     before = service.activity.requests
 
-    client.get("/v2/lookup?client=abc")
-    client.get("/v2/lookup?client=abc")
+    client.get("/v2/lookup?client=abc&fingerprint=eins")
+    client.get("/v2/lookup?client=abc&fingerprint=zwei")
 
     assert service.activity.requests == before + 2
     assert service.activity.idle_s < 1

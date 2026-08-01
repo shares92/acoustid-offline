@@ -122,11 +122,16 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     Job-Auskunft liest die eigene SQLite, die beiden Dauerlaeufer benutzen
     Docker-Steuerung und Bereitschaftsfrage — auch hier keine Verbindung
     zum Array.
+
+    Seit Phase 17 kommt der Lookup-Cache dazu — eine zweite SQLite-Datei
+    auf demselben Cache-Pool. Er ist der Grund, warum eine Anfrage das
+    Array *gar nicht mehr* braucht; eine Verbindung dorthin ist er nicht.
     """
     attributes = set(vars(service))
     assert attributes == {
         "settings",
         "db",
+        "cache",
         "config_store",
         "state",
         "docker",

@@ -1,14 +1,18 @@
 """HTTP-Schicht des Waechters (FastAPI) — ARCHITECTURE §4, §7.
 
-Stand Phase 16 traegt sie zwei Routen:
+Stand Phase 17 traegt sie zwei Routen:
 
 ===============  ======  =================================================
 ``/status``      GET     Stack-Zustand, Datenstand, letzter Update-Lauf,
                          Version — **weckt nie** (§7, §8.2)
-``/v2/{...}``    alle    Reverse-Proxy auf ``acoustid-api``, **mit
-                         Weck-Logik** (§7 „Fehlerverhalten") und der
+``/v2/{...}``    alle    Lookup-Cache, Reverse-Proxy auf ``acoustid-api``,
+                         **mit Weck-Logik** (§7 „Fehlerverhalten") und der
                          Aktivitaetsmeldung fuer den Idle-Stopp
 ===============  ======  =================================================
+
+Seit Phase 17 weckt `/v2/*` nur noch dann, wenn die Antwort nicht schon im
+Lookup-Cache liegt — die zweite Stelle, an der Invariante §8.2 baulich
+haengt (:func:`_proxy`).
 
 Dazu kommen die beiden Dauerlaeufer des Lebenszyklus
 (:mod:`acoustid_watchdog.lifecycle`): sie leben im Lifespan der Anwendung,
@@ -49,12 +53,19 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from acoustid_watchdog.cache import (
+    MAX_CACHEABLE_BODY_BYTES,
+    CachedResponse,
+    RequestPlan,
+    is_cacheable_response,
+    plan_request,
+)
 from acoustid_watchdog.proxy import error_response
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.status import build_status
 from acoustid_watchdog.wake import DEFAULT_RETRY_AFTER_S, StackNotReadyError
 from shared import setup_logging
-from shared.config import WakeConfig
+from shared.config import Config
 from shared.env import EnvSettings
 
 __all__ = ["PROXY_METHODS", "SERVICE_NAME", "build_app", "create_app"]
@@ -152,13 +163,26 @@ async def _status(request: Request) -> JSONResponse:
 
 
 async def _proxy(request: Request) -> Response:
-    """Wecken, weiterleiten, Antwort unveraendert zurueckgeben.
+    """Cache fragen, sonst wecken, weiterleiten, Antwort zurueckgeben.
 
-    Die Reihenfolge ist der ganze Punkt der Phase: **erst** bereit machen,
-    **dann** weiterleiten. Wie lange eine Anfrage dafuer gehalten werden
-    darf, steht in ``wake.hold_timeout_s`` (§6) und wird bei jeder Anfrage
-    frisch gelesen — die Admin-UI kann den Wert aendern, ohne dass der
-    Waechter neu starten muss.
+    Die Reihenfolge ist der ganze Punkt der beiden Phasen:
+
+    1. **Cache** (Phase 17). Liegt die Antwort schon da, geht sie sofort
+       zurueck — kein Docker-Kontakt, kein API-Kontakt, kein Weckvorgang.
+       Genau hier ist Invariante §8.2 baulich erfuellt: der Zweig kehrt
+       zurueck, **bevor** irgendetwas den Stack anfassen koennte.
+    2. **Bereit machen** (Phase 15/16), erst dann weiterleiten. Wie lange
+       eine Anfrage dafuer gehalten werden darf, steht in
+       ``wake.hold_timeout_s`` (§6).
+    3. **Einlagern**, wenn die Antwort dafuer taugt (HTTP 200 und
+       ``status: "ok"`` — :func:`~acoustid_watchdog.cache.
+       is_cacheable_response`).
+
+    Die Laufzeit-Konfiguration wird dabei **bei jeder Anfrage frisch
+    gelesen** (``cache.enabled``, ``cache.max_size_mb``,
+    ``wake.hold_timeout_s``) — die Admin-UI kann sie aendern, ohne dass der
+    Waechter neu starten muss (Muster der :class:`~acoustid_watchdog.
+    lifecycle.IdleStopper`).
 
     Zwei Faelle beantwortet der Waechter selbst (§7 „Fehlerverhalten"):
 
@@ -170,7 +194,7 @@ async def _proxy(request: Request) -> Response:
 
     Alles andere — auch jeder Fehler der API — geht unveraendert durch.
 
-    Hier steht ausserdem die eine Zeile, an der der Idle-Stopp haengt: jede
+    Hier steht ausserdem die eine Zeile, an der der Idle-Stopp haengt: eine
     Anfrage unter ``/v2/`` ist **Aktivitaet** (ARCHITECTURE §6
     „Idle-Definition") und verschiebt den Auto-Stopp. Gezaehlt wird die
     ankommende Anfrage, nicht die fertige Antwort — sonst hielte ein Client,
@@ -178,19 +202,26 @@ async def _proxy(request: Request) -> Response:
     ihn gerade benutzt hat. `/status` und die Admin-UI zaehlen bewusst
     nicht: sie beruehren das Array nie (Invariante §8.2) und duerfen es
     folglich auch nicht wachhalten.
+
+    **Ein Cache-Hit zaehlt aus demselben Grund nicht.** Er braucht das
+    Array nicht — er hat es ja gerade nicht angefasst. Ein wacher Stack,
+    den nur noch Treffer erreichen, darf einschlafen; die naechste Anfrage,
+    die wirklich zur API muss, weckt ihn wieder. Wuerde ein Treffer die
+    Uhr anfassen, hielte ausgerechnet der Cache den Stack wach, den er
+    ueberfluessig machen soll.
     """
     service: WatchdogService = request.app.state.service
+    config = _runtime_config(service)
+    plan = await plan_request(request, cache_enabled=config.cache.enabled)
+
+    if plan.key is not None:
+        cached = await run_in_threadpool(service.cache.get, plan.key)
+        if cached is not None:
+            return cached.to_response()
+
     service.activity.touch()
     try:
-        hold_timeout_s = service.config.wake.hold_timeout_s
-    except Exception:
-        # Eine unlesbare config.yaml darf den Proxy nicht lahmlegen; der
-        # Default aus §6 ist dann die richtige Annahme.
-        _LOG.exception("Laufzeit-Konfiguration nicht lesbar, Vorgabewert wird benutzt")
-        hold_timeout_s = WakeConfig().hold_timeout_s
-
-    try:
-        await service.wake.ensure_ready(timeout_s=hold_timeout_s)
+        await service.wake.ensure_ready(timeout_s=config.wake.hold_timeout_s)
     except StackNotReadyError as error:
         _LOG.warning(
             "Anfrage abgewiesen, Stack nicht bereit",
@@ -199,7 +230,7 @@ async def _proxy(request: Request) -> Response:
         return error_response(503, str(error), retry_after_s=error.retry_after_s)
 
     try:
-        return await service.proxy.forward(request)
+        return await _forward(request, service, plan, config)
     except httpx.HTTPError as error:
         service.wake.invalidate()
         _LOG.warning(
@@ -211,6 +242,53 @@ async def _proxy(request: Request) -> Response:
             f"API nicht erreichbar: {error}",
             retry_after_s=DEFAULT_RETRY_AFTER_S,
         )
+
+
+async def _forward(
+    request: Request, service: WatchdogService, plan: RequestPlan, config: Config
+) -> Response:
+    """Weiterleiten und, wo es sich lohnt, die Antwort auswerten.
+
+    Zwei Nachbereitungen haengen hier dran, beide aus Phase 17:
+
+    * **Einlagern** einer erfolgreichen Lookup-Antwort.
+    * **Cache leeren** nach einer erfolgreichen lokalen Submission
+      (Invariante §8.6). Gemessen wird am HTTP-Status: die API beantwortet
+      einen fehlgeschlagenen Submit nie mit ``200`` (eigene Statuszeile je
+      Fehlercode, docs/api-submit.md). Zu oft leeren waere ohnehin die
+      harmlose Richtung — der Cache fuellt sich von selbst wieder.
+    """
+    if plan.key is None:
+        response = await service.proxy.forward(request, content=plan.content)
+        if plan.invalidates and response.status_code == 200:
+            await run_in_threadpool(service.invalidate_cache, "submission")
+        return response
+
+    response, body = await service.proxy.forward_capturing(
+        request, limit=MAX_CACHEABLE_BODY_BYTES, content=plan.content
+    )
+    if body is not None and is_cacheable_response(response, body):
+        await run_in_threadpool(
+            service.cache.put,
+            plan.key,
+            CachedResponse.capture(response, body),
+            max_size_bytes=config.cache.max_size_mb * 1024 * 1024,
+        )
+    return response
+
+
+def _runtime_config(service: WatchdogService) -> Config:
+    """Die laufende Konfiguration — oder die Defaults aus §6.
+
+    Eine unlesbare ``config.yaml`` darf den Proxy nicht lahmlegen; dann
+    gelten die dokumentierten Vorgabewerte. Dieselbe Haltung wie im
+    :class:`~acoustid_watchdog.lifecycle.IdleStopper`.
+    """
+    try:
+        return service.config
+    except Exception:
+        _LOG.exception("Laufzeit-Konfiguration nicht lesbar, Vorgabewerte werden benutzt")
+        return Config()
 
 
 def build_app() -> FastAPI:
