@@ -405,3 +405,18 @@ und kostet Suchzeit, obwohl es eine Interpreter-Eigenheit ist.
 Anwenden: Bei HTTPS-Skripten, die mit uv-Python laufen, auf macOS
 `SSL_CERT_FILE` setzen oder im Skript certifi als Verify-Quelle
 angeben; die Abhilfe in der Test-Doku vermerken.
+
+## [Technik] Zähler-Semantik explizit benennen: „musste umschalten" ≠ „war escaped"
+
+Was: Beim 2011er-Import steht `escaping_fallbacks == 0`, obwohl 85
+Zeilen (0,73 %) roh kein gültiges JSON sind — `Escaping.AUTO` wählt
+die Alt-Epochen-Lesart bereits vorab nach Dateidatum, der Zähler misst
+nur zeilenweise Lesart-Wechsel. Wer ihn als „Anzahl escapte Zeilen"
+liest, zieht falsche Schlüsse (aufgefallen bei der unabhängigen
+Phase-7-Verifikation 2026-08-01).
+Warum: Metriken mit plausibel klingendem, aber engerem Namen werden
+in späteren Analysen fast sicher fehlinterpretiert.
+Anwenden: Zähler nach dem benennen, was sie messen (hier wäre
+`lesart_wechsel` o. ä. klarer); im Docstring die Nicht-Bedeutung
+explizit ausschließen; bei Auffälligkeiten die Rohgröße unabhängig
+nachzählen statt der Metrik zu vertrauen.
