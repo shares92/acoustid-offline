@@ -18,19 +18,19 @@ zweifach grün). Warten auf Go für Phase 19 (Wächter — Scheduler &
 Update-Zyklus); danach ist der volle 5-Phasen-Doku-Sweep (15–19)
 fällig.**
 
-## Session-Übergabe (Stand 2026-08-01, nach Phase 18)
+## Session-Übergabe (Session-Ende 2026-08-01, nach Phase 18)
 
-**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14–18
+**Kurzbeschreibung:** Session vom 01.08. (Wächter-Kern): Phasen 14–18
 nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
 Stand-Vorprüfung jeweils bestanden), vom Orchestrator verifiziert
 (Code-Review + Suite + ruff; E2E ab Phase 15 jeweils doppelt gefahren
 — Agent und Orchestrator), ff-Merges
 `7ce2cd5`/`3f9daee`/`a42c192`/`8c3816c`/`2570ea5`, alle CI-Läufe
 beobachtet und grün, 5-Phasen-Doku-Sweep (10–14) und Doku-Updates
-nach 15–18 erledigt. Offener Betreiber-Entscheid:
-X-Forwarded-For-Vertrauensliste fürs Rate-Limit hinter TLS-Proxy
-(siehe Phase-29-Hinweis; Empfehlung des Bau-Agenten: eigener
-§6-Schlüssel, Default leer = heutiges Verhalten).
+nach 15–18 erledigt. Session-Archiv:
+`sessions/2026-08-01-phasen-14-18-waechter-kern.md`. **Die Go-Frage
+zu Phase 19 und die XFF-Frage wurden am Session-Ende verworfen — kein
+Go erteilt, kein Entscheid gefallen.**
 
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
@@ -86,7 +86,9 @@ Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 **Offene Punkte (priorisiert):**
 1. **Go-Entscheidung Phase 19** einholen (Scheduler & Update-Zyklus;
    Hinweise im Phasenblock: Stop-Timeout, Submit-während-Lauf-Entscheid,
-   drain_queue/retry_forward, Cache-Invalidierung).
+   drain_queue/retry_forward, Cache-Invalidierung) — die Go-Frage vom
+   01.08. wurde verworfen, kein Go erteilt. Nach Phase 19 ist der
+   volle 5-Phasen-Doku-Sweep (15–19) fällig.
 2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
    Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
    daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
@@ -97,6 +99,9 @@ Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
    Produktivstart erneut prüfen (ARCHITECTURE §12).
 5. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst Phase 28
    (Vormerkungen stehen in den Phasenblöcken).
+6. **XFF-Betreiber-Entscheid** (Rate-Limit hinter TLS-Proxy,
+   Vertrauensliste als §6-Schlüssel?) — Frage am 01.08. verworfen;
+   Hinweis steht im Phase-29-Block, spätestens dort entscheiden.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
