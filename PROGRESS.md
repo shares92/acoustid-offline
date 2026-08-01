@@ -7,26 +7,28 @@ liegen in der Git-Historie dieser Datei und im Session-Archiv
 (`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
 ARCHITECTURE.md.
 
-**Status (2026-08-01): Phasen 0–15 abgeschlossen — Wake-on-request
-funktioniert E2E. Repo https://github.com/shares92/acoustid-offline,
-Phase-15-Commit `3f9daee` (danach Doku-Update), Arbeitsbaum sauber,
-CI grün (1506 Tests, drei Jobs: Lint+Unit 1251+43 übersprungen,
-Integration PG+Index 198, Bit-Verifikation pg_acoustid 8; je 3
-network-/compose-Tests laufen nie in CI, der Compose-E2E-Wecktest lief
-lokal zweifach grün). Warten auf Go für Phase 16 (Wächter —
-Zustandsmaschine, Idle-Stopp & Startfehler).**
+**Status (2026-08-01): Phasen 0–16 abgeschlossen — voller
+Stack-Lebenszyklus (schlafend → startet → bereit → stoppt → fehler)
+steht. Repo https://github.com/shares92/acoustid-offline,
+Phase-16-Commit `a42c192` (danach Doku-Update), Arbeitsbaum sauber,
+CI grün (1571 Tests, drei Jobs: Lint+Unit 1315+43 übersprungen,
+Integration PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 network-
+und 4 compose-Tests laufen nie in CI, der Compose-E2E lief lokal
+zweifach grün). Warten auf Go für Phase 17 (Wächter —
+Lookup-Cache).**
 
-## Session-Übergabe (Stand 2026-08-01, nach Phase 15)
+## Session-Übergabe (Stand 2026-08-01, nach Phase 16)
 
-**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14 und
-15 nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
+**Kurzbeschreibung:** Session vom 01.08. (Fortsetzung): Phasen 14–16
+nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
 Stand-Vorprüfung jeweils bestanden), vom Orchestrator verifiziert
-(Code-Review + Suite + ruff; Phase 15 zusätzlich E2E-Wecktest gegen
-echte Container doppelt gefahren — Agent und Orchestrator), ff-Merges
-`7ce2cd5`/`3f9daee`, alle CI-Läufe beobachtet und grün,
-5-Phasen-Doku-Sweep (10–14) und Doku-Update nach 15 erledigt.
+(Code-Review + Suite + ruff; E2E-Wecktest ab Phase 15 jeweils doppelt
+gefahren — Agent und Orchestrator), ff-Merges
+`7ce2cd5`/`3f9daee`/`a42c192`, alle CI-Läufe beobachtet und grün,
+5-Phasen-Doku-Sweep (10–14) und Doku-Updates nach 15/16 erledigt.
 Healthcheck-Mitentscheid: interner API-Endpunkt `/_health`, gebaut in
-Phase 15 (DECISIONS 2026-08-01).
+Phase 15 (DECISIONS 2026-08-01). Die beiden bewusst offenen
+Phase-15-Lücken (Hand-Stopp, Weck-Frist) sind in Phase 16 geschlossen.
 
 **Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
 (Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
@@ -48,17 +50,22 @@ E2E-verifiziert: Weckdauer ~1,3 s lokal), interner API-Healthcheck
 `GET /_health` (DB+Index, ohne MB), Reload-Signal komplett
 (Sendeseite Marke `config.yaml.reload` + Empfangsseite
 `api/app/reload.py`, 10-s-Intervall, Teilmenge submit.*/
-mb.keep_submitted_mbid).
-**Existiert noch nicht:** Wächter-Rest (Phasen 16–22:
-Zustandsmaschine, Idle-Stopp, Cache, Auth, Scheduler, Notify, Backup,
-Metrics), Admin-UI (23–27, Designpaket abgenommen unter docs/design/),
-E2E/Release (28–29). Nie gelaufen: Voll-Bootstrap am echten
-Datenbestand, echter Upstream-Submit.
+mb.keep_submitted_mbid). **Phase 16:** Zustandsmaschine mit
+Übergangstabelle (`ALLOWED_TRANSITIONS`, streng `to()` vs. nachsichtig
+`try_to()`), Idle-Stopp (`idle.timeout_min`, Job-Blockade §8.5 über
+`JobSource`/`update_run`, Job setzt Leerlaufuhr zurück), Docker-Poller
+(15 s, erkennt Hand-Stopp/-Start, überspringt bei laufenden
+Vorgängen), Startfehler-Pfad mit Erholung aus `error`, Weck-Frist
+gehört jetzt dem Vorgang (jeder Wartende verlängert auf seine
+Haltezeit).
+**Existiert noch nicht:** Wächter-Rest (Phasen 17–22: Cache, Auth,
+Scheduler, Notify, Backup, Metrics), Admin-UI (23–27, Designpaket
+abgenommen unter docs/design/), E2E/Release (28–29). Nie gelaufen:
+Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung Phase 16** einholen (Zustandsmaschine, Idle-Stopp
-   & Startfehler; Hinweise im Phasenblock unten, u. a. Erkennung des
-   von Hand gestoppten Stacks).
+1. **Go-Entscheidung Phase 17** einholen (Lookup-Cache: Hits wecken
+   nie; Invalidierung nach Delta-Import und lokaler Submission).
 2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
    Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
    daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
@@ -72,8 +79,8 @@ Datenbestand, echter Upstream-Submit.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
-Arbeitsregeln), dann per AskUserQuestion das Go für Phase 16 einholen
-und bei Go einen Opus-Bau-Agenten mit dem Phase-16-Block unten
+Arbeitsregeln), dann per AskUserQuestion das Go für Phase 17 einholen
+und bei Go einen Opus-Bau-Agenten mit dem Phase-17-Block unten
 beauftragen — inklusive Stand-Vorprüfung im Auftragstext (DECISIONS
 2026-08-01). Nächster voller Doku-Sweep: nach Phase 19.
 
@@ -142,36 +149,9 @@ Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 | 13 | API: Batch & submission_status | 1d8874a | queries/responses-Vertrag (Teilfehler bei 200, Limit 100→19/413, meta-Bündelung); Status nie 404 |
 | 14 | Wächter: Grundgerüst, SQLite & /status | 7ce2cd5 | Paket `acoustid_watchdog` (FastAPI), SQLite-Migrationsläufer (`PRAGMA user_version`), event_log-Ringpuffer 5000 exakt, /status baulich weckfrei, Erststart-Passwort argon2 nur ins Containerlog, Reload-Marke `config.yaml.reload`, compose+Healthcheck; am echten Container verifiziert |
 | 15 | Wächter: Proxy, Docker-Steuerung & Wecken | 3f9daee | Reverse-Proxy `/v2/*` roh/streamend (405-Parität bleibt), DockerClient (3 Routen, httpx über uds, unversioniert), WakeCoordinator (ein Weckvorgang via Task+shield; Timeout → 503+Retry-After 30, Zustand bleibt `starting`), API `GET /_health` (DB+Index, ohne MB) + Reload-Empfang (10 s, Teilmenge, Rest zurückgeschrieben+Warnung), E2E-Wecktest (Marker `compose`, opt-in): Weckdauer ~1,3 s lokal |
+| 16 | Wächter: Zustandsmaschine, Idle-Stopp & Startfehler | a42c192 | `ALLOWED_TRANSITIONS` (25 Paare getestet; streng `to()` / nachsichtig `try_to()`), IdleStopper (30-s-Takt, Job-Blockade §8.5 via `JobSource`→`update_run`, Job setzt Leerlaufuhr zurück), StatePoller (15 s, Hand-Stopp/-Start erkannt, skip bei `busy`, `error` bleibt sichtbar), Weck-Frist gehört dem Vorgang, Anfragen bei `stopping` warten und wecken danach; E2E 4/4 |
 
 ---
-
-## Phase 16: Wächter — Zustandsmaschine, Idle-Stopp & Startfehler
-
-Ziel: Vollständiger Lebenszyklus schlafend → startet → bereit →
-stoppt (+ fehler).
-
-Aufgaben:
-- [ ] Zustandsmaschine mit den fünf Zuständen (Basis für /status + UI)
-- [ ] Idle-Stopp: `idle.timeout_min`; nur ohne API-Anfragen UND ohne
-      laufenden Import-/Backup-Job (Invariante §8.5)
-- [ ] Stack-Start-Fehler: `503` + Fehlertext, Ereignis geloggt
-      (Notification folgt Phase 20)
-- [ ] Tests: Idle-Stopp, Stopp-Blockade bei laufendem Job, Fehlerpfad
-
-Definition of Done: Zustandsübergänge vollständig getestet.
-
-Hinweis (aus Phase 15): Zwei bekannte Lücken der Phase-15-Wecklogik
-gehören hierher. (1) **Von Hand gestoppter Stack:** der Wächter hält
-die Bereitschaft im Speicher; die erste Anfrage danach läuft ins Leere
-(503 + `invalidate()`), erst die zweite weckt — die Zustandsmaschine
-soll den Zustand aus Docker erheben (Poller), dann verschwindet der
-Fall (Klärungspunkt-Entscheid 2026-08-01: bewusst nicht in Phase 15
-gelöst). (2) **Weck-Frist:** die Weck-Aufgabe im `WakeCoordinator`
-erbt die Frist der Anfrage, die sie startet — ein später dazukommender
-Wartender kann die 503 früher als nach seiner eigenen vollen Haltezeit
-sehen (praktisch harmlos: neuer Vorgang bei nächster Anfrage,
-`docker start` idempotent). Beim Umbau auf die Zustandsmaschine
-mitziehen oder bewusst dokumentiert lassen.
 
 ## Phase 17: Wächter — Lookup-Cache
 
@@ -265,6 +245,15 @@ Kanälen; Testnachricht-Funktion vorhanden.
 Hinweis (aus Phase 12): Der Auslöser für „Upstream-Submit dauerhaft
 fehlgeschlagen" ist das ERROR-Ereignis `upstream_forward_gave_up`
 (Felder `local_track_id`, `forward_attempts`, `forward_error`).
+
+Hinweis (aus Phase 16): Für „Stack-Start-Fehler" existieren bereits
+die ERROR-Ereignisse `Stack-Start fehlgeschlagen` und `Stack-Stopp
+fehlgeschlagen` (Quelle `wake`) sowie die Zustandswechsel-Ereignisse
+(Quelle `stack`) — die Notification hängt sich dort an. Ein Stack im
+`error`-Zustand bleibt bewusst stehen (kein Idle-Stopp, Entscheid
+2026-08-01), bis der nächste Weckversuch ihn auflöst — der Betreiber
+sieht den Fehler in /status, die Notification macht ihn aktiv
+aufmerksam.
 
 ## Phase 21: Backup-Job
 

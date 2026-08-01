@@ -461,3 +461,18 @@ bekommt, und sieht dann wie ein Import-Rätsel aus.
 Anwenden: Test-Hilfsmodule in Multi-Service-Repos von Anfang an mit
 Service-Präfix benennen; bei ImportError/AttributeError in Tests zuerst
 auf Namenskollisionen über Verzeichnisgrenzen prüfen.
+
+## [Technik] asyncio-Primitiven nie aus Worker-Threads bedienen
+
+Was: Die Bereitschaft des Stacks wurde von `asyncio.Event` auf ein
+einfaches Bool umgestellt, weil sie auch aus `run_in_threadpool`-Code
+gesetzt wird — `Event.set()` ist nicht threadsicher (weckt Waiter über
+Loop-Interna). Da niemand auf das Event *wartete* (gewartet wird auf
+die Weck-Aufgabe selbst), war das Bool die ehrlichere Struktur; für
+echte Thread-→-Loop-Signale wäre `loop.call_soon_threadsafe` nötig.
+Warum: Der Fehler wäre ein Heisenbug — meist geht es gut, unter Last
+verliert ein Waiter das Signal; Tests auf dem Event-Loop sehen nichts.
+Anwenden: Vor jedem asyncio-Primitiv fragen, aus welchem Thread es
+bedient wird; bei Threadpool-Beteiligung entweder threadsichere
+Strukturen (Lock + Werte) oder `call_soon_threadsafe`; „wartet
+überhaupt jemand?" zuerst klären — oft reicht ein Flag.

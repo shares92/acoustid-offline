@@ -876,3 +876,47 @@ Healthcheck (verworfen — §8.7); mb.dsn hot-reload (verworfen —
 zweiter Verbindungslebenszyklus ohne Abnehmer); Retry-After aus
 hold_timeout (verworfen — Scheingenauigkeit); Docker-Poller schon in
 Phase 15 (verworfen — griffe der Phase-16-Zustandsmaschine vor).
+
+## 2026-08-01: Phase-16-Details (Zustandsmaschine, Idle-Stopp, Poller)
+
+Entscheidung: (1) **Übergangstabelle `ALLOWED_TRANSITIONS`** als
+einzige Wahrheit über erlaubte Wechsel; jede Kante hat genau einen
+Aufrufer. Bewusst verboten: `ready→error` (Fehler entsteht nur aus
+gescheitertem Start/Stopp), `stopping→starting` (erst fällt der Stack
+ganz), `error→stopping`, `sleeping→stopping`, `error→sleeping` (sonst
+löschte der Poller den Fehler aus /status, bevor ihn jemand sieht).
+(2) **Streng vs. nachsichtig:** Weck-/Stopp-Pfad nutzt `to()` (wirft —
+dort wäre ein verbotener Wechsel ein Programmfehler), der Poller
+`try_to()` (protokolliert, lässt stehen). (3) **Poller-Intervall 15 s,
+Idle-Prüfung 30 s** — Modulkonstanten, keine §6-Schlüssel; Poller
+zurückhaltend: nichts läuft ⇒ sleeping, alles läuft + Healthcheck ok ⇒
+ready, alles dazwischen ⇒ Zustand bleibt stehen; bei laufendem Weck-/
+Stoppvorgang (`busy`) wird übersprungen (kein Flackern); Docker weg ⇒
+erste Warnung, danach Debug. (4) **Weck-Frist gehört dem Vorgang:**
+jeder Dazukommende verlängert `_deadline` auf seine eigene Haltezeit —
+kein Wartender sieht die 503 vor Ablauf seiner Zeit (schließt
+Phase-15-Lücke 2). (5) **`stopping`:** Anfragen warten den Stopp ab
+(shield auf die Stopp-Aufgabe) und wecken danach — ein halb
+gestoppter Stack ist nicht bedienbar, und start/stop kämen sich ins
+Gehege; niemand wird abgewiesen, solange die Haltezeit reicht.
+(6) **Laufender Job sperrt nicht nur, er setzt die Leerlaufuhr
+zurück** — sonst schliefe der Stack in der Sekunde ein, in der ein
+langer Import endet. (7) **`JobSource`-Protokoll + `DatabaseJobs`**
+über `update_run` (Lauf ohne Ergebnis läuft) — Phase 19/21 melden sich
+mit `start_run` automatisch an. (8) **Doppelte Erzählung im
+Ereignis-Log bleibt** (Vorgangs-Ereignisse Quelle `wake`,
+Zustandswechsel Quelle `stack`) — die Logansicht filtert nach Quelle.
+(9) **Kein Idle-Stopp aus `error`** — der Fehler bleibt sichtbar, bis
+ein Weckversuch ihn auflöst (Phase 20 hängt die Notification an).
+(10) **Kein zusätzliches Warten des Lifespans auf eine laufende
+Stopp-Aufgabe** — `docker stop` ist idempotent, der Poller korrigiert
+nach dem Neustart. (11) Bereitschafts-Flag statt `asyncio.Event`:
+niemand wartet darauf (gewartet wird auf die Weck-Aufgabe), gesetzt
+wird es auch aus dem Threadpool — `Event.set()` ist nicht threadsicher.
+Begründung: Zustand bleibt einwertig und erklärbar; §8.5 baulich
+erfüllt; Anzeige flackert nicht; Fehler bleiben diagnostizierbar.
+Alternativen: Zustand persistieren (verworfen — nach Neustart
+bestenfalls veraltet, Poller erhebt ohnehin); Poller-Intervall als
+Config (verworfen — kein Betreiber-Nutzen); Stopp bei `error` nach
+Frist (verworfen — verwischt Diagnose); Anfragen bei `stopping`
+abweisen (verworfen — unnötige 503s).
