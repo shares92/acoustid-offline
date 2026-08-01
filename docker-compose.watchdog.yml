@@ -22,10 +22,16 @@
 # auf einen Share des Cache-Pools — dann haengen beide Seiten am selben
 # Host-Verzeichnis und die Frage stellt sich nicht.
 #
-# Stand Phase 14: `/status` und die Zustandshaltung. Der Proxy, die
-# Docker-Steuerung ueber /var/run/docker.sock und damit die Weck-Logik
-# kommen in Phase 15 — bis dahin braucht dieser Container KEINEN Zugriff
-# auf den Docker-Socket, und er bekommt ihn deshalb auch nicht.
+# Stand Phase 15: `/status`, Zustandshaltung, Reverse-Proxy `/v2/*` und
+# Wake-on-request. Dafuer braucht dieser Container — als EINZIGER im
+# Projekt — den Docker-Socket (Invariante §8.1, DECISIONS 2026-07-25).
+#
+# ACHTUNG, bewusst eingegangenes Risiko: wer den Socket hat, hat den
+# Docker-Daemon und damit faktisch den Host. Mitigation laut
+# Architektur-Entscheid: minimaler, isolierter Codepfad
+# (watchdog/app/docker.py — drei Routen, keine Docker-Bibliothek),
+# Passwort-Login, Rate-Limit, LAN-Betrieb. Bei Exponierung nach aussen
+# zwingend auth.mode=apikey + TLS-Proxy davor.
 
 name: acoustid-offline
 
@@ -68,6 +74,16 @@ services:
       # die Reload-Marke (config.yaml.reload). Ueber ACOUSTID_WATCHDOG_DATA
       # auf einen Host-Pfad des Cache-Pools umstellbar (Unraid).
       - ${ACOUSTID_WATCHDOG_DATA:-watchdog-data}:/data
+      # Docker-Steuerung ab Phase 15: der Waechter startet und stoppt die
+      # Stack-Container aus docker-compose.yml (Invariante §8.1 — API und
+      # Importer steuern nie Docker). Der Pfad ist im Code fest verdrahtet
+      # (watchdog/app/docker.py, DOCKER_SOCKET).
+      #
+      # `:ro` haelt den Socket-EINTRAG unveraenderlich (er kann nicht
+      # ersetzt oder geloescht werden) — es begrenzt NICHT, was ueber den
+      # Socket moeglich ist. Wer den Socket erreicht, kann alles, was der
+      # Daemon kann. Genau deshalb ist der Codepfad dahinter so klein.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     healthcheck:
       # /status kommt ohne Stack aus und weckt garantiert nichts (§7, §8.2) —
       # damit ist es die einzige richtige Lebendpruefung fuer diesen

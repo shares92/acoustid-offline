@@ -83,13 +83,20 @@ class StubConnection:
 
 
 class StubPool:
-    """Pool-Attrappe mit genau einer Verbindung."""
+    """Pool-Attrappe mit genau einer Verbindung.
 
-    def __init__(self, connection: StubConnection) -> None:
+    ``error`` laesst das Ziehen einer Verbindung scheitern — so sieht der
+    Bereitschafts-Endpunkt (Phase 15) eine nicht erreichbare Datenbank.
+    """
+
+    def __init__(self, connection: StubConnection, error: Exception | None = None) -> None:
         self._connection = connection
+        self.error = error
 
     @contextmanager
     def connection(self) -> Iterator[StubConnection]:
+        if self.error is not None:
+            raise self.error
         yield self._connection
 
     def close(self) -> None:
@@ -130,9 +137,27 @@ class StubIndex:
     Query-Extraktion entsprechen.
     """
 
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        healthy: bool = True,
+        health_error: Exception | None = None,
+        index_name: str = "main",
+    ) -> None:
         self.batches: list[list[Change]] = []
         self.error = error
+        #: Antwort auf ``index_health()`` — die Bereitschaftspruefung der
+        #: Phase 15 (:mod:`acoustid_api.health`).
+        self.healthy = healthy
+        self.health_error = health_error
+        self.index_name = index_name
+
+    def index_health(self) -> bool:
+        """``GET /<name>/_health`` des acoustid-index."""
+        if self.health_error is not None:
+            raise self.health_error
+        return self.healthy
 
     def update(
         self,

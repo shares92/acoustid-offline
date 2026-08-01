@@ -109,6 +109,7 @@ dependencies = [
     { name = "acoustid-offline-shared" },
     { name = "argon2-cffi" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "uvicorn" },
 ]
 
@@ -117,6 +118,7 @@ requires-dist = [
     { name = "acoustid-offline-shared", editable = "shared" },
     { name = "argon2-cffi", specifier = ">=25.1.0" },
     { name = "fastapi", specifier = ">=0.121.2" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 

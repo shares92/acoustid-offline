@@ -41,6 +41,15 @@ das **echte** Internet brauchen (data.acoustid.org). Sie sind per Vorgabe
 abgewaehlt — mit Begruendung im Report — und laufen nur mit ``--network``
 bzw. ``ACOUSTID_NETWORK_TESTS=1``; in der CI laufen sie nie.
 
+Nach demselben Muster gibt es seit Phase 15 den Marker ``compose``: Tests,
+die den **echten** Compose-Stack hochfahren (Docker-Daemon, Images bauen,
+Container starten und stoppen). Sie laufen nur mit ``--compose`` bzw.
+``ACOUSTID_COMPOSE_TESTS=1``. Bewusst dieselbe Mechanik wie bei ``network``
+und nicht die des ``integration``-Schalters: ein Docker-Socket ist auf
+jedem CI-Runner vorhanden, `--integration=require` wuerde diese Tests dort
+also erzwingen — und ein E2E-Lauf mit Image-Bau gehoert nicht in den
+Unit-Job.
+
 Die Zugaenge kommen aus denselben `AOFF_`-Variablen wie im Betrieb
 (`shared.env.EnvSettings`); fuer den lokalen Lauf gegen Compose siehe
 `tests/docker-compose.test.yml`.
@@ -69,8 +78,10 @@ DB_MARKER = "db"
 INDEX_MARKER = "index"
 EXTENSION_MARKER = "extension"
 NETWORK_MARKER = "network"
+COMPOSE_MARKER = "compose"
 ENV_SWITCH = "ACOUSTID_INTEGRATION_TESTS"
 NETWORK_SWITCH = "ACOUSTID_NETWORK_TESTS"
+COMPOSE_SWITCH = "ACOUSTID_COMPOSE_TESTS"
 EXTENSION_DSN = "ACOUSTID_EXTENSION_DSN"
 MODES = ("auto", "require", "off")
 
@@ -83,6 +94,7 @@ SERVICES = {
 
 _STATUS_KEY = pytest.StashKey[str]()
 _NETWORK_KEY = pytest.StashKey[str]()
+_COMPOSE_KEY = pytest.StashKey[str]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -102,6 +114,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help=(
             f"Tests mit dem Marker '{NETWORK_MARKER}' mitlaufen lassen (echtes Netz, "
             f"data.acoustid.org). Auch ueber {NETWORK_SWITCH}=1 setzbar."
+        ),
+    )
+    parser.addoption(
+        "--compose",
+        action="store_true",
+        default=os.environ.get(COMPOSE_SWITCH, "").strip().lower() in ("1", "true", "yes"),
+        help=(
+            f"Tests mit dem Marker '{COMPOSE_MARKER}' mitlaufen lassen (echter "
+            f"Compose-Stack, Docker noetig). Auch ueber {COMPOSE_SWITCH}=1 setzbar."
         ),
     )
 
@@ -201,6 +222,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     # wuerden wir Dienste anproben, die durch `-m` ohnehin schon draussen
     # sind (z. B. `-m "integration and index"` ohne Postgres).
     _select_network_tests(config, items)
+    _select_compose_tests(config, items)
 
     mode = config.getoption("--integration")
     marked = [item for item in items if item.get_closest_marker(MARKER)]
@@ -262,9 +284,28 @@ def _select_network_tests(config: pytest.Config, items: list[pytest.Item]) -> No
     items[:] = [item for item in items if item not in marked]
 
 
+def _select_compose_tests(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Compose-Tests abwaehlen, solange ``--compose`` nicht gesetzt ist."""
+    if config.getoption("--compose"):
+        return
+    marked = [item for item in items if item.get_closest_marker(COMPOSE_MARKER)]
+    if not marked:
+        return
+    config.stash[_COMPOSE_KEY] = (
+        f"{len(marked)}x abgewaehlt (echter Compose-Stack; mit --compose bzw. "
+        f"{COMPOSE_SWITCH}=1 laufen sie)"
+    )
+    config.hook.pytest_deselected(items=marked)
+    items[:] = [item for item in items if item not in marked]
+
+
 def pytest_report_header(config: pytest.Config) -> str:
     network = "an" if config.getoption("--network") else "aus"
-    return f"integration: Modus {config.getoption('--integration')}; network: {network}"
+    compose = "an" if config.getoption("--compose") else "aus"
+    return (
+        f"integration: Modus {config.getoption('--integration')}; "
+        f"network: {network}; compose: {compose}"
+    )
 
 
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
@@ -274,3 +315,6 @@ def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     network = terminalreporter.config.stash.get(_NETWORK_KEY, None)
     if network is not None:
         terminalreporter.write_line(f"network: {network}")
+    compose = terminalreporter.config.stash.get(_COMPOSE_KEY, None)
+    if compose is not None:
+        terminalreporter.write_line(f"compose: {compose}")

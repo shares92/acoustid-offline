@@ -14,41 +14,62 @@ da (Invariante §8.2):
 * **Stack-Zustand** (:mod:`acoustid_watchdog.state`) — was die Container
   gerade tun, soweit der Waechter es weiss.
 
+Seit Phase 15 kommen die drei Dinge dazu, mit denen der Waechter den Stack
+tatsaechlich steuert — und nur diese drei sprechen ueberhaupt nach aussen:
+
+* **Docker-Steuerung** (:mod:`acoustid_watchdog.docker`) — der Unix-Socket,
+  ueber den Stack-Container starten und stoppen (Invariante §8.1).
+* **Weck-Koordination** (:mod:`acoustid_watchdog.wake`) — haelt Anfragen,
+  bis der Stack bereit ist; genau ein Weckvorgang, egal wie viele warten.
+* **Reverse-Proxy** (:mod:`acoustid_watchdog.proxy`) — der Weg von
+  ``/v2/*`` zum API-Dienst.
+
 :meth:`WatchdogService.open` ist zugleich der **Erststart-Pfad**: Datenbank
 anlegen und migrieren, ``config.yaml`` mit den Defaults aus §6 erzeugen,
 Admin-Passwort generieren und ins Containerlog schreiben. Alle drei
 Schritte sind idempotent — ein Neustart wiederholt keinen davon.
 
-Ab Phase 15 kommen hier Docker-Steuerung und Proxy-Client dazu, ab Phase 19
-der Scheduler. Der Schnitt ist bewusst derselbe wie im API-Dienst: alles
-Langlebige entsteht einmal beim Start und wird beim Herunterfahren wieder
-freigegeben.
+Ab Phase 19 kommt der Scheduler dazu. Der Schnitt ist bewusst derselbe wie
+im API-Dienst: alles Langlebige entsteht einmal beim Start und wird beim
+Herunterfahren wieder freigegeben.
 """
 
 from __future__ import annotations
 
 import logging
+from functools import partial
 from types import TracebackType
 from typing import Any, Self
 
 from acoustid_watchdog import __version__
 from acoustid_watchdog.admin import ensure_admin_user
 from acoustid_watchdog.config_store import ConfigStore
+from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel, log_event
+from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.reload import ReloadMarker
 from acoustid_watchdog.state import StackStateTracker
 from acoustid_watchdog.store import Database
+from acoustid_watchdog.wake import (
+    API_BASE_URL,
+    ReadinessProbe,
+    StackController,
+    WakeCoordinator,
+)
 from shared.config import Config
 from shared.env import EnvSettings
 
-__all__ = ["EVENT_SOURCE", "WatchdogService"]
+__all__ = ["EVENT_SOURCE", "WAKE_EVENT_SOURCE", "WatchdogService"]
 
 _LOG = logging.getLogger(__name__)
 
 #: Quelle aller Ereignisse, die der Waechter-Kern selbst schreibt. Spaetere
-#: Teile setzen eigene Quellen (``scheduler``, ``proxy``, ``backup``), damit
-#: die Logansicht danach filtern kann (Phase 27).
+#: Teile setzen eigene Quellen (``scheduler``, ``backup``), damit die
+#: Logansicht danach filtern kann (Phase 27).
 EVENT_SOURCE = "watchdog"
+
+#: Quelle der Weck-Ereignisse (Phase 15).
+WAKE_EVENT_SOURCE = "wake"
 
 
 class WatchdogService:
@@ -60,11 +81,40 @@ class WatchdogService:
         db: Database,
         config_store: ConfigStore,
         state: StackStateTracker | None = None,
+        *,
+        docker: DockerClient | None = None,
+        probe: ReadinessProbe | None = None,
+        proxy: ReverseProxy | None = None,
     ) -> None:
+        """
+        Args:
+            settings: Bootstrap-Werte des Prozesses.
+            db: Zustandsdatenbank (Cache-Pool).
+            config_store: Laufzeit-Konfiguration.
+            state: Stack-Zustand; ohne Angabe ``schlafend``.
+            docker: Docker-Steuerung. Ohne Angabe entsteht ein Client auf
+                den fest verdrahteten Socket-Pfad; Tests geben eine eigene
+                Fassung mit.
+            probe: Bereitschaftsfrage an den API-Healthcheck.
+            proxy: Reverse-Proxy auf den API-Dienst.
+        """
         self.settings = settings
         self.db = db
         self.config_store = config_store
         self.state = state if state is not None else StackStateTracker.sleeping()
+
+        self.docker = docker if docker is not None else DockerClient()
+        self.probe = probe if probe is not None else ReadinessProbe()
+        self.proxy = proxy if proxy is not None else ReverseProxy(API_BASE_URL)
+        self.stack = StackController(self.docker)
+        self.wake = WakeCoordinator(
+            self.stack,
+            self.probe,
+            self.state,
+            # Weck-Ereignisse bekommen eine eigene Quelle, damit die
+            # Logansicht (Phase 27) danach filtern kann.
+            log_event=partial(self.log_event, source=WAKE_EVENT_SOURCE),
+        )
 
     @classmethod
     def from_env(cls, env: EnvSettings | None = None) -> Self:
@@ -72,6 +122,8 @@ class WatchdogService:
 
         Nichts wird dabei geoeffnet oder angelegt — das macht :meth:`open`,
         damit ein Importfehler nicht schon beim Modulimport Dateien anfasst.
+        Auch die HTTP-Pools von Proxy, Probe und Docker-Client machen erst
+        beim ersten Aufruf eine Verbindung auf.
         """
         settings = env or EnvSettings.from_env()
         return cls(
@@ -110,16 +162,38 @@ class WatchdogService:
                 EventLevel.WARNING,
                 "Erststart: Admin-Passwort erzeugt und ins Containerlog geschrieben",
             )
+        # Der Stack-Zustand liegt nur im Speicher (DECISIONS 2026-08-01,
+        # Punkt 6) und wird deshalb bei jedem Start neu aus Docker erhoben —
+        # der Betreiber kann den Stack zwischenzeitlich von Hand gestartet
+        # haben. Schlaegt das fehl, laeuft der Waechter trotzdem weiter.
+        stack_state = self.wake.refresh()
+
         self.log_event(
             EventLevel.INFO,
             "Waechter gestartet",
-            {"version": __version__, "schema_version": self.db.schema_version},
+            {
+                "version": __version__,
+                "schema_version": self.db.schema_version,
+                "stack_state": stack_state.value,
+            },
         )
         return self
 
     def close(self) -> None:
-        """Gibt die Zustandsdatenbank frei."""
+        """Gibt Zustandsdatenbank, Docker-Client und Probe frei.
+
+        Der Proxy haelt einen **asynchronen** Pool und wird deshalb in
+        :meth:`aclose` geschlossen — das ist der Weg, den der Lifespan der
+        Anwendung nimmt.
+        """
         self.db.close()
+        self.docker.close()
+        self.probe.close()
+
+    async def aclose(self) -> None:
+        """Schliesst zusaetzlich den Proxy-Pool (Lifespan-Ende)."""
+        await self.proxy.aclose()
+        self.close()
 
     def __enter__(self) -> Self:
         return self.open()

@@ -26,9 +26,11 @@ Import-Lauf bleibt `api` im Zustand „waiting" (Phase-5-Vermerk in
 ARCHITECTURE §5.3).
 
 Der Dienst hat **keinen veröffentlichten Port** (`expose: 8080`). Davor sitzt
-ab Phase 14 der Wächter als Proxy; er setzt API-Key-Prüfung, Rate-Limit und
-Lookup-Cache durch — die API selbst prüft keine Keys (ARCHITECTURE §7,
-„Durchsetzungsort Auth & Rate-Limit").
+seit Phase 15 der Wächter als Reverse-Proxy für `/v2/*`; er weckt den Stack
+bei Bedarf und setzt später API-Key-Prüfung, Rate-Limit (Phase 18) und
+Lookup-Cache (Phase 17) durch — die API selbst prüft keine Keys
+(ARCHITECTURE §7, „Durchsetzungsort Auth & Rate-Limit"). Antworten der API
+reicht der Proxy **unverändert** durch, auch Fehlerantworten.
 
 Env-Variablen: `AOFF_DB_*`, `AOFF_INDEX_URL`, `AOFF_INDEX_NAME`,
 `AOFF_CONFIG_PATH`, `AOFF_LOG_LEVEL` (siehe `.env.example`). Aus der
@@ -46,6 +48,66 @@ Lokal ohne Container:
 AOFF_DB_HOST=127.0.0.1 AOFF_DB_PASSWORD=… AOFF_INDEX_URL=http://127.0.0.1:6081 \
   uv run python -m acoustid_api
 ```
+
+### Interner Healthcheck `GET /_health` (Phase 15)
+
+**Kein Teil des API-Vertrags** (ARCHITECTURE §7) und bewusst nicht unter
+`/v2/`: der Endpunkt existiert allein als **Bereitschaftsprüfung des
+Wächters** (DECISIONS 2026-08-01). Er ist nur im Compose-Netz erreichbar —
+der Dienst veröffentlicht keinen Port, und der Proxy des Wächters reicht
+ausschließlich `/v2/*` weiter. Clients dürfen sich nicht darauf verlassen;
+er kann sich ohne Vertragsbruch ändern.
+
+Er prüft genau zwei Anbindungen, beide leichtgewichtig (der Wächter fragt
+im Sekundentakt, solange er weckt):
+
+| Prüfung | Womit | Warum |
+|---|---|---|
+| `db` | `SELECT 1` auf einer Pool-Verbindung | Prüft die Kette bis in die Postgres, ohne eine Tabelle anzufassen. Nach einem Kaltstart antwortet uvicorn lange vor dem Ende der Recovery. |
+| `index` | `GET /<name>/_health` des acoustid-index | Sagt, ob der Index existiert und geladen ist (`404` = fehlt, `503` = lädt noch). Vor dem ersten Bootstrap-Lauf gibt es ihn nicht. |
+
+**Nicht geprüft wird MusicBrainz**: der Spiegel darf fehlen (Invariante
+§8.7, degradierter Betrieb). Wäre er Teil der Bereitschaft, würde ein
+MB-Ausfall den ganzen Stack als „nicht bereit" abstempeln.
+
+```json
+// HTTP 200
+{"status": "ok", "version": "0.0.1", "checks": {"db": "ok", "index": "ok"}}
+// HTTP 503
+{"status": "error", "version": "0.0.1",
+ "checks": {"db": "ok", "index": "Index 'main' fehlt oder lädt noch"}}
+```
+
+Die Antwort trägt **nicht** das AcoustID-Fehlerformat — dessen 19 Codes
+passen auf keinen der Fälle. Auch ein Fehler in der Prüfung selbst wird zu
+`503`: für den Wächter bedeuten alle Misserfolge dasselbe.
+
+Derselbe Endpunkt ist seit Phase 15 der **Container-Healthcheck** des
+Dienstes (`docker-compose.yml`), damit `docker ps` etwas Aussagekräftiges
+zeigt. Von außen erreichbar wird er dadurch nicht.
+
+### Reload der `config.yaml` im laufenden Betrieb (Phase 15)
+
+Der Wächter ist der einzige Schreiber der `config.yaml` und legt nach jedem
+Speichern die Marke `config.yaml.reload` daneben (JSON, monoton wachsender
+Zähler `generation`). Der API-Dienst liest sie beim Start und danach alle
+10 Sekunden; bei neuer Nummer lädt er die Datei neu. Kein Neustart nötig,
+kein offener Port — die Marke läuft über denselben read-only-Mount wie die
+Konfiguration.
+
+Übernommen wird **nur, was der Dienst zur Anfragezeit liest**:
+
+| Schlüssel | Wirkt sofort? |
+|---|---|
+| `submit.mode`, `submit.upstream_app_key` | **Ja** — der Upstream-Weiterleiter wird dabei neu gebaut (er entsteht sonst nur beim Start und fehlte nach einem Wechsel auf `local+upstream`). |
+| `mb.keep_submitted_mbid` | **Ja** (wird je Anfrage gelesen). |
+| `index.query_hashes` | **Nein** — eine Änderung verlangt einen Index-Neuaufbau (§6). Der laufende Wert bleibt stehen, die Abweichung wird als Warnung geloggt. |
+| `mb.dsn` | **Nein** — Pool und Schema-Selfcheck entstehen beim Start; Änderung erst nach Neustart des Containers. |
+
+Die beiden „Nein"-Fälle werden nicht halb übernommen: der laufende Wert
+wird in die neue Konfiguration zurückgeschrieben, damit `service.config`
+immer beschreibt, was der Prozess tatsächlich tut. Eine ungültige Datei
+lässt die alte Konfiguration in Kraft (Grund im Log).
 
 ## Parameter
 

@@ -26,36 +26,51 @@ Rescoring sind synchron und laufen deshalb ueber
 ``run_in_threadpool``. So blockiert ein laufendes Rescoring nicht den
 Event-Loop, und es bleibt bei genau einer (synchronen) Implementierung.
 
-Vier Routen liegen hier:
+Fuenf Routen liegen hier:
 
 ===========================  ==========  =====================================
 ``/v2/lookup``               GET + POST  Phasen 9/10
 ``/v2/submit``               GET + POST  Phasen 11/12
 ``/v2/lookup/batch``         POST        Phase 13, eigener Endpunkt, JSON-Rumpf
 ``/v2/submission_status``    GET + POST  Phase 13
+``/_health``                 GET         Phase 15, **intern** — nicht Teil
+                                         des §7-Vertrags
 ===========================  ==========  =====================================
 
 Der Batch ist die einzige Route ohne ``GET``: er lebt von seinem Rumpf, und
 ein ``GET`` mit Rumpf ist kein sinnvoller Vertrag. Er ist zugleich die
 einzige, die **immer** JSON antwortet — ``format`` bleibt dort ohne Wirkung.
+
+``/_health`` faellt aus allen Regeln dieses Moduls heraus: keine
+Parameterlesart, kein ``format``, kein AcoustID-Fehlerformat. Er ist die
+Bereitschaftsfrage des Waechters und nichts sonst
+(:mod:`acoustid_api.health`).
+
+Im Lifespan laeuft ausserdem die **Empfangsseite des Reload-Signals**
+(:mod:`acoustid_api.reload`): eine Hintergrundaufgabe, die die Marke
+``config.yaml.reload`` beobachtet und geaenderte Konfiguration uebernimmt,
+ohne dass der Container neu starten muss.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import zlib
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Final
 from urllib.parse import parse_qsl
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from acoustid_api.batch import handle_lookup_batch
 from acoustid_api.errors import AcoustidError, InternalError, RequestTooLargeError, error_payload
 from acoustid_api.formats import ResponseFormat
+from acoustid_api.health import HEALTH_PATH, build_health
 from acoustid_api.lookup import handle_lookup
 from acoustid_api.params import (
     BatchParams,
@@ -69,6 +84,7 @@ from acoustid_api.params import (
     parse_submission_status,
     parse_submit,
 )
+from acoustid_api.reload import ConfigReloader
 from acoustid_api.service import ApiService
 from acoustid_api.status import handle_submission_status
 from acoustid_api.submit import check_mode, handle_submit
@@ -109,16 +125,28 @@ def create_app(service: ApiService | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        reloader: asyncio.Task[None] | None = None
         if owns_service:
             settings = EnvSettings.from_env()
             setup_logging(SERVICE_NAME, settings.log_level)
             app.state.service = ApiService.from_env(settings)
             app.state.service.open()
+            # Empfangsseite des Reload-Signals (Phase 15). Nur im echten
+            # Betrieb: ein eingebetteter Dienst (Tests) bringt seine
+            # Konfiguration selbst mit und hat keine Datei zu beobachten.
+            watcher = ConfigReloader(app.state.service, settings.config_path)
+            watcher.prime()
+            app.state.reloader = watcher
+            reloader = asyncio.create_task(watcher.run())
         else:
             app.state.service = service
         try:
             yield
         finally:
+            if reloader is not None:
+                reloader.cancel()
+                with suppress(asyncio.CancelledError):
+                    await reloader
             if owns_service:
                 app.state.service.close()
 
@@ -152,6 +180,10 @@ def create_app(service: ApiService | None = None) -> FastAPI:
     @app.api_route("/v2/submission_status", methods=["GET", "POST"])
     async def submission_status(request: Request) -> Response:
         return await _submission_status(request)
+
+    @app.get(HEALTH_PATH)
+    async def health(request: Request) -> JSONResponse:
+        return await _health(request)
 
     return app
 
@@ -254,6 +286,22 @@ async def _submission_status(request: Request) -> Response:
         error = InternalError()
         return _render(response_format, error_payload(error), error.http_status)
     return _render(response_format, {"status": "ok", **data}, 200)
+
+
+async def _health(request: Request) -> JSONResponse:
+    """Bereitschaftsfrage des Waechters (:mod:`acoustid_api.health`).
+
+    Faellt die Pruefung selbst aus, ist das ebenfalls „nicht bereit" — ein
+    Healthcheck, der einen Fehler mit 500 quittiert, wuerde den Waechter
+    zwingen, zwei Misserfolgsarten zu unterscheiden, die dasselbe bedeuten.
+    """
+    service: ApiService = request.app.state.service
+    try:
+        payload, status_code = await run_in_threadpool(build_health, service)
+    except Exception:
+        _LOG.exception("Bereitschaftspruefung fehlgeschlagen")
+        payload, status_code = {"status": "error", "checks": {}}, 503
+    return JSONResponse(payload, status_code=status_code)
 
 
 def _run_lookup(service: ApiService, params: LookupParams) -> dict[str, Any]:

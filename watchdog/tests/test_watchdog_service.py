@@ -98,6 +98,22 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     Der Waechter kommt ohne ``AOFF_DB_PASSWORD`` aus; wuerde hier je eine
     Datenbankressource entstehen, waere die Zusage „die Admin-UI arbeitet
     bei schlafendem Stack" gebrochen.
+
+    Seit Phase 15 gehoeren Docker-Steuerung, Bereitschaftsfrage, Proxy und
+    Weck-Koordination dazu. Alle vier sprechen nur mit dem Docker-Daemon
+    bzw. mit dem API-Dienst — und zwar erst, wenn eine ``/v2``-Anfrage
+    kommt. Kein Postgres, kein Suchindex, kein MusicBrainz.
     """
     attributes = set(vars(service))
-    assert attributes == {"settings", "db", "config_store", "state"}
+    assert attributes == {
+        "settings",
+        "db",
+        "config_store",
+        "state",
+        "docker",
+        "probe",
+        "proxy",
+        "stack",
+        "wake",
+    }
+    assert not {"pool", "index", "mb", "matcher"} & attributes

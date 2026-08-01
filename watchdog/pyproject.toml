@@ -23,6 +23,13 @@ dependencies = [
     # Referenzimplementierung mit Wheels fuer alle Zielplattformen; SQLite
     # bringt Python selbst mit, dafuer braucht es keine Abhaengigkeit.
     "argon2-cffi>=25.1.0",
+    # Ab Phase 15 drei Rollen: Reverse-Proxy `/v2/*` (AsyncClient, streamend),
+    # Bereitschaftsfrage an den API-Healthcheck und die Docker-Engine-API
+    # ueber den Unix-Socket (`HTTPTransport(uds=...)`) — deshalb KEINE
+    # Docker-Bibliothek (DECISIONS: minimaler Code am docker.sock). Kommt
+    # ueber shared ohnehin mit; hier ausdruecklich, weil der Waechter es
+    # direkt benutzt.
+    "httpx>=0.28.1",
 ]
 
 [tool.setuptools]

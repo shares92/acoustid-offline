@@ -204,6 +204,29 @@ services:
       # Datenverzeichnis des Waechters (Cache-Pool, docker-compose.watchdog.yml
       # ab Phase 14). Ueber ACOUSTID_WATCHDOG_DATA auf einen Host-Pfad umstellbar.
       - ${ACOUSTID_WATCHDOG_DATA:-watchdog-data}:/watchdog:ro
+    healthcheck:
+      # Der interne Healthcheck aus Phase 15 (`acoustid_api.health`): er
+      # prueft Postgres UND Suchindex und ist damit die einzige ehrliche
+      # Lebendpruefung dieses Dienstes — „uvicorn lauscht" heisst nach
+      # einem Kaltstart noch lange nicht „bereit". Denselben Endpunkt
+      # benutzt der Waechter als Weck-Bereitschaftsfrage; hier macht er
+      # zusaetzlich `docker ps` aussagekraeftig.
+      #
+      # Wie beim Waechter (DECISIONS 2026-08-01, Punkt 9): python/urllib,
+      # das Basisimage bringt weder curl noch wget mit.
+      test:
+        [
+          "CMD",
+          "/app/.venv/bin/python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/_health', timeout=5).status==200 else 1)",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      # Der Dienst oeffnet seinen Postgres-Pool mit 30 s Geduld und prueft
+      # danach den MB-Spiegel; solange zaehlen Fehlversuche nicht.
+      start_period: 60s
 
 volumes:
   db-data:
