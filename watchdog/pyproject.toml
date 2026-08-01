@@ -12,7 +12,18 @@ version = "0.0.1"
 description = "Waechter (Proxy, Scheduler, Admin-UI) von acoustid-offline"
 requires-python = ">=3.14"
 license = "MIT"
-dependencies = ["acoustid-offline-shared"]
+dependencies = [
+    "acoustid-offline-shared",
+    # Web-Framework laut ARCHITECTURE §4 — dieselbe Wahl wie im API-Dienst.
+    # Ab Phase 14 traegt es `/status`, spaeter Proxy, Admin-UI und /metrics.
+    "fastapi>=0.121.2",
+    # ASGI-Server des Containers (`python -m acoustid_watchdog`).
+    "uvicorn>=0.40.0",
+    # Passwort-Hash des Admin-Logins (ARCHITECTURE §6 "Admin-Login": argon2).
+    # Referenzimplementierung mit Wheels fuer alle Zielplattformen; SQLite
+    # bringt Python selbst mit, dafuer braucht es keine Abhaengigkeit.
+    "argon2-cffi>=25.1.0",
+]
 
 [tool.setuptools]
 # Neue Unterpakete unterhalb von app/ hier ergaenzen.

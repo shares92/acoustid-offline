@@ -213,7 +213,8 @@ volumes:
   # Prefetch-Vorlauf, nicht fuer die ganzen 414 GB — eingespielte Dateien
   # werden geloescht (--keep-dumps haelt sie).
   dump-data:
-  # Nur ein Platzhalter, solange der Waechter fehlt (Phase 14): dort entsteht
-  # das echte Datenverzeichnis auf dem Cache-Pool. Der Importer liest daraus
-  # ausschliesslich die config.yaml.
+  # Datenverzeichnis des Waechters auf dem Cache-Pool (seit Phase 14 in
+  # docker-compose.watchdog.yml definiert — gleicher Projektname, also
+  # dasselbe Volume). api und importer haengen es read-only unter /watchdog
+  # ein und lesen daraus ausschliesslich die config.yaml.
   watchdog-data:

@@ -32,6 +32,11 @@ REQUIRED_FILES = [
     "README.md",
     "pyproject.toml",
     "docker-compose.yml",
+    # Waechter-Compose und -Image (Phase 14): der Dauerlaeufer ist bewusst
+    # eine eigene Datei, damit ein `down` des Stacks die Steuerung stehen
+    # laesst (ARCHITECTURE §10).
+    "docker-compose.watchdog.yml",
+    "watchdog/Dockerfile",
     ".github/workflows/ci.yml",
     "tests/fixtures/fetch_fixtures.py",
     "tests/fixtures/acoustid-dumps/README.md",

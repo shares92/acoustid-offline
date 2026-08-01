@@ -1,0 +1,96 @@
+# docker-compose.watchdog.yml — Waechter von acoustid-offline (ARCHITECTURE §10).
+#
+# Der Dauerlaeufer auf dem SSD-Cache-Pool: API-Proxy mit Weck-Logik,
+# Scheduler, Admin-UI, Lookup-Cache, Notifications, Metrics. Er laeuft
+# IMMER — auch (und gerade) wenn der Stack aus docker-compose.yml schlaeft.
+#
+#   docker compose -f docker-compose.watchdog.yml up -d
+#
+# Werte kommen aus der .env im selben Verzeichnis (Vorlage: .env.example,
+# verbindliches Schema: shared/shared/env.py). Die .env wird nie committet.
+#
+# Warum zwei Dateien: der Stack darf herunterfahren, ohne die Steuerung
+# mitzunehmen. `docker compose -f docker-compose.yml down` fasst nur die
+# dort definierten Dienste an und meldet den Waechter lediglich als
+# „orphan container" — entfernt wird er erst mit `--remove-orphans`.
+# ACHTUNG: `down -v` auf der Stack-Datei loescht dagegen auch das unten
+# geteilte Volume `watchdog-data` und damit config.yaml, SQLite und Keys.
+#
+# Beide Dateien tragen denselben Projektnamen, damit sie sich dasselbe
+# benannte Volume teilen koennen (Compose praefigiert Volumes mit dem
+# Projektnamen). Auf Unraid setzt man stattdessen ACOUSTID_WATCHDOG_DATA
+# auf einen Share des Cache-Pools — dann haengen beide Seiten am selben
+# Host-Verzeichnis und die Frage stellt sich nicht.
+#
+# Stand Phase 14: `/status` und die Zustandshaltung. Der Proxy, die
+# Docker-Steuerung ueber /var/run/docker.sock und damit die Weck-Logik
+# kommen in Phase 15 — bis dahin braucht dieser Container KEINEN Zugriff
+# auf den Docker-Socket, und er bekommt ihn deshalb auch nicht.
+
+name: acoustid-offline
+
+services:
+
+  watchdog:
+    # Eigenes Image (DECISIONS 2026-07-25 „Getrennte Images fuer Waechter,
+    # API und Importer"); Release-Tag identisch mit api und importer
+    # (Invariante §8.11).
+    image: ${ACOUSTID_WATCHDOG_IMAGE:-ghcr.io/shares92/acoustid-offline-watchdog:latest}
+    build:
+      context: .
+      dockerfile: watchdog/Dockerfile
+    container_name: acoustid-watchdog
+    # Der einzige Dienst, der einen Neustart wirklich immer will: faellt er
+    # aus, ist die Instanz von aussen nicht mehr erreichbar — und niemand
+    # weckt den Stack mehr.
+    restart: unless-stopped
+    # Der einzige veroeffentlichte Port des ganzen Projekts (ARCHITECTURE §3,
+    # §6): API-Proxy und Admin-UI unter /admin teilen ihn sich. Bei
+    # Exponierung nach aussen zwingend auth.mode=apikey + TLS-Proxy davor.
+    ports:
+      - "${AOFF_PORT:-8080}:${AOFF_PORT:-8080}"
+    environment:
+      AOFF_PORT: ${AOFF_PORT:-8080}
+      # Datenverzeichnis auf dem Cache-Pool: SQLite-Zustand (api_key,
+      # admin_user, update_run, event_log), config.yaml, spaeter der
+      # Lookup-Cache. NIEMALS auf das Array legen — der Waechter schreibt
+      # hier im laufenden Betrieb und wuerde die Spindeln wach halten.
+      AOFF_DATA_DIR: /data
+      AOFF_CONFIG_PATH: /data/config.yaml
+      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
+      # Bewusst KEINE AOFF_DB_*/AOFF_INDEX_*-Variablen: der Waechter
+      # spricht nie mit der Postgres und nie mit dem Suchindex
+      # (Invariante §8.2). Was er ueber den Datenbestand weiss, steht in
+      # seiner eigenen SQLite.
+    volumes:
+      # Dasselbe Volume, das der Stack unter /watchdog read-only mountet:
+      # dort liegt die config.yaml, die api und importer lesen, und daneben
+      # die Reload-Marke (config.yaml.reload). Ueber ACOUSTID_WATCHDOG_DATA
+      # auf einen Host-Pfad des Cache-Pools umstellbar (Unraid).
+      - ${ACOUSTID_WATCHDOG_DATA:-watchdog-data}:/data
+    healthcheck:
+      # /status kommt ohne Stack aus und weckt garantiert nichts (§7, §8.2) —
+      # damit ist es die einzige richtige Lebendpruefung fuer diesen
+      # Container. Das Basisimage bringt Python mit; curl und wget nicht.
+      test:
+        [
+          "CMD",
+          "/app/.venv/bin/python",
+          "-c",
+          "import urllib.request,os,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('AOFF_PORT','8080')+'/status', timeout=5).status==200 else 1)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Erststart legt SQLite und config.yaml an — das dauert Sekunden,
+      # nicht Minuten.
+      start_period: 30s
+
+volumes:
+  # Datenverzeichnis des Waechters auf dem SSD-Cache-Pool. Dasselbe Volume
+  # wie in docker-compose.yml (gleicher Projektname = gleicher Praefix);
+  # dort wird es read-only unter /watchdog eingehaengt, damit api und
+  # importer die config.yaml lesen koennen.
+  # Unraid: ACOUSTID_WATCHDOG_DATA auf einen Share mit Prefer/Only: Cache
+  # setzen — dann greift dieses Volume gar nicht erst.
+  watchdog-data:
