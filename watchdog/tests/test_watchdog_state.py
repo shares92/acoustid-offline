@@ -5,6 +5,12 @@ Hand: das ist der Punkt der Tests. Waere sie aus
 :data:`~acoustid_watchdog.state.ALLOWED_TRANSITIONS` abgeleitet, prueften
 sie nur, dass eine Tabelle sich selbst gleicht; so pruefen sie **die
 Zusage** — jede der 25 Kombinationen ist einmal bewusst entschieden.
+
+Seit M1b ist eine Kante dazugekommen: ``ready`` -> ``error`` (Absturz im
+laufenden Betrieb). Sie war in v1 ausdruecklich **verboten**, weil ein
+gestoppter Container gutartig war; unter einem Prozess-Supervisor
+unterscheidet sich „gestoppt" von „von selbst weggefallen", und ohne diese
+Kante maskierte sich ein Absturz als Schlaf (M0-Analyse §2.1, R8).
 """
 
 from __future__ import annotations
@@ -29,7 +35,8 @@ ERROR = StackState.ERROR
 EXPECTED: dict[StackState, set[StackState]] = {
     SLEEPING: {STARTING, READY},
     STARTING: {READY, ERROR, SLEEPING},
-    READY: {STARTING, STOPPING, SLEEPING},
+    # ERROR seit M1b: Prozessabsturz im Betrieb (Modul-Docstring).
+    READY: {STARTING, STOPPING, SLEEPING, ERROR},
     STOPPING: {SLEEPING, ERROR},
     ERROR: {STARTING, READY},
 }

@@ -29,15 +29,21 @@ from urllib.parse import urlencode
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from watchdog_stubs import FakeDaemon, RecordingProxyTransport, probe, streamed
+from watchdog_stubs import (
+    FakeSupervisor,
+    RecordingProxyTransport,
+    probe,
+    streamed,
+)
 
 from acoustid_watchdog.auth import KNOWN_CLIENT_KEYS, ApiKeyAuthenticator, AuthOutcome, hash_key
 from acoustid_watchdog.config_store import ConfigStore
-from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.main import create_app
+from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.ratelimit import WINDOW_S, IpRateLimiter
 from acoustid_watchdog.service import WatchdogService
+from acoustid_watchdog.stack import ServiceGroupController
 from acoustid_watchdog.store import Database, utc_now
 from shared.env import EnvSettings
 from shared.models import AuthMode
@@ -66,6 +72,30 @@ class Tripwire:
         return wrapped
 
 
+class GuardedSupervisor:
+    """Stolperdraht vor der Prozess-Steuerung.
+
+    Das Gegenstueck zu :meth:`Tripwire.guard` fuer die XML-RPC-Gegenstelle:
+    ist der Draht scharf, laesst **jeder** Steuerungsaufruf den Test
+    scheitern. Genau daran haengt der Nachweis „ein Cache-Treffer weckt
+    nicht" — er darf die Steuerung nicht einmal fragen.
+    """
+
+    def __init__(self, supervisor: FakeSupervisor, tripwire: Tripwire) -> None:
+        self._supervisor = supervisor
+        self._tripwire = tripwire
+
+    @property
+    def supervisor(self) -> GuardedSupervisor:
+        """Der ``supervisor``-Namensraum von XML-RPC — hier wir selbst."""
+        return self
+
+    def __getattr__(self, name: str) -> object:
+        if self._tripwire.armed:
+            raise AssertionError(f"Prozess-Steuerung trotz Abweisung beruehrt: {name}")
+        return getattr(self._supervisor, name)
+
+
 def lookup_ok(request: httpx.Request) -> httpx.Response:
     """Die Vorgabeantwort der API-Attrappe: ein erfolgreicher Lookup."""
     return streamed(
@@ -80,17 +110,17 @@ Rig = tuple[TestClient, Tripwire, RecordingProxyTransport]
 
 
 @contextmanager
-def build(env_settings: EnvSettings, daemon: FakeDaemon) -> Iterator[Rig]:
+def build(env_settings: EnvSettings, supervisor: FakeSupervisor) -> Iterator[Rig]:
     """Waechter mit schlafendem Stack und scharfschaltbaren Gegenstellen."""
     tripwire = Tripwire()
     upstream = RecordingProxyTransport(lookup_ok)
-    health = tripwire.guard(lambda request: httpx.Response(200 if daemon.all_running else 503))
+    health = tripwire.guard(lambda request: httpx.Response(200 if supervisor.all_running else 503))
     service = WatchdogService(
         env_settings,
         Database.for_data_dir(env_settings.data_dir),
         ConfigStore.from_path(env_settings.config_path),
-        docker=DockerClient(
-            client=httpx.Client(transport=httpx.MockTransport(tripwire.guard(daemon)))
+        stack=ServiceGroupController(
+            SupervisorClient(proxy=GuardedSupervisor(supervisor, tripwire))
         ),
         probe=probe(health),
         proxy=ReverseProxy(
@@ -103,8 +133,8 @@ def build(env_settings: EnvSettings, daemon: FakeDaemon) -> Iterator[Rig]:
 
 
 @pytest.fixture
-def rig(env_settings: EnvSettings, daemon: FakeDaemon) -> Iterator[Rig]:
-    with build(env_settings, daemon) as built:
+def rig(env_settings: EnvSettings, supervisor: FakeSupervisor) -> Iterator[Rig]:
+    with build(env_settings, supervisor) as built:
         yield built
 
 

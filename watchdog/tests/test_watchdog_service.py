@@ -112,15 +112,17 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     Datenbankressource entstehen, waere die Zusage „die Admin-UI arbeitet
     bei schlafendem Stack" gebrochen.
 
-    Seit Phase 15 gehoeren Docker-Steuerung, Bereitschaftsfrage, Proxy und
-    Weck-Koordination dazu. Alle vier sprechen nur mit dem Docker-Daemon
-    bzw. mit dem API-Dienst — und zwar erst, wenn eine ``/v2``-Anfrage
-    kommt. Kein Postgres, kein Suchindex, kein MusicBrainz.
+    Seit Phase 15 gehoeren Prozess-Steuerung, Bereitschaftsfrage, Proxy und
+    Weck-Koordination dazu. Alle vier sprechen nur mit supervisord bzw. mit
+    dem API-Dienst — und zwar erst, wenn eine ``/v2``-Anfrage kommt. Kein
+    Postgres, kein Suchindex, kein MusicBrainz. Auch das Gate der Datenbank
+    macht daraus keine Verbindung: es fragt ``pg_isready``, einen fremden
+    Prozess, und haelt weder Pool noch Treiber (M1b).
 
     Seit Phase 16 kommen die Lebenszyklus-Teile dazu: Aktivitaetsuhr,
     Job-Auskunft, Idle-Stopp und Zustandsabgleich. Die Uhr rechnet, die
     Job-Auskunft liest die eigene SQLite, die beiden Dauerlaeufer benutzen
-    Docker-Steuerung und Bereitschaftsfrage — auch hier keine Verbindung
+    Prozess-Steuerung und Bereitschaftsfrage — auch hier keine Verbindung
     zum Array.
 
     Seit Phase 17 kommt der Lookup-Cache dazu — eine zweite SQLite-Datei
@@ -141,7 +143,7 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "state",
         "auth",
         "ratelimit",
-        "docker",
+        "supervisor",
         "probe",
         "proxy",
         "stack",

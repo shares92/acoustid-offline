@@ -6,8 +6,9 @@ eine **gestellte Uhr** (:class:`FakeClock`), sonst wuerde ein Test der
 15-Minuten-Frist fuenfzehn Minuten dauern.
 
 Geprueft wird gegen den echten :class:`WakeCoordinator` mit der
-Docker-Attrappe — die Stopps gehen also wirklich durch Pfadbildung,
-Reihenfolge und Statusauswertung des Docker-Moduls.
+supervisord-Attrappe — die Stopps gehen also wirklich durch die
+Fault-Uebersetzung des ``SupervisorClient`` und die Reihenfolge des
+``ServiceGroupController``.
 """
 
 from __future__ import annotations
@@ -15,10 +16,17 @@ from __future__ import annotations
 import asyncio
 import threading
 
-import httpx
-from watchdog_stubs import FakeDaemon, FakeProbe, docker_client
+import pytest
+from watchdog_stubs import (
+    FakeProbe,
+    FakeSupervisor,
+    ProcessState,
+    controller,
+    running_stack,
+    sleeping_stack,
+    supervisor_client,
+)
 
-from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel
 from acoustid_watchdog.lifecycle import (
     ActivityTracker,
@@ -26,10 +34,12 @@ from acoustid_watchdog.lifecycle import (
     IdleStopper,
     StatePoller,
 )
+from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.runs import RunKind, RunResult, finish_run, start_run
+from acoustid_watchdog.stack import STACK_PROCESSES, ServiceGroupController
 from acoustid_watchdog.state import StackStateTracker
 from acoustid_watchdog.store import Database
-from acoustid_watchdog.wake import STACK_CONTAINERS, StackController, WakeCoordinator
+from acoustid_watchdog.wake import WakeCoordinator
 from shared.config import Config
 from shared.models import StackState
 
@@ -59,11 +69,11 @@ class FakeJobs:
         return list(self.jobs)
 
 
-class BlockingController(StackController):
+class BlockingController(ServiceGroupController):
     """Ein Controller, dessen ``stop`` haengt, bis der Test ihn freigibt."""
 
-    def __init__(self, docker: DockerClient) -> None:
-        super().__init__(docker)
+    def __init__(self, supervisor: SupervisorClient) -> None:
+        super().__init__(supervisor)
         self.entered = threading.Event()
         self.release = threading.Event()
 
@@ -73,25 +83,17 @@ class BlockingController(StackController):
         return super().stop()
 
 
-def running_daemon() -> FakeDaemon:
-    return FakeDaemon(dict.fromkeys(STACK_CONTAINERS, True))
-
-
-def sleeping_daemon() -> FakeDaemon:
-    return FakeDaemon(dict.fromkeys(STACK_CONTAINERS, False))
-
-
 def ready_coordinator(
-    daemon: FakeDaemon,
+    supervisor: FakeSupervisor,
     *,
     probe: FakeProbe | None = None,
     events: list[tuple[EventLevel, str]] | None = None,
-    controller: StackController | None = None,
+    stack: ServiceGroupController | None = None,
 ) -> tuple[WakeCoordinator, StackStateTracker]:
     """Koordinator auf einem laufenden Stack, Zustand bereits ``bereit``."""
     state = StackStateTracker.sleeping()
     coordinator = WakeCoordinator(
-        controller if controller is not None else StackController(docker_client(daemon)),
+        stack if stack is not None else controller(supervisor),
         probe or FakeProbe(),  # type: ignore[arg-type]
         state,
         log_event=(lambda level, message, extra=None: events.append((level, message)))
@@ -99,8 +101,8 @@ def ready_coordinator(
         else None,
         poll_interval_s=0.01,
     )
-    if daemon.all_running:
-        # Derselbe Weg wie beim Start des Waechters: Zustand aus Docker.
+    if supervisor.all_running:
+        # Derselbe Weg wie beim Start des Waechters: Zustand aus der Steuerung.
         coordinator.refresh()
     return coordinator, state
 
@@ -159,9 +161,9 @@ def test_database_jobs_sees_backups_too(db: Database) -> None:
 
 def test_idle_stop_fires_after_the_timeout() -> None:
     """Der Kern der Phase: ohne Nutzung geht der Stack wieder schlafen."""
-    daemon = running_daemon()
+    supervisor = running_stack()
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = ready_coordinator(daemon, events=events)
+    coordinator, state = ready_coordinator(supervisor, events=events)
     clock = FakeClock()
     activity = ActivityTracker(clock=clock)
     idle = stopper(coordinator, state, activity)
@@ -170,16 +172,14 @@ def test_idle_stop_fires_after_the_timeout() -> None:
     clock.advance(TIMEOUT_S)
 
     assert asyncio.run(idle.check()) is True
-    assert daemon.all_running is False
+    assert supervisor.all_running is False
     assert state.state is StackState.SLEEPING
     assert coordinator.ready is False
     assert coordinator.stops == 1
-    # Gestoppt wird in umgekehrter Startreihenfolge — erst der Leser.
-    assert [name for action, name in daemon.calls if action == "stop"] == [
-        "acoustid-api",
-        "acoustid-index",
-        "acoustid-db",
-    ]
+    # Gestoppt wird in umgekehrter Startreihenfolge — erst der Leser. Der
+    # Suchindex fehlt: er bleibt resident (E12).
+    assert [name for method, name in supervisor.calls if method == "stopProcess"] == ["api", "db"]
+    assert supervisor.programs["index"] is ProcessState.RUNNING
     assert [message for _, message in events] == [
         "Stack wird schlafen gelegt",
         "Stack schlaeft",
@@ -187,22 +187,22 @@ def test_idle_stop_fires_after_the_timeout() -> None:
 
 
 def test_idle_stop_waits_for_the_full_timeout() -> None:
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     clock = FakeClock()
     idle = stopper(coordinator, state, ActivityTracker(clock=clock))
 
     clock.advance(TIMEOUT_S - 1)
 
     assert asyncio.run(idle.check()) is False
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
     assert state.state is StackState.READY
 
 
 def test_activity_postpones_the_idle_stop() -> None:
     """Jede ``/v2``-Anfrage schiebt den Auto-Stopp (§6 „Idle-Definition")."""
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     clock = FakeClock()
     activity = ActivityTracker(clock=clock)
     idle = stopper(coordinator, state, activity)
@@ -212,17 +212,17 @@ def test_activity_postpones_the_idle_stop() -> None:
     clock.advance(TIMEOUT_S - 60)
 
     assert asyncio.run(idle.check()) is False
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
 
     clock.advance(60)
     assert asyncio.run(idle.check()) is True
-    assert daemon.all_running is False
+    assert supervisor.all_running is False
 
 
 def test_a_running_job_blocks_the_stop(db: Database) -> None:
     """Invariante §8.5: kein Stopp, solange ein Import-/Backup-Job laeuft."""
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     clock = FakeClock()
     activity = ActivityTracker(clock=clock)
     run_id = start_run(db, RunKind.UPDATE)
@@ -230,25 +230,25 @@ def test_a_running_job_blocks_the_stop(db: Database) -> None:
 
     clock.advance(TIMEOUT_S)
     assert asyncio.run(idle.check()) is False
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
     assert idle.blocked_by_jobs == 1
 
     # Der Job hat die Leerlaufuhr zurueckgesetzt: nach ihm bekommt der
     # Betreiber wieder das volle Fenster.
     finish_run(db, run_id, RunResult.SUCCESS)
     assert asyncio.run(idle.check()) is False
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
 
     clock.advance(TIMEOUT_S)
     assert asyncio.run(idle.check()) is True
-    assert daemon.all_running is False
+    assert supervisor.all_running is False
 
 
 def test_only_a_ready_stack_is_stopped() -> None:
     """Was schlaeft, startet oder im Fehler steht, wird nicht gestoppt."""
     for state_value in (StackState.SLEEPING, StackState.STARTING, StackState.ERROR):
-        daemon = running_daemon()
-        coordinator, state = ready_coordinator(daemon)
+        supervisor = running_stack()
+        coordinator, state = ready_coordinator(supervisor)
         state.try_to(StackState.STARTING)
         if state_value is not StackState.STARTING:
             state.try_to(state_value)
@@ -258,14 +258,14 @@ def test_only_a_ready_stack_is_stopped() -> None:
         clock.advance(TIMEOUT_S)
 
         assert asyncio.run(idle.check()) is False, state_value
-        assert daemon.all_running is True
+        assert supervisor.all_running is True
 
 
 def test_no_stop_while_a_wake_is_running() -> None:
     """Ein Weckvorgang und ein Stopp schliessen einander aus."""
-    daemon = sleeping_daemon()
+    supervisor = sleeping_stack()
     probe = FakeProbe(ready_after=10**6)
-    coordinator, state = ready_coordinator(daemon, probe=probe)
+    coordinator, state = ready_coordinator(supervisor, probe=probe)
     clock = FakeClock()
     idle = stopper(coordinator, state, ActivityTracker(clock=clock))
     clock.advance(TIMEOUT_S)
@@ -283,19 +283,19 @@ def test_no_stop_while_a_wake_is_running() -> None:
 
 
 def test_a_failed_stop_becomes_an_error_state() -> None:
-    daemon = running_daemon()
+    supervisor = running_stack()
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = ready_coordinator(daemon, events=events)
+    coordinator, state = ready_coordinator(supervisor, events=events)
     clock = FakeClock()
     idle = stopper(coordinator, state, ActivityTracker(clock=clock))
 
-    daemon.fail_on.add("acoustid-api")
+    supervisor.fail_on.add("api")
     clock.advance(TIMEOUT_S)
 
     assert asyncio.run(idle.check()) is False
     assert state.state is StackState.ERROR
     assert state.status.detail is not None
-    assert "acoustid-api" in state.status.detail
+    assert "api" in state.status.detail
     assert (EventLevel.ERROR, "Stack-Stopp fehlgeschlagen") in events
 
 
@@ -305,8 +305,8 @@ def test_an_unreadable_configuration_falls_back_to_the_default() -> None:
     def kaputt() -> Config:
         raise RuntimeError("config.yaml unlesbar")
 
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     idle = IdleStopper(coordinator, state, ActivityTracker(), FakeJobs(), kaputt)
 
     assert idle.timeout_s == TIMEOUT_S
@@ -314,8 +314,8 @@ def test_an_unreadable_configuration_falls_back_to_the_default() -> None:
 
 def test_a_changed_timeout_takes_effect_without_a_restart() -> None:
     """``idle.timeout_min`` wird bei jeder Pruefung frisch gelesen."""
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     clock = FakeClock()
     config = Config()
     idle = IdleStopper(coordinator, state, ActivityTracker(clock=clock), FakeJobs(), lambda: config)
@@ -338,9 +338,9 @@ def test_a_request_during_stopping_waits_and_then_wakes() -> None:
     Gehege); die Anfrage wird auch nicht abgewiesen, solange ihre Haltezeit
     reicht.
     """
-    daemon = running_daemon()
-    controller = BlockingController(docker_client(daemon))
-    coordinator, state = ready_coordinator(daemon, controller=controller)
+    supervisor = running_stack()
+    blocking = BlockingController(supervisor_client(supervisor))
+    coordinator, state = ready_coordinator(supervisor, stack=blocking)
     clock = FakeClock()
     idle = stopper(coordinator, state, ActivityTracker(clock=clock))
     clock.advance(TIMEOUT_S)
@@ -348,14 +348,14 @@ def test_a_request_during_stopping_waits_and_then_wakes() -> None:
     async def scenario() -> list[StackState]:
         seen: list[StackState] = []
         stopping = asyncio.create_task(idle.check())
-        await asyncio.to_thread(controller.entered.wait, 5)
+        await asyncio.to_thread(blocking.entered.wait, 5)
         seen.append(state.state)  # stoppt
 
         request = asyncio.create_task(coordinator.ensure_ready(timeout_s=5))
         await asyncio.sleep(0.05)
         seen.append(state.state)  # immer noch stoppt — nicht ueberholt
 
-        controller.release.set()
+        blocking.release.set()
         assert await stopping is True
         assert await request is True
         seen.append(state.state)
@@ -366,7 +366,7 @@ def test_a_request_during_stopping_waits_and_then_wakes() -> None:
         StackState.STOPPING,
         StackState.READY,
     ]
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
     assert coordinator.stops == 1
     assert coordinator.wakes == 1
 
@@ -376,13 +376,13 @@ def test_a_request_during_stopping_waits_and_then_wakes() -> None:
 
 def test_poller_notices_a_stack_stopped_by_hand() -> None:
     """Die Phase-15-Luecke: `/status` sagt die Wahrheit, ohne Anfrage."""
-    daemon = running_daemon()
+    supervisor = running_stack()
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = ready_coordinator(daemon, events=events)
+    coordinator, state = ready_coordinator(supervisor, events=events)
     poller = StatePoller(coordinator)
 
     assert state.state is StackState.READY
-    daemon.containers["acoustid-api"] = False  # von Hand gestoppt
+    supervisor.stopProcess("api")  # von Hand gestoppt (supervisorctl)
 
     assert asyncio.run(poller.check()) is StackState.SLEEPING
     assert state.state is StackState.SLEEPING
@@ -394,30 +394,30 @@ def test_poller_notices_a_stack_stopped_by_hand() -> None:
 
 def test_the_first_request_after_a_manual_stop_wakes() -> None:
     """Der eigentliche Gewinn: keine 503 mehr fuer die erste Anfrage."""
-    daemon = running_daemon()
-    coordinator, _ = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, _ = ready_coordinator(supervisor)
     poller = StatePoller(coordinator)
 
-    for name in STACK_CONTAINERS:
-        daemon.containers[name] = False
+    for name in STACK_PROCESSES:
+        supervisor.stopProcess(name)
 
     async def scenario() -> bool:
         await poller.check()
         return await coordinator.ensure_ready(timeout_s=5)
 
     assert asyncio.run(scenario()) is True
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
     assert coordinator.wakes == 1
 
 
 def test_poller_notices_a_stack_started_by_hand() -> None:
-    daemon = sleeping_daemon()
+    supervisor = sleeping_stack()
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = ready_coordinator(daemon, events=events)
+    coordinator, state = ready_coordinator(supervisor, events=events)
 
     assert state.state is StackState.SLEEPING
-    for name in STACK_CONTAINERS:
-        daemon.containers[name] = True
+    for name in STACK_PROCESSES:
+        supervisor.programs[name] = ProcessState.RUNNING
 
     assert asyncio.run(StatePoller(coordinator).check()) is StackState.READY
     assert coordinator.ready is True
@@ -426,9 +426,9 @@ def test_poller_notices_a_stack_started_by_hand() -> None:
 
 def test_poller_keeps_quiet_while_a_wake_is_running() -> None:
     """Waehrend eines Vorgangs sind die Container in Bewegung."""
-    daemon = sleeping_daemon()
+    supervisor = sleeping_stack()
     probe = FakeProbe(ready_after=10**6)
-    coordinator, state = ready_coordinator(daemon, probe=probe)
+    coordinator, state = ready_coordinator(supervisor, probe=probe)
     poller = StatePoller(coordinator)
 
     async def scenario() -> StackState | None:
@@ -445,10 +445,10 @@ def test_poller_keeps_quiet_while_a_wake_is_running() -> None:
 
 def test_poller_leaves_a_half_started_stack_alone() -> None:
     """Laeuft alles, antwortet aber noch nichts: der Zustand bleibt stehen."""
-    daemon = running_daemon()
+    supervisor = running_stack()
     # Die Container laufen, die API antwortet noch nicht (Postgres-Recovery,
     # Index-mmap) — genau der Moment, in dem „schlafend" falsch waere.
-    coordinator, state = ready_coordinator(daemon, probe=FakeProbe(ready_after=10**6))
+    coordinator, state = ready_coordinator(supervisor, probe=FakeProbe(ready_after=10**6))
     state.try_to(StackState.STARTING)
 
     assert asyncio.run(StatePoller(coordinator).check()) is StackState.STARTING
@@ -457,8 +457,8 @@ def test_poller_leaves_a_half_started_stack_alone() -> None:
 
 def test_poller_keeps_an_error_visible() -> None:
     """Ein Startfehler verschwindet nicht von selbst aus `/status`."""
-    daemon = sleeping_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = sleeping_stack()
+    coordinator, state = ready_coordinator(supervisor)
     state.to(StackState.STARTING)
     state.to(StackState.ERROR, detail="acoustid-index fehlt")
 
@@ -467,8 +467,8 @@ def test_poller_keeps_an_error_visible() -> None:
 
 
 def test_poller_recovers_from_an_error_when_the_stack_runs_again() -> None:
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     state.to(StackState.STARTING)
     state.to(StackState.ERROR, detail="acoustid-index fehlt")
 
@@ -476,15 +476,11 @@ def test_poller_recovers_from_an_error_when_the_stack_runs_again() -> None:
     assert state.status.detail is None
 
 
-def test_poller_survives_an_unreachable_daemon() -> None:
-    """Ohne Docker laeuft der Waechter weiter — mit unveraenderter Anzeige."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
+def test_poller_survives_an_unreachable_supervisor(tmp_path: pytest.TempPathFactory) -> None:
+    """Ohne Steuerung laeuft der Waechter weiter — mit unveraenderter Anzeige."""
     state = StackStateTracker(StackState.READY)
     coordinator = WakeCoordinator(
-        StackController(DockerClient(client=httpx.Client(transport=httpx.MockTransport(handler)))),
+        ServiceGroupController(SupervisorClient(f"{tmp_path}/nicht-da.sock")),
         FakeProbe(),  # type: ignore[arg-type]
         state,
     )
@@ -497,8 +493,8 @@ def test_poller_survives_an_unreachable_daemon() -> None:
 
 def test_both_loops_stop_on_cancellation() -> None:
     """Kein haengender Dauerlaeufer beim Herunterfahren."""
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     idle = stopper(coordinator, state, ActivityTracker())
     poller = StatePoller(coordinator, interval_s=0.01)
     idle.interval_s = 0.01
@@ -518,8 +514,8 @@ def test_both_loops_stop_on_cancellation() -> None:
 
 def test_a_failing_check_does_not_kill_the_loop() -> None:
     """Stirbt die Schleife, bliebe der Stack fuer immer wach."""
-    daemon = running_daemon()
-    coordinator, state = ready_coordinator(daemon)
+    supervisor = running_stack()
+    coordinator, state = ready_coordinator(supervisor)
     idle = stopper(coordinator, state, ActivityTracker())
     idle.interval_s = 0.01
     calls: list[int] = []

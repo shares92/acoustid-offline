@@ -6,11 +6,13 @@ Cache-Pool. Genau das ist die Invariante §8.2 („kein UI-Aufruf weckt das
 Array") — und deshalb laeuft diese Testsuite vollstaendig ohne Marker,
 ohne Postgres und ohne Index.
 
-Ab Phase 15 spricht er zusaetzlich mit dem Docker-Daemon und dem
-API-Dienst. Beide Gegenstellen sind hier Attrappen auf einem
-``httpx.MockTransport`` (`stubs.py`) — **nie** der echte Socket des
-Entwicklerrechners: ein Unit-Test darf nicht davon abhaengen, ob gerade
-Docker laeuft, und schon gar nicht Container anfassen.
+Ab Phase 15 spricht er zusaetzlich mit der Prozess-Steuerung und dem
+API-Dienst. Beide Gegenstellen sind hier Attrappen (`watchdog_stubs.py`) —
+**nie** der echte Socket des Entwicklerrechners: ein Unit-Test darf nicht
+davon abhaengen, ob gerade ein supervisord laeuft, und schon gar nicht
+fremde Prozesse anfassen. (Der Kontrakt-Test gegen ein **echtes**
+supervisord steht bewusst getrennt in ``test_watchdog_supervisor.py`` und
+startet sich seine eigene Gegenstelle.)
 
 Jeder Test bekommt ein frisches Datenverzeichnis unter ``tmp_path``; die
 ``AOFF_``-Umgebung wird nie gelesen, sondern als
@@ -26,14 +28,19 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from watchdog_stubs import FakeDaemon, RecordingProxyTransport, docker_client, probe
+from watchdog_stubs import (
+    FakeSupervisor,
+    RecordingProxyTransport,
+    controller,
+    probe,
+    sleeping_stack,
+)
 
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.main import create_app
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.store import Database
-from acoustid_watchdog.wake import STACK_CONTAINERS
 from shared.env import EnvSettings
 
 
@@ -65,9 +72,9 @@ def config_store(env_settings: EnvSettings) -> ConfigStore:
 
 
 @pytest.fixture
-def daemon() -> FakeDaemon:
-    """Docker-Daemon-Attrappe mit einem schlafenden Stack."""
-    return FakeDaemon(dict.fromkeys(STACK_CONTAINERS, False))
+def supervisor() -> FakeSupervisor:
+    """supervisord-Attrappe mit einem schlafenden Stack."""
+    return sleeping_stack()
 
 
 @pytest.fixture
@@ -79,23 +86,28 @@ def upstream() -> RecordingProxyTransport:
 @pytest.fixture
 def service(
     env_settings: EnvSettings,
-    daemon: FakeDaemon,
+    supervisor: FakeSupervisor,
     upstream: RecordingProxyTransport,
 ) -> Iterator[WatchdogService]:
     """Vollstaendig gestarteter Waechter-Dienst (inkl. Erststart-Pfad).
 
-    Docker und API sind Attrappen; die Bereitschaftsfrage antwortet, sobald
-    alle Stack-Container laufen — genau wie im Betrieb.
+    Steuerung und API sind Attrappen; die Bereitschaftsfrage antwortet,
+    sobald alle Stack-Prozesse laufen — genau wie im Betrieb.
+
+    Die Prozessgruppen-Steuerung ist die **echte** (nur auf einer
+    Attrappen-Gegenstelle) und laeuft bewusst **ohne** Bereitschafts-Gates:
+    die des Betriebs sprechen mit Postgres und HTTP-Diensten, die es hier
+    nicht gibt. Was die Gates tun, prueft ``test_watchdog_stack.py``.
     """
 
     def health(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200 if daemon.all_running else 503)
+        return httpx.Response(200 if supervisor.all_running else 503)
 
     running = WatchdogService(
         env_settings,
         Database.for_data_dir(env_settings.data_dir),
         ConfigStore.from_path(env_settings.config_path),
-        docker=docker_client(daemon),
+        stack=controller(supervisor),
         probe=probe(health),
         proxy=ReverseProxy(
             env_settings.api_base_url,

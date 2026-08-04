@@ -11,19 +11,26 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 
 import httpx
 import pytest
-from watchdog_stubs import FakeDaemon, FakeProbe, docker_client
+from watchdog_stubs import (
+    FakeProbe,
+    FakeSupervisor,
+    ProcessState,
+    controller,
+    running_stack,
+    sleeping_stack,
+)
 
-from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
-from acoustid_watchdog.docker import DockerClient, DockerError
+from acoustid_watchdog.control import GroupStatus, ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel
+from acoustid_watchdog.process import SupervisorClient, SupervisorError
+from acoustid_watchdog.stack import STACK_PROCESSES, ServiceGroupController
 from acoustid_watchdog.state import StackStateTracker
 from acoustid_watchdog.wake import (
-    STACK_CONTAINERS,
     ReadinessProbe,
-    StackController,
     StackNotReadyError,
     WakeCoordinator,
 )
@@ -36,80 +43,39 @@ HEALTH_URL = EnvSettings().api_health_url
 
 
 def _coordinator(
-    daemon: FakeDaemon,
+    supervisor: FakeSupervisor,
     probe: FakeProbe,
     *,
     events: list[tuple[EventLevel, str]] | None = None,
+    state: StackStateTracker | None = None,
 ) -> tuple[WakeCoordinator, StackStateTracker]:
-    state = StackStateTracker.sleeping()
+    tracker = state if state is not None else StackStateTracker.sleeping()
     coordinator = WakeCoordinator(
-        StackController(docker_client(daemon)),
+        controller(supervisor),
         probe,  # type: ignore[arg-type]
-        state,
+        tracker,
         log_event=(lambda level, message, extra=None: events.append((level, message)))
         if events is not None
         else None,
         poll_interval_s=0.01,
     )
-    return coordinator, state
-
-
-def _sleeping() -> FakeDaemon:
-    return FakeDaemon(dict.fromkeys(STACK_CONTAINERS, False))
-
-
-# --- Startreihenfolge -------------------------------------------------------
-
-
-def test_controller_starts_in_the_documented_order() -> None:
-    """Erst die Datenquellen, dann der Leser (ARCHITECTURE §6, §3)."""
-    daemon = _sleeping()
-    controller = StackController(docker_client(daemon))
-
-    started = controller.start()
-
-    assert started == ["acoustid-db", "acoustid-index", "acoustid-api"]
-    assert [name for action, name in daemon.calls if action == "start"] == started
-
-
-def test_controller_stops_in_reverse_order() -> None:
-    daemon = FakeDaemon(dict.fromkeys(STACK_CONTAINERS, True))
-    controller = StackController(docker_client(daemon))
-
-    stopped = controller.stop()
-
-    assert stopped == ["acoustid-api", "acoustid-index", "acoustid-db"]
-
-
-def test_controller_leaves_the_importer_alone() -> None:
-    """Der Importer ist ein One-Shot-Job des Schedulers, kein Weckziel."""
-    assert "acoustid-importer" not in STACK_CONTAINERS
-
-
-def test_all_running_asks_every_container() -> None:
-    daemon = FakeDaemon(dict.fromkeys(STACK_CONTAINERS, True))
-    controller = StackController(docker_client(daemon))
-
-    assert controller.all_running() is True
-
-    daemon.containers["acoustid-index"] = False
-    assert controller.all_running() is False
+    return coordinator, tracker
 
 
 # --- Wecken -----------------------------------------------------------------
 
 
 def test_wake_starts_the_stack_and_waits_for_readiness() -> None:
-    daemon = _sleeping()
+    supervisor = sleeping_stack()
     probe = FakeProbe(ready_after=2)
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = _coordinator(daemon, probe, events=events)
+    coordinator, state = _coordinator(supervisor, probe, events=events)
 
     async def scenario() -> bool:
         return await coordinator.ensure_ready(timeout_s=5)
 
     assert asyncio.run(scenario()) is True
-    assert daemon.all_running is True
+    assert supervisor.all_running is True
     assert state.state is StackState.READY
     assert coordinator.wakes == 1
     assert probe.calls == 3
@@ -121,8 +87,8 @@ def test_wake_starts_the_stack_and_waits_for_readiness() -> None:
 
 def test_ready_stack_is_not_woken_again() -> None:
     """Nach einem erfolgreichen Wecken kostet eine Anfrage nichts mehr."""
-    daemon = _sleeping()
-    coordinator, _ = _coordinator(daemon, FakeProbe())
+    supervisor = sleeping_stack()
+    coordinator, _ = _coordinator(supervisor, FakeProbe())
 
     async def scenario() -> tuple[bool, bool]:
         first = await coordinator.ensure_ready(timeout_s=5)
@@ -133,7 +99,7 @@ def test_ready_stack_is_not_woken_again() -> None:
 
     assert (first, second) == (True, False)
     assert coordinator.wakes == 1
-    assert daemon.count("start") == len(STACK_CONTAINERS)
+    assert supervisor.count("startProcess") == len(STACK_PROCESSES)
 
 
 def test_concurrent_requests_trigger_exactly_one_wake() -> None:
@@ -142,9 +108,9 @@ def test_concurrent_requests_trigger_exactly_one_wake() -> None:
     Der Kern der Phase: sonst wuerde jede wartende Anfrage `docker start`
     erneut absetzen und die Zustandsanzeige flackern lassen.
     """
-    daemon = _sleeping()
+    supervisor = sleeping_stack()
     probe = FakeProbe(ready_after=3)
-    coordinator, state = _coordinator(daemon, probe)
+    coordinator, state = _coordinator(supervisor, probe)
 
     async def scenario() -> list[bool]:
         return await asyncio.gather(*(coordinator.ensure_ready(timeout_s=5) for _ in range(10)))
@@ -153,17 +119,17 @@ def test_concurrent_requests_trigger_exactly_one_wake() -> None:
 
     assert all(results)
     assert coordinator.wakes == 1
-    assert daemon.count("start") == len(STACK_CONTAINERS)
+    assert supervisor.count("startProcess") == len(STACK_PROCESSES)
     assert state.state is StackState.READY
 
 
 def test_timeout_raises_with_retry_after() -> None:
     """Nach ``wake.hold_timeout_s`` gibt es 503 + Retry-After (§7)."""
-    daemon = _sleeping()
+    supervisor = sleeping_stack()
     # Wird nie bereit.
     probe = FakeProbe(ready_after=10**6)
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = _coordinator(daemon, probe, events=events)
+    coordinator, state = _coordinator(supervisor, probe, events=events)
 
     async def scenario() -> StackNotReadyError:
         with pytest.raises(StackNotReadyError) as raised:
@@ -191,9 +157,9 @@ def test_a_later_request_gets_its_own_full_hold_time() -> None:
     ihr — ein spaeter Dazugekommener sah seine 503 lange vor Ablauf seiner
     eigenen Haltezeit.
     """
-    daemon = _sleeping()
+    supervisor = sleeping_stack()
     probe = FakeProbe(ready_after=10**6)  # wird nie bereit
-    coordinator, _ = _coordinator(daemon, probe)
+    coordinator, _ = _coordinator(supervisor, probe)
 
     async def scenario() -> float:
         first = asyncio.create_task(coordinator.ensure_ready(timeout_s=0.05))
@@ -213,10 +179,17 @@ def test_a_later_request_gets_its_own_full_hold_time() -> None:
 
 
 def test_start_failure_becomes_an_error_state() -> None:
-    """Fehlt ein Container, ist das ein Startfehler (§7) — mit Klartext."""
-    daemon = FakeDaemon({"acoustid-db": False})  # index und api fehlen
+    """Ein gescheiterter Startversuch ist ein Startfehler (§7) — mit Klartext.
+
+    Der Weg, den supervisord wirklich geht: der Prozess wird gespawnt,
+    ueberlebt ``startsecs`` nicht, landet nach den Wiederholungen in
+    ``FATAL``, und der Aufruf endet mit ``SPAWN_ERROR``
+    (``FakeSupervisor.start_failure``, DECISIONS 2026-08-04 M1a).
+    """
+    supervisor = sleeping_stack()
+    supervisor.fail_on.add("index")
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = _coordinator(daemon, FakeProbe(), events=events)
+    coordinator, state = _coordinator(supervisor, FakeProbe(), events=events)
 
     async def scenario() -> None:
         await coordinator.ensure_ready(timeout_s=5)
@@ -226,26 +199,56 @@ def test_start_failure_becomes_an_error_state() -> None:
 
     assert state.state is StackState.ERROR
     assert state.status.detail is not None
-    assert "acoustid-index" in state.status.detail
+    assert "SPAWN_ERROR" in state.status.detail
     assert (EventLevel.ERROR, "Stack-Start fehlgeschlagen") in events
+    # Der Prozess davor lief trotzdem an — der Start ist sequenziell, und
+    # was schon steht, wird nicht zurueckgenommen.
+    assert supervisor.programs["db"] is ProcessState.RUNNING
+    assert supervisor.programs["index"] is ProcessState.FATAL
+    # Und der Nachfolger wurde nie versucht.
+    assert supervisor.count("startProcess", "api") == 0
+
+
+def test_an_unknown_process_is_an_image_bug() -> None:
+    """Ein Prozess, den supervisord nicht kennt, ist kein Betriebsfehler.
+
+    Unter Docker war das der fehlende Container (HTTP 404); hier ist es
+    ``BAD_NAME``. Beides endet im selben Fehlerzustand — die Meldung nennt
+    aber den Namen, damit im Log steht, dass Image und Code auseinander
+    laufen.
+    """
+    supervisor = FakeSupervisor.sleeping(["db"])  # index und api fehlen
+    coordinator, state = _coordinator(supervisor, FakeProbe())
+
+    async def scenario() -> None:
+        await coordinator.ensure_ready(timeout_s=5)
+
+    with pytest.raises(StackNotReadyError, match="konnte nicht gestartet werden"):
+        asyncio.run(scenario())
+
+    assert state.state is StackState.ERROR
+    assert state.status.detail is not None
+    assert "index" in state.status.detail
 
 
 def test_the_next_attempt_leads_out_of_the_error_state() -> None:
     """``error`` ist kein Endzustand (§7, Phase 16).
 
-    Der Betreiber legt den fehlenden Container an — die naechste Anfrage
-    muss den Stack wecken koennen, ohne dass der Waechter neu startet.
+    Der Betreiber behebt die Ursache — die naechste Anfrage muss den Stack
+    wecken koennen, ohne dass der Waechter neu startet.
     """
-    daemon = FakeDaemon({"acoustid-db": False, "acoustid-index": False})  # api fehlt
+    supervisor = sleeping_stack()
+    supervisor.fail_on.add("api")
     events: list[tuple[EventLevel, str]] = []
-    coordinator, state = _coordinator(daemon, FakeProbe(), events=events)
+    coordinator, state = _coordinator(supervisor, FakeProbe(), events=events)
 
     async def scenario() -> None:
         with pytest.raises(StackNotReadyError):
             await coordinator.ensure_ready(timeout_s=5)
         assert state.state is StackState.ERROR
 
-        daemon.containers["acoustid-api"] = False  # Container ist wieder da
+        supervisor.fail_on.clear()  # Ursache behoben
+        supervisor.programs["api"] = ProcessState.STOPPED
         await coordinator.ensure_ready(timeout_s=5)
 
     asyncio.run(scenario())
@@ -268,7 +271,7 @@ class _BrokenController:
     """Eine Steuerung ohne jede Technik dahinter — sie scheitert nur.
 
     Der Beleg dafuer, dass der Koordinator wirklich am Protokoll haengt und
-    nicht an :class:`StackController`: diese Klasse erbt von nichts.
+    nicht an einer bestimmten Klasse: diese hier erbt von nichts.
     """
 
     def __init__(self, message: str = "Steuerung antwortet nicht") -> None:
@@ -287,35 +290,34 @@ class _BrokenController:
         self._fail("stop")
         return []
 
-    def all_running(self) -> bool:
-        self._fail("all_running")
-        return False
+    def inspect(self) -> GroupStatus:
+        self._fail("inspect")
+        return GroupStatus(running=False)
 
 
-def test_the_docker_controller_fulfils_the_protocol() -> None:
-    """Der Adapter-Tausch in M1b haengt genau an dieser Zusage."""
-    controller = StackController(docker_client(_sleeping()))
-    assert isinstance(controller, ProcessGroupController)
+def test_the_supervisor_controller_fulfils_the_protocol() -> None:
+    """Der Adapter-Tausch aus M1b haengt genau an dieser Zusage."""
+    assert isinstance(controller(sleeping_stack()), ProcessGroupController)
     assert isinstance(_BrokenController(), ProcessGroupController)
 
 
-def test_docker_errors_are_process_control_errors() -> None:
-    """``DockerError`` ist die Docker-Auspraegung der gemeinsamen Basis."""
-    assert issubclass(DockerError, ProcessControlError)
+def test_supervisor_errors_are_process_control_errors() -> None:
+    """``SupervisorError`` ist die supervisord-Auspraegung der Basis."""
+    assert issubclass(SupervisorError, ProcessControlError)
 
 
 def test_a_start_failure_of_any_controller_becomes_an_error_state() -> None:
-    """Der Koordinator faengt die Basis, nicht den Docker-Fehler.
+    """Der Koordinator faengt die Basis, nicht den Supervisor-Fehler.
 
-    Gleiches Verhalten wie bei einem fehlenden Container
+    Gleiches Verhalten wie bei einem gescheiterten Start
     (:func:`test_start_failure_becomes_an_error_state`) — nur kommt der
-    Fehler hier aus einer Steuerung, die Docker nie gesehen hat.
+    Fehler hier aus einer Steuerung, die supervisord nie gesehen hat.
     """
-    controller = _BrokenController("Supervisor-Socket antwortet nicht")
+    broken = _BrokenController("Supervisor-Socket antwortet nicht")
     state = StackStateTracker.sleeping()
     events: list[tuple[EventLevel, str]] = []
     coordinator = WakeCoordinator(
-        controller,
+        broken,
         FakeProbe(),  # type: ignore[arg-type]
         state,
         log_event=lambda level, message, extra=None: events.append((level, message)),
@@ -335,22 +337,122 @@ def test_a_start_failure_of_any_controller_becomes_an_error_state() -> None:
 
 def test_a_failing_controller_leaves_the_display_alone_on_observe() -> None:
     """Nachfragen scheitert lautlos — der Waechter muss weiterlaufen."""
-    controller = _BrokenController()
+    broken = _BrokenController()
     state = StackStateTracker(StackState.READY)
     coordinator = WakeCoordinator(
-        controller,
+        broken,
         FakeProbe(),  # type: ignore[arg-type]
         state,
     )
 
     assert coordinator.observe() is StackState.READY
-    assert controller.calls == ["all_running"]
+    assert broken.calls == ["inspect"]
+
+
+# --- Absturz statt Schlaf: die neue Kante ready -> error (M1b) ---------------
+
+
+def test_a_crash_while_ready_becomes_an_error_state() -> None:
+    """Ein Prozess faellt im Betrieb weg — das ist kein Schlaf (R8).
+
+    Der Kern der neuen Zustandskante. Unter Docker war „laeuft nicht"
+    eindeutig gutartig; unter supervisord unterscheidet sich ``STOPPED``
+    (Idle-Stopp) von ``EXITED`` (der Prozess ist von selbst weg). Ohne
+    diese Unterscheidung saehe der Betreiber einen Gutzustand.
+    """
+    supervisor = running_stack()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = _coordinator(
+        supervisor,
+        FakeProbe(),
+        events=events,
+        state=StackStateTracker(StackState.READY),
+    )
+
+    supervisor.crash("db")
+
+    assert coordinator.observe() is StackState.ERROR
+    assert state.status.detail is not None
+    assert "db" in state.status.detail
+    assert coordinator.ready is False
+
+
+def test_a_stopped_process_stays_a_sleeping_stack() -> None:
+    """Die Gegenprobe: gestoppt ist gestoppt, nicht abgestuerzt.
+
+    Ohne sie waere die Kante oben ein Fehlalarm bei jedem Idle-Stopp — der
+    haeufigste Betriebsvorgang dieses Projekts.
+    """
+    supervisor = running_stack()
+    coordinator, state = _coordinator(
+        supervisor, FakeProbe(), state=StackStateTracker(StackState.READY)
+    )
+
+    supervisor.stopProcess("db")
+    supervisor.stopProcess("api")
+
+    assert coordinator.observe() is StackState.SLEEPING
+    assert state.status.detail is None
+
+
+def test_a_crash_while_sleeping_is_reported_without_changing_the_state() -> None:
+    """Aus ``schlafend`` gibt es keine Kante in den Fehler — gemeldet wird trotzdem.
+
+    Der residente Index (E12) laeuft auch im Schlaf. Stuerzt er ab,
+    waehrend Postgres und API gestoppt sind, waere ``fehler`` ein Wechsel,
+    den die Uebergangstabelle nicht kennt. Der Befund darf deswegen nicht
+    verschwinden.
+    """
+    supervisor = sleeping_stack()
+    supervisor.programs["index"] = ProcessState.RUNNING
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, _state = _coordinator(supervisor, FakeProbe(), events=events)
+
+    supervisor.crash("index")
+
+    assert coordinator.observe() is StackState.SLEEPING
+    assert (EventLevel.WARNING, "Prozess unerwartet beendet") in events
+
+
+def test_a_persistent_crash_is_reported_once() -> None:
+    """Der Poller fragt alle 15 s — der Ringpuffer haelt 5000 Eintraege.
+
+    Ein dauerhaft toter Prozess wuerde ihn an einem Nachmittag leeren.
+    Gemeldet wird deshalb die **Aenderung**, nicht der Zustand.
+    """
+    supervisor = sleeping_stack()
+    supervisor.programs["index"] = ProcessState.RUNNING
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, _ = _coordinator(supervisor, FakeProbe(), events=events)
+
+    supervisor.crash("index")
+    for _ in range(5):
+        coordinator.observe()
+
+    assert [message for _, message in events].count("Prozess unerwartet beendet") == 1
+
+
+def test_a_recovered_process_leaves_the_error_state() -> None:
+    """``autorestart=unexpected`` heilt den Absturz — die Anzeige folgt (E15)."""
+    supervisor = running_stack()
+    coordinator, state = _coordinator(
+        supervisor, FakeProbe(), state=StackStateTracker(StackState.READY)
+    )
+
+    supervisor.crash("db")
+    assert coordinator.observe() is StackState.ERROR
+
+    # supervisord startet den Prozess neu (autorestart=unexpected).
+    supervisor.programs["db"] = ProcessState.RUNNING
+
+    assert coordinator.observe() is StackState.READY
+    assert state.status.detail is None
 
 
 def test_invalidate_forces_a_new_check() -> None:
     """Der Proxy verwirft die Bereitschaft, wenn die API wegbricht."""
-    daemon = _sleeping()
-    coordinator, _ = _coordinator(daemon, FakeProbe())
+    supervisor = sleeping_stack()
+    coordinator, _ = _coordinator(supervisor, FakeProbe())
 
     async def scenario() -> bool:
         await coordinator.ensure_ready(timeout_s=5)
@@ -366,8 +468,8 @@ def test_invalidate_forces_a_new_check() -> None:
 
 def test_refresh_finds_a_running_stack() -> None:
     """Der Zustand liegt nur im Speicher und wird beim Start neu erhoben."""
-    daemon = FakeDaemon(dict.fromkeys(STACK_CONTAINERS, True))
-    coordinator, state = _coordinator(daemon, FakeProbe())
+    supervisor = running_stack()
+    coordinator, state = _coordinator(supervisor, FakeProbe())
 
     assert coordinator.refresh() is StackState.READY
     assert state.state is StackState.READY
@@ -375,22 +477,24 @@ def test_refresh_finds_a_running_stack() -> None:
 
 
 def test_refresh_finds_a_sleeping_stack() -> None:
-    daemon = _sleeping()
-    coordinator, _ = _coordinator(daemon, FakeProbe())
+    supervisor = sleeping_stack()
+    coordinator, _ = _coordinator(supervisor, FakeProbe())
 
     assert coordinator.refresh() is StackState.SLEEPING
     assert coordinator.ready is False
 
 
-def test_refresh_survives_an_unreachable_daemon() -> None:
-    """Ohne Docker laeuft der Waechter weiter — sonst saehe niemand den Fehler."""
+def test_refresh_survives_an_unreachable_supervisor(tmp_path: Path) -> None:
+    """Ohne Steuerung laeuft der Waechter weiter — sonst saehe niemand den Fehler.
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
+    Bewusst mit dem **echten** Client auf einen Socket, den es nicht gibt:
+    so laeuft die Uebersetzung des Transportfehlers in
+    ``SupervisorUnavailableError`` wirklich mit durch.
+    """
+    supervisor = SupervisorClient(str(tmp_path / "nicht-da.sock"))
     state = StackStateTracker.sleeping()
     coordinator = WakeCoordinator(
-        StackController(DockerClient(client=httpx.Client(transport=httpx.MockTransport(handler)))),
+        ServiceGroupController(supervisor),
         FakeProbe(),  # type: ignore[arg-type]
         state,
     )

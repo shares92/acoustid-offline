@@ -25,7 +25,12 @@ from pathlib import Path
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from watchdog_stubs import FakeDaemon, RecordingProxyTransport, probe, streamed
+from watchdog_stubs import (
+    FakeSupervisor,
+    RecordingProxyTransport,
+    probe,
+    streamed,
+)
 
 from acoustid_watchdog.cache import (
     CachedResponse,
@@ -34,11 +39,12 @@ from acoustid_watchdog.cache import (
     is_cacheable_response,
 )
 from acoustid_watchdog.config_store import ConfigStore
-from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import recent_events
 from acoustid_watchdog.main import create_app
+from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.service import WatchdogService
+from acoustid_watchdog.stack import ServiceGroupController
 from acoustid_watchdog.store import Database
 from shared.env import EnvSettings
 
@@ -55,7 +61,7 @@ class Tripwire:
     """Stolperdraht vor einer Gegenstelle: scharf = jede Beruehrung fehlt.
 
     Nur so laesst sich „der Cache-Treffer weckt nicht" **baulich** pruefen.
-    Ein Zaehlervergleich (``daemon.calls`` vorher/nachher) wuerde dasselbe
+    Ein Zaehlervergleich (``supervisor.calls`` vorher/nachher) wuerde dasselbe
     behaupten, aber erst hinterher — und ein spaeterer Umbau, der doch
     wieder Docker anfasst, kaeme damit durch, solange er die Zahl nicht
     veraendert.
@@ -71,6 +77,30 @@ class Tripwire:
             return handler(request)
 
         return wrapped
+
+
+class GuardedSupervisor:
+    """Stolperdraht vor der Prozess-Steuerung.
+
+    Das Gegenstueck zu :meth:`Tripwire.guard` fuer die XML-RPC-Gegenstelle:
+    ist der Draht scharf, laesst **jeder** Steuerungsaufruf den Test
+    scheitern. Genau daran haengt der Nachweis „ein Cache-Treffer weckt
+    nicht" — er darf die Steuerung nicht einmal fragen.
+    """
+
+    def __init__(self, supervisor: FakeSupervisor, tripwire: Tripwire) -> None:
+        self._supervisor = supervisor
+        self._tripwire = tripwire
+
+    @property
+    def supervisor(self) -> GuardedSupervisor:
+        """Der ``supervisor``-Namensraum von XML-RPC — hier wir selbst."""
+        return self
+
+    def __getattr__(self, name: str) -> object:
+        if self._tripwire.armed:
+            raise AssertionError(f"Prozess-Steuerung trotz Abweisung beruehrt: {name}")
+        return getattr(self._supervisor, name)
 
 
 def lookup_ok(request: httpx.Request) -> httpx.Response:
@@ -89,7 +119,7 @@ Rig = tuple[TestClient, Tripwire, RecordingProxyTransport]
 @contextmanager
 def build(
     env_settings: EnvSettings,
-    daemon: FakeDaemon,
+    supervisor: FakeSupervisor,
     *,
     responder: Responder = lookup_ok,
 ) -> Iterator[Rig]:
@@ -101,13 +131,13 @@ def build(
     """
     tripwire = Tripwire()
     upstream = RecordingProxyTransport(responder)
-    health = tripwire.guard(lambda request: httpx.Response(200 if daemon.all_running else 503))
+    health = tripwire.guard(lambda request: httpx.Response(200 if supervisor.all_running else 503))
     service = WatchdogService(
         env_settings,
         Database.for_data_dir(env_settings.data_dir),
         ConfigStore.from_path(env_settings.config_path),
-        docker=DockerClient(
-            client=httpx.Client(transport=httpx.MockTransport(tripwire.guard(daemon)))
+        stack=ServiceGroupController(
+            SupervisorClient(proxy=GuardedSupervisor(supervisor, tripwire))
         ),
         probe=probe(health),
         proxy=ReverseProxy(
@@ -120,9 +150,9 @@ def build(
 
 
 @pytest.fixture
-def cached(env_settings: EnvSettings, daemon: FakeDaemon) -> Iterator[Rig]:
+def cached(env_settings: EnvSettings, supervisor: FakeSupervisor) -> Iterator[Rig]:
     """Waechter mit schlafendem Stack und scharfschaltbaren Gegenstellen."""
-    with build(env_settings, daemon) as rig:
+    with build(env_settings, supervisor) as rig:
         yield rig
 
 
@@ -209,7 +239,7 @@ def test_hit_does_not_reset_the_idle_clock(
 
 @pytest.mark.parametrize("status_code", [400, 200])
 def test_only_successful_lookups_are_stored(
-    env_settings: EnvSettings, daemon: FakeDaemon, status_code: int
+    env_settings: EnvSettings, supervisor: FakeSupervisor, status_code: int
 ) -> None:
     """Fehlerantworten gehoeren nicht in den Cache — auch nicht mit HTTP 200.
 
@@ -221,7 +251,7 @@ def test_only_successful_lookups_are_stored(
     error = json.dumps({"status": "error", "error": {"code": 2, "message": "fehlt"}}).encode()
     with build(
         env_settings,
-        daemon,
+        supervisor,
         responder=lambda request: streamed(
             status_code, error, {"content-type": "application/json"}
         ),
@@ -233,11 +263,13 @@ def test_only_successful_lookups_are_stored(
         assert client.app.state.service.cache.entries == 0
 
 
-def test_non_json_formats_are_not_stored(env_settings: EnvSettings, daemon: FakeDaemon) -> None:
+def test_non_json_formats_are_not_stored(
+    env_settings: EnvSettings, supervisor: FakeSupervisor
+) -> None:
     """``format=xml``/``jsonp`` fallen von selbst heraus — ihr Rumpf ist kein JSON."""
     with build(
         env_settings,
-        daemon,
+        supervisor,
         responder=lambda request: streamed(
             200,
             b'<?xml version="1.0" encoding="UTF-8"?><response><status>ok</status></response>',
@@ -398,7 +430,7 @@ def test_case_is_not_normalised() -> None:
 
 
 def test_a_successful_submission_empties_the_cache(
-    env_settings: EnvSettings, daemon: FakeDaemon
+    env_settings: EnvSettings, supervisor: FakeSupervisor
 ) -> None:
     """Invariante §8.6, Ausloeser (a): jede erfolgreiche lokale Submission."""
 
@@ -411,7 +443,7 @@ def test_a_successful_submission_empties_the_cache(
             )
         return lookup_ok(request)
 
-    with build(env_settings, daemon, responder=responder) as (client, _, upstream):
+    with build(env_settings, supervisor, responder=responder) as (client, _, upstream):
         service: WatchdogService = client.app.state.service
 
         client.get(LOOKUP)
@@ -433,7 +465,9 @@ def test_a_successful_submission_empties_the_cache(
         assert events[0].extra == {"reason": "submission", "removed": 1}
 
 
-def test_a_failed_submission_keeps_the_cache(env_settings: EnvSettings, daemon: FakeDaemon) -> None:
+def test_a_failed_submission_keeps_the_cache(
+    env_settings: EnvSettings, supervisor: FakeSupervisor
+) -> None:
     """Nur der Erfolg leert. Die API antwortet auf einen Fehler nie mit 200."""
 
     def responder(request: httpx.Request) -> httpx.Response:
@@ -441,7 +475,7 @@ def test_a_failed_submission_keeps_the_cache(env_settings: EnvSettings, daemon: 
             return streamed(400, b'{"status": "error"}', {"content-type": "application/json"})
         return lookup_ok(request)
 
-    with build(env_settings, daemon, responder=responder) as (client, _, _upstream):
+    with build(env_settings, supervisor, responder=responder) as (client, _, _upstream):
         client.get(LOOKUP)
         client.post("/v2/submit", content=b"client=abc")
 
@@ -564,7 +598,7 @@ def test_the_accounting_survives_a_restart(tmp_path: Path) -> None:
 
 
 def test_a_broken_cache_file_does_not_stop_the_watchdog(
-    env_settings: EnvSettings, daemon: FakeDaemon
+    env_settings: EnvSettings, supervisor: FakeSupervisor
 ) -> None:
     """Ein kaputter Cache ist schlimmstenfalls ein leerer Cache.
 
@@ -573,7 +607,7 @@ def test_a_broken_cache_file_does_not_stop_the_watchdog(
     """
     (env_settings.data_dir / "lookup-cache.sqlite3").write_bytes(b"kein SQLite, nur Muell" * 100)
 
-    with build(env_settings, daemon) as (client, tripwire, upstream):
+    with build(env_settings, supervisor) as (client, tripwire, upstream):
         service: WatchdogService = client.app.state.service
 
         assert service.cache.available

@@ -31,6 +31,12 @@ dependencies = [
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.0",
+    # Nur fuer den Kontrakt-Test gegen ein **echtes** supervisord
+    # (watchdog/tests/test_watchdog_supervisor.py). Im Auslieferungs-Image
+    # steckt supervisord in einem eigenen venv (/opt/supervisor), nicht im
+    # App-venv — es ist Werkzeug des Images, keine Abhaengigkeit der
+    # Anwendung (Dockerfile, Stufe `supervisor-build`).
+    "supervisor>=4.3.0",
 ]
 
 [tool.uv]
@@ -93,4 +99,5 @@ markers = [
     "extension: braucht die Original-Extension pg_acoustid im Test-Container (ACOUSTID_EXTENSION_DSN), siehe tests/pg_acoustid/",
     "network: greift auf das echte Internet zu (data.acoustid.org) — laeuft nur mit --network, nie in der CI",
     "compose: faehrt den echten Compose-Stack hoch (Docker noetig) — laeuft nur mit --compose, nie in der CI",
+    "supervisor: Kontrakt-Test gegen ein echtes supervisord (eigener Subprozess, kein Docker); wird ohne installiertes supervisord uebersprungen",
 ]

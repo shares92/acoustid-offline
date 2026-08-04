@@ -1,16 +1,26 @@
-"""Attrappen der Waechter-Tests (Phase 15).
+"""Attrappen der Waechter-Tests (Phase 15, umgebaut in M1b).
 
-Der Waechter spricht ab Phase 15 mit zwei Gegenstellen: dem Docker-Daemon
-(Unix-Socket) und dem API-Dienst (HTTP). Beide werden hier durch
-``httpx.MockTransport`` ersetzt — bewusst **nicht** durch Attrappen der
-Client-Klassen: so laufen Pfadbildung, Statusauswertung und
-Kopfzeilen-Behandlung der echten Module mit durch den Test.
+Der Waechter spricht mit zwei Gegenstellen: der Prozess-Steuerung
+(supervisord, XML-RPC ueber einen Unix-Socket) und dem API-Dienst (HTTP).
+Beide werden hier ersetzt — aber bewusst **nicht** durch Attrappen der
+Client-Klassen: der echte :class:`~acoustid_watchdog.process.
+SupervisorClient` und die echte :class:`~acoustid_watchdog.proxy.
+ReverseProxy` laufen durch jeden Test mit, damit Fault-Uebersetzung,
+Statusauswertung und Kopfzeilen-Behandlung wirklich geprueft werden.
 
-Seit M1a steht daneben :class:`FakeSupervisor`, die Gegenstelle des
-Ein-Container-Umbaus (HANDOFF v2 §5, DECISIONS 2026-08-04 E1). Sie ersetzt
-:class:`FakeDaemon` **nicht** — solange der Waechter Container steuert,
-werden beide gebraucht: der Daemon fuer den laufenden Betrieb, der
-Supervisor fuer den Adapter, der in M1b danebentritt.
+* :class:`FakeSupervisor` — die Gegenstelle von supervisord. Sie spricht
+  die Original-Methodennamen, damit sie an die Stelle eines
+  ``xmlrpc.client.ServerProxy`` treten kann.
+* :class:`RecordingProxyTransport` / :func:`probe` — der API-Dienst auf
+  einem ``httpx.MockTransport``.
+
+**Die Zustands- und Fehlerwerte kommen aus dem Produktionsmodul**
+(:mod:`acoustid_watchdog.process`) und werden hier **nicht** noch einmal
+aufgeschrieben. Eine Attrappe mit eigener Kopie derselben Zahlen ist eine
+Divergenz, die auf ihr Auftreten wartet (LEARNINGS „Attrappen fremder
+Systeme sind Paritaets-Code"). Wogegen die Werte selbst stimmen, haelt der
+Kontrakt-Test gegen ein **echtes** supervisord fest
+(``test_watchdog_supervisor.py``).
 
 Bewusst ein eigenes Modul und nicht die conftest.py: pytest laedt alle
 `conftest`-Module unter demselben Namen, ein ``from conftest import …``
@@ -23,28 +33,35 @@ from __future__ import annotations
 import json
 import time
 import xmlrpc.client
-from collections.abc import Callable, Iterable, Mapping
-from enum import IntEnum
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Final, Self
 
 import httpx
 
-from acoustid_watchdog.docker import DockerClient
+from acoustid_watchdog.process import (
+    RUNNING_STATES,
+    Fault,
+    ProcessState,
+    SupervisorClient,
+)
+from acoustid_watchdog.stack import STACK_PROCESSES, ServiceGroupController
 from acoustid_watchdog.wake import ReadinessProbe
 from shared.env import EnvSettings
 
 __all__ = [
     "RUNNING_STATES",
     "STOPPED_STATES",
-    "FakeDaemon",
     "FakeProbe",
     "FakeSupervisor",
     "Fault",
     "ProcessState",
     "RecordingProxyTransport",
-    "docker_client",
+    "controller",
     "probe",
+    "running_stack",
+    "sleeping_stack",
     "streamed",
+    "supervisor_client",
 ]
 
 
@@ -66,116 +83,6 @@ def streamed(
     )
 
 
-class FakeDaemon:
-    """Ein Docker-Daemon aus einem Wörterbuch von Containerzustaenden.
-
-    Versteht genau die drei Routen, die :mod:`acoustid_watchdog.docker`
-    benutzt, und merkt sich jeden Aufruf — daran laesst sich pruefen, dass
-    ein Weckvorgang wirklich nur einmal startet.
-    """
-
-    def __init__(self, containers: dict[str, bool] | None = None) -> None:
-        #: Containername -> laeuft gerade. Fehlt ein Name, antwortet der
-        #: Daemon mit 404 (wie fuer einen nie angelegten Container).
-        self.containers = dict(containers or {})
-        #: ``(methode, name)`` in Aufrufreihenfolge.
-        self.calls: list[tuple[str, str]] = []
-        #: Aufrufe, die mit HTTP 500 beantwortet werden sollen.
-        self.fail_on: set[str] = set()
-
-    def __call__(self, request: httpx.Request) -> httpx.Response:
-        parts = request.url.path.strip("/").split("/")
-        if len(parts) != 3 or parts[0] != "containers":
-            return httpx.Response(404, json={"message": f"unbekannt: {request.url.path}"})
-        _, name, action = parts
-        self.calls.append((action, name))
-
-        if name in self.fail_on:
-            return httpx.Response(500, json={"message": f"{name}: Daemon-Fehler"})
-        if name not in self.containers:
-            return httpx.Response(404, json={"message": f"No such container: {name}"})
-
-        if action == "json":
-            running = self.containers[name]
-            return httpx.Response(
-                200,
-                json={
-                    "Name": f"/{name}",
-                    "State": {
-                        "Status": "running" if running else "exited",
-                        "Running": running,
-                        "Health": {"Status": "healthy" if running else "unhealthy"},
-                    },
-                },
-            )
-        if action in ("start", "stop"):
-            wanted = action == "start"
-            if self.containers[name] == wanted:
-                return httpx.Response(304)
-            self.containers[name] = wanted
-            return httpx.Response(204)
-        return httpx.Response(404, json={"message": f"unbekannte Aktion: {action}"})
-
-    # --- Auswertung ---------------------------------------------------------
-
-    def count(self, action: str, name: str | None = None) -> int:
-        """Wie oft wurde ``action`` (optional fuer ``name``) aufgerufen?"""
-        return sum(
-            1
-            for call_action, call_name in self.calls
-            if call_action == action and (name is None or call_name == name)
-        )
-
-    @property
-    def all_running(self) -> bool:
-        return all(self.containers.values())
-
-
-def docker_client(daemon: FakeDaemon) -> DockerClient:
-    """Echter :class:`DockerClient` auf einem Attrappen-Daemon."""
-    return DockerClient(client=httpx.Client(transport=httpx.MockTransport(daemon)))
-
-
-class ProcessState(IntEnum):
-    """Prozesszustaende von supervisord (``supervisor.states.ProcessStates``).
-
-    Die Zahlenwerte sind die des Originals: sie stehen so im
-    ``state``-Feld von ``getProcessInfo``, und der echte Client wird sie
-    genauso lesen. Der ganze Lebenslauf eines Prozesses:
-
-    ==========  =============================================================
-    STOPPED     steht — entweder nie gestartet oder geordnet gestoppt
-    STARTING    startet gerade (``startsecs`` laeuft noch)
-    RUNNING     laeuft
-    BACKOFF     Start gescheitert, Wiederholung laeuft (``startretries``)
-    STOPPING    faehrt gerade herunter (``stopwaitsecs`` laeuft)
-    EXITED      hat sich selbst beendet — erwartet oder nicht
-    FATAL       gab auf: alle Startversuche verbraucht
-    UNKNOWN     supervisord selbst ist durcheinander
-    ==========  =============================================================
-
-    Der Unterschied zur Docker-Sicht ist genau der Grund fuer diese
-    Attrappe: ``FakeDaemon`` kennt „laeuft ja/nein", hier ist „steht" nicht
-    mehr eindeutig gutartig — ``STOPPED`` heisst gestoppt, ``EXITED`` und
-    ``FATAL`` heissen abgestuerzt (M0-Analyse §2.1, Kante ``ready→error``).
-    """
-
-    STOPPED = 0
-    STARTING = 10
-    RUNNING = 20
-    BACKOFF = 30
-    STOPPING = 40
-    EXITED = 100
-    FATAL = 200
-    UNKNOWN = 1000
-
-
-#: Zustaende, die supervisord als „laeuft" zaehlt — die Bedingung, an der
-#: ``startProcess`` mit ``ALREADY_STARTED`` abbricht.
-RUNNING_STATES: Final = frozenset(
-    {ProcessState.STARTING, ProcessState.RUNNING, ProcessState.BACKOFF}
-)
-
 #: Zustaende, in denen ein Prozess endgueltig steht. ``STOPPING`` fehlt hier
 #: mit Absicht — es ist weder das eine noch das andere, und ``stopProcess``
 #: beantwortet es (wie das Original) trotzdem mit ``NOT_RUNNING``.
@@ -184,40 +91,16 @@ STOPPED_STATES: Final = frozenset(
 )
 
 
-class Fault(IntEnum):
-    """Fehlercodes von supervisord (``supervisor.xmlrpc.Faults``).
-
-    Nur die, die der Waechter je zu sehen bekommt. Die beiden ersten sind
-    keine Fehler im eigentlichen Sinn, sondern die Art, wie XML-RPC
-    Idempotenz ausdrueckt: „lief schon" / „stand schon" — das Gegenstueck
-    zu HTTP 304 der Docker-Engine-API.
-    """
-
-    ALREADY_STARTED = 60
-    NOT_RUNNING = 70
-    #: Unbekanntes Programm. Im Betrieb ein Bug im Image (die Programme
-    #: stehen in der supervisord-Konfiguration), nie ein Betriebsfehler.
-    BAD_NAME = 10
-    #: Der Start ist gescheitert — **der** Fehler eines Weckvorgangs.
-    #: supervisord wirft ihn aus ``startProcess``, wenn das Spawnen
-    #: misslingt oder der Prozess die Startphase nicht ueberlebt; nicht
-    #: ``FAILED``.
-    SPAWN_ERROR = 50
-    #: Der Auftrag scheiterte an supervisord selbst (alles ausser dem
-    #: Start).
-    FAILED = 30
-
-
 class FakeSupervisor:
     """Ein supervisord aus einem Woerterbuch von Prozesszustaenden.
 
-    Das Gegenstueck zu :class:`FakeDaemon` fuer den Ein-Container-Umbau:
-    gleicher Zuschnitt (Zustands-Woerterbuch, :attr:`calls`, :attr:`fail_on`,
-    :attr:`all_running`), aber die Sprache von supervisord statt der der
-    Docker-Engine-API.
+    Zustands-Woerterbuch, :attr:`calls`, :attr:`fail_on` und
+    :attr:`all_running` — derselbe Zuschnitt, den in v1 die
+    Docker-Daemon-Attrappe hatte, aber in der Sprache von supervisord.
 
-    Sie versteht die Methoden, die der kommende ``SupervisorClient``
-    braucht (M1b), und zwar unter ihren echten Namen::
+    Sie versteht die Methoden, die der
+    :class:`~acoustid_watchdog.process.SupervisorClient` braucht, und zwar
+    unter ihren echten Namen::
 
         getProcessInfo(name)         Zustand eines Programms
         getAllProcessInfo()          Zustand aller Programme (der Poller)
@@ -486,6 +369,48 @@ class FakeSupervisor:
             "exitstatus": 0 if state is not ProcessState.EXITED else 1,
             "description": state.name.lower(),
         }
+
+
+def supervisor_client(supervisor: FakeSupervisor) -> SupervisorClient:
+    """Echter :class:`SupervisorClient` auf einer Attrappen-Gegenstelle.
+
+    Der Grund fuer die Original-Methodennamen in :class:`FakeSupervisor`:
+    so laeuft die **echte** Fault-Uebersetzung des Clients durch jeden Test
+    mit, statt in den Tests nachgebaut zu werden.
+    """
+    return SupervisorClient(proxy=supervisor)
+
+
+def controller(
+    supervisor: FakeSupervisor,
+    *,
+    processes: Sequence[str] = STACK_PROCESSES,
+    gates: Sequence[Any] = (),
+    version_guard: Callable[[], None] | None = None,
+) -> ServiceGroupController:
+    """Echte Prozessgruppen-Steuerung auf einer Attrappen-Gegenstelle.
+
+    **Ohne Gates** per Vorgabe: die Bereitschaftsfragen des Betriebs
+    sprechen mit Postgres und HTTP-Diensten, die es im Unit-Test nicht
+    gibt. Wer sie pruefen will, gibt eigene mit (``ReadinessGate`` mit einer
+    Attrappen-Frage) — so bleibt jeder Test bei einer Sache.
+    """
+    return ServiceGroupController(
+        supervisor_client(supervisor),
+        processes=processes,
+        gates=gates,
+        version_guard=version_guard,
+    )
+
+
+def sleeping_stack(processes: Sequence[str] = STACK_PROCESSES) -> FakeSupervisor:
+    """Alle Stack-Prozesse gestoppt — der schlafende Ausgangszustand."""
+    return FakeSupervisor.sleeping(processes)
+
+
+def running_stack(processes: Sequence[str] = STACK_PROCESSES) -> FakeSupervisor:
+    """Alle Stack-Prozesse laufen — der wache Ausgangszustand."""
+    return FakeSupervisor.running(processes)
 
 
 class FakeProbe:
