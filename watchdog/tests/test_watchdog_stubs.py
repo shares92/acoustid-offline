@@ -95,22 +95,48 @@ def test_a_starting_program_counts_as_running_for_the_start_check() -> None:
     assert caught.value.faultCode == Fault.ALREADY_STARTED
 
 
-def test_a_crash_leaves_the_program_stopped_without_anyone_stopping_it() -> None:
-    """Der Fall, den es unter Docker so nicht gab (M0-Analyse §2.1)."""
+def test_a_crash_leaves_the_program_exited_without_anyone_stopping_it() -> None:
+    """Der Fall, den es unter Docker so nicht gab (M0-Analyse §2.1).
+
+    Ein laufender Prozess, der endet, ist ``EXITED`` — nicht ``FATAL``:
+    die Kante ``RUNNING → FATAL`` gibt es in der Zustandsmaschine von
+    supervisord nicht.
+    """
     supervisor = running()
 
     supervisor.crash("api")
 
-    assert supervisor.programs["api"] is ProcessState.FATAL
+    assert supervisor.programs["api"] is ProcessState.EXITED
     assert supervisor.all_running is False
     # Ein Absturz ist kein Aufruf — sonst zaehlte jeder Test ihn mit.
     assert supervisor.calls == []
 
 
-def test_a_crashed_program_can_be_started_again() -> None:
+def test_only_a_failed_start_reaches_fatal() -> None:
+    """``FATAL`` entsteht ausschliesslich ueber STARTING → BACKOFF → FATAL."""
+    supervisor = sleeping()
+
+    path = supervisor.start_failure("api", retries=2)
+
+    assert path == [
+        ProcessState.STARTING,
+        ProcessState.BACKOFF,
+        ProcessState.STARTING,
+        ProcessState.BACKOFF,
+        ProcessState.FATAL,
+    ]
+    assert supervisor.programs["api"] is ProcessState.FATAL
+    assert supervisor.calls == []
+
+
+@pytest.mark.parametrize("state", [ProcessState.EXITED, ProcessState.FATAL])
+def test_a_dead_program_can_be_started_again(state: ProcessState) -> None:
     """``FATAL``/``EXITED`` sind Ruhezustaende, kein Endzustand."""
     supervisor = running()
-    supervisor.crash("api", ProcessState.EXITED)
+    if state is ProcessState.EXITED:
+        supervisor.crash("api")
+    else:
+        supervisor.start_failure("api")
 
     assert supervisor.startProcess("api") is True
     assert supervisor.programs["api"] is ProcessState.RUNNING
@@ -189,15 +215,48 @@ def test_an_unknown_program_is_bad_name_everywhere(
     assert caught.value.faultCode == Fault.BAD_NAME
 
 
-def test_a_broken_supervisor_answers_with_failed() -> None:
-    """``fail_on`` ist das Gegenstueck zum HTTP 500 in ``FakeDaemon``."""
+def test_a_failed_start_is_a_spawn_error_and_ends_in_fatal() -> None:
+    """Der Fehler eines Weckvorgangs heisst ``SPAWN_ERROR``, nicht ``FAILED``.
+
+    Und er ist nicht nur ein Fault: supervisord hat den Startversuch
+    wirklich unternommen, also steht das Programm danach auf ``FATAL``.
+    """
+    supervisor = sleeping()
+    supervisor.fail_on.add("api")
+
+    with pytest.raises(xmlrpc.client.Fault) as caught:
+        supervisor.startProcess("api")
+
+    assert caught.value.faultCode == Fault.SPAWN_ERROR == 50
+    assert supervisor.programs["api"] is ProcessState.FATAL
+    assert supervisor.starts["api"] == 0, "ein gescheiterter Versuch ist kein Start"
+
+
+def test_a_program_that_already_runs_never_reaches_the_spawn() -> None:
+    """Reihenfolge des Originals: ``ALREADY_STARTED`` vor ``SPAWN_ERROR``."""
     supervisor = running()
     supervisor.fail_on.add("api")
 
     with pytest.raises(xmlrpc.client.Fault) as caught:
         supervisor.startProcess("api")
 
+    assert caught.value.faultCode == Fault.ALREADY_STARTED
+    assert supervisor.programs["api"] is ProcessState.RUNNING
+
+
+def test_a_broken_supervisor_answers_other_calls_with_failed() -> None:
+    """``fail_on`` ist das Gegenstueck zum HTTP 500 in ``FakeDaemon``."""
+    supervisor = running()
+    supervisor.fail_on.add("api")
+
+    with pytest.raises(xmlrpc.client.Fault) as caught:
+        supervisor.stopProcess("api")
     assert caught.value.faultCode == Fault.FAILED
+
+    with pytest.raises(xmlrpc.client.Fault) as caught:
+        supervisor.getProcessInfo("api")
+    assert caught.value.faultCode == Fault.FAILED
+
     # Auch die Sammelabfrage bricht — supervisord antwortet ganz oder gar nicht.
     with pytest.raises(xmlrpc.client.Fault):
         supervisor.getAllProcessInfo()
@@ -228,7 +287,7 @@ def test_process_info_carries_the_documented_fields() -> None:
 
 def test_a_fatal_program_reports_its_spawn_error() -> None:
     supervisor = running()
-    supervisor.crash("api")
+    supervisor.start_failure("api")
 
     info = supervisor.getProcessInfo("api")
 
@@ -238,10 +297,37 @@ def test_a_fatal_program_reports_its_spawn_error() -> None:
     assert info["spawnerr"]
 
 
+@pytest.mark.parametrize(
+    ("state", "has_pid"),
+    [
+        (ProcessState.RUNNING, True),
+        (ProcessState.STARTING, True),
+        (ProcessState.STOPPING, True),
+        (ProcessState.BACKOFF, False),
+        (ProcessState.STOPPED, False),
+        (ProcessState.EXITED, False),
+        (ProcessState.FATAL, False),
+    ],
+)
+def test_only_a_program_with_a_live_process_reports_a_pid(
+    state: ProcessState, has_pid: bool
+) -> None:
+    """``BACKOFF`` ist der Sonderfall: „laeuft schon", aber der Prozess ist tot.
+
+    Die PID haengt deshalb bewusst **nicht** an ``RUNNING_STATES`` — dort
+    steht ``BACKOFF`` zu Recht (supervisord weist einen Start dann mit
+    ``ALREADY_STARTED`` ab), aber zwischen zwei Versuchen laeuft nichts.
+    """
+    supervisor = running()
+    supervisor.programs["api"] = state
+
+    assert (supervisor.getProcessInfo("api")["pid"] > 0) is has_pid
+
+
 def test_all_process_info_answers_for_every_program_in_one_call() -> None:
     """Ein Aufruf statt einer je Programm — der Weg des Zustands-Pollers."""
     supervisor = running()
-    supervisor.crash("index", ProcessState.EXITED)
+    supervisor.crash("index")
 
     infos = supervisor.getAllProcessInfo()
 

@@ -198,7 +198,13 @@ class Fault(IntEnum):
     #: Unbekanntes Programm. Im Betrieb ein Bug im Image (die Programme
     #: stehen in der supervisord-Konfiguration), nie ein Betriebsfehler.
     BAD_NAME = 10
-    #: Der Auftrag scheiterte an supervisord selbst.
+    #: Der Start ist gescheitert — **der** Fehler eines Weckvorgangs.
+    #: supervisord wirft ihn aus ``startProcess``, wenn das Spawnen
+    #: misslingt oder der Prozess die Startphase nicht ueberlebt; nicht
+    #: ``FAILED``.
+    SPAWN_ERROR = 50
+    #: Der Auftrag scheiterte an supervisord selbst (alles ausser dem
+    #: Start).
     FAILED = 30
 
 
@@ -309,12 +315,22 @@ class FakeSupervisor:
         Raises:
             xmlrpc.client.Fault: ``BAD_NAME`` (unbekanntes Programm),
                 ``ALREADY_STARTED`` (laeuft/startet/versucht es gerade)
-                oder ``FAILED``.
+                oder ``SPAWN_ERROR`` (Start gescheitert, :attr:`fail_on`).
+
+        Die Reihenfolge ist die des Originals: erst der Name, dann „laeuft
+        schon", und erst danach wird wirklich gespawnt — nur dort kann ein
+        Start scheitern.
         """
         self.calls.append(("startProcess", name))
-        state = self._state_of(name)
+        state = self._require_known(name)
         if state in RUNNING_STATES:
             raise xmlrpc.client.Fault(Fault.ALREADY_STARTED, f"ALREADY_STARTED: {name}")
+        if name in self.fail_on:
+            # Wie im Original: der Startversuch laeuft wirklich, scheitert
+            # und laesst das Programm in FATAL zurueck — der Fault kommt
+            # danach. `starts` zaehlt ihn nicht: es war kein Start.
+            self.start_failure(name)
+            raise xmlrpc.client.Fault(Fault.SPAWN_ERROR, f"SPAWN_ERROR: {name}")
         self.programs[name] = ProcessState.RUNNING if wait else ProcessState.STARTING
         self.starts[name] = self.starts.get(name, 0) + 1
         return True
@@ -361,17 +377,49 @@ class FakeSupervisor:
 
     # --- Steuerung aus dem Test ---------------------------------------------
 
-    def crash(self, name: str, state: ProcessState = ProcessState.FATAL) -> None:
-        """Laesst ein Programm abstuerzen — ohne dass jemand es gestoppt hat.
+    def crash(self, name: str) -> None:
+        """Laesst ein laufendes Programm abstuerzen — ohne Zutun von aussen.
 
         Der Fall, den es unter Docker so nicht gab und der in M1b die neue
         Kante ``ready→error`` begruendet: der Prozess ist weg, aber der
         Waechter hat ihn nicht schlafen gelegt. Zaehlt nicht als Aufruf —
         es ist keiner.
+
+        Das Ziel ist ``EXITED`` und nicht ``FATAL``: die Zustandsmaschine
+        von supervisord kennt keine Kante ``RUNNING → FATAL``. Ein
+        laufender Prozess, der endet, ist **immer** ``EXITED``; ``FATAL``
+        erreicht nur, wer den Start nicht schafft (:meth:`start_failure`).
         """
         if name not in self.programs:
             raise KeyError(name)
-        self.programs[name] = state
+        self.programs[name] = ProcessState.EXITED
+
+    def start_failure(self, name: str, *, retries: int = 1) -> list[ProcessState]:
+        """Laesst einen Startversuch endgueltig scheitern.
+
+        Geht den Weg, den supervisord wirklich geht:
+        ``STARTING → BACKOFF`` je Versuch und ``FATAL``, wenn
+        ``startretries`` verbraucht sind. Der einzige Weg zu ``FATAL`` —
+        deshalb hat :meth:`crash` kein Zustandsargument.
+
+        Args:
+            name: Programmname.
+            retries: Wie viele Startversuche scheitern (``startretries``).
+
+        Returns:
+            Die durchlaufenen Zustaende in Reihenfolge — damit ein Test
+            belegen kann, dass der Weg und nicht nur das Ziel stimmt.
+        """
+        if name not in self.programs:
+            raise KeyError(name)
+        path: list[ProcessState] = []
+        for _ in range(retries):
+            for state in (ProcessState.STARTING, ProcessState.BACKOFF):
+                self.programs[name] = state
+                path.append(state)
+        self.programs[name] = ProcessState.FATAL
+        path.append(ProcessState.FATAL)
+        return path
 
     # --- Auswertung ---------------------------------------------------------
 
@@ -397,11 +445,21 @@ class FakeSupervisor:
 
     # --- Innenleben ---------------------------------------------------------
 
-    def _state_of(self, name: str) -> ProcessState:
-        self._guard_failure(name)
+    def _require_known(self, name: str) -> ProcessState:
+        """Zustand eines Programms; unbekannte Namen sind ``BAD_NAME``."""
         if name not in self.programs:
             raise xmlrpc.client.Fault(Fault.BAD_NAME, f"BAD_NAME: {name}")
         return self.programs[name]
+
+    def _state_of(self, name: str) -> ProcessState:
+        """Wie :meth:`_require_known`, mit ``FAILED``-Sperre.
+
+        Fuer alles ausser dem Start: dort ist der passende Fault
+        ``SPAWN_ERROR``, und er faellt erst nach der Idempotenz-Pruefung.
+        """
+        state = self._require_known(name)
+        self._guard_failure(name)
+        return state
 
     def _guard_failure(self, name: str) -> None:
         if name in self.fail_on:
@@ -410,15 +468,19 @@ class FakeSupervisor:
     def _info(self, state: ProcessState, name: str) -> dict[str, Any]:
         """Die Felder, die ``getProcessInfo`` liefert (Auszug des Originals)."""
         now = int(time.time())
-        running = state in RUNNING_STATES
+        # Bewusst NICHT ueber ``RUNNING_STATES``: dort gehoert ``BACKOFF``
+        # dazu (supervisord zaehlt es als „laeuft schon"), aber der Prozess
+        # ist dabei tot — er wartet auf den naechsten Versuch. Eine PID hat
+        # nur, wo wirklich einer laeuft.
+        alive = state in (ProcessState.STARTING, ProcessState.RUNNING, ProcessState.STOPPING)
         return {
             "name": name,
             "group": name,
             "state": int(state),
             "statename": state.name,
-            "pid": 4242 if running else 0,
+            "pid": 4242 if alive else 0,
             "start": now if state is not ProcessState.STOPPED else 0,
-            "stop": 0 if running else now,
+            "stop": 0 if alive else now,
             "now": now,
             "spawnerr": "" if state is not ProcessState.FATAL else "zu oft gescheitert",
             "exitstatus": 0 if state is not ProcessState.EXITED else 1,
