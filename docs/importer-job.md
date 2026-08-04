@@ -15,19 +15,36 @@ Import-Regeln), §5.3 (Index-Feed), §8.3/§8.4 (Transaktion und Resume), §8.8
 
 ## 1. Aufruf
 
+Seit dem Ein-Container-Umbau (M1b) ist der Importer **kein eigenes Image**
+mehr: er steckt im selben Image wie alles andere und läuft als Prozess
+darin. Über supervisord läuft er bewusst **nicht** (Entscheid E10:
+`[program:*]` kann keine Per-Lauf-Argumente übergeben) — ab M2.5 startet
+ihn der Wächter als Subprozess, bis dahin wird er von Hand aufgerufen:
+
 ```bash
-# Im Container (Compose-Profil `job`)
-docker compose --profile job build importer      # einmalig, solange es kein GHCR-Image gibt
-docker compose --profile job run --rm importer                    # täglicher Lauf
-docker compose --profile job run --rm importer --mode bootstrap   # Erst-Import
+# Im laufenden Container. Der Stack muss wach sein: Datenbank und
+# Suchindex braucht der Job.
+docker compose exec app supervisorctl -c /etc/supervisor/supervisord.conf start db index
+
+docker compose exec app /app/.venv/bin/python -m acoustid_importer                    # täglicher Lauf
+docker compose exec app /app/.venv/bin/python -m acoustid_importer --mode bootstrap   # Erst-Import
 
 # Probelauf mit Messung und Hochrechnung
-docker compose --profile job run --rm importer \
-    --mode bootstrap --end-date 2011-12-31 --report /data/dumps/probelauf.json
+docker compose exec app /app/.venv/bin/python -m acoustid_importer \
+    --mode bootstrap --end-date 2011-12-31 --report /import/probelauf.json
+
+# Langer Lauf ohne offene Sitzung: -d haengt ihn ab, das Log steht im
+# Report und in `docker compose logs`.
+docker compose exec -d app /app/.venv/bin/python -m acoustid_importer --mode bootstrap
 
 # Direkt (Entwicklung)
 uv run python -m acoustid_importer --help
 ```
+
+Das Datenbank-Passwort muss dabei **nicht** mitgegeben werden: es steht in
+`AOFF_DB_PASSWORD_FILE` (Default `/config/db-password`), und die liest jeder
+Prozess selbst — auch einer, der per `exec` dazukommt und die Umgebung des
+Entrypoints nicht erbt.
 
 Der Job liest seine Zugänge aus den `AOFF_`-Variablen (ARCHITECTURE §6) und
 aus der `config.yaml` des Wächters — von dort genau zwei Werte:

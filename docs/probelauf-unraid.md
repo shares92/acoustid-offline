@@ -15,11 +15,17 @@ Report), ARCHITECTURE §5.1–§5.3, §8.8. Der Probelauf ist **kein
 Wegwerf-Lauf**: sein Stand ist per `import_state` resumierbar und wird
 später einfach zum Voll-Bootstrap verlängert — nichts löschen.
 
+> **Seit dem Ein-Container-Umbau (M1b)** läuft alles in *einem* Container:
+> Der Importer ist kein eigenes Compose-Profil mehr, sondern ein Prozess
+> darin (`docker compose exec`). Wer einen Probelauf aus der v1-Zeit auf
+> der Platte hat, zieht ihn nach [migration-v1-v2.md](migration-v1-v2.md)
+> um — der Bestand bleibt erhalten.
+
 ---
 
 ## 1. Voraussetzungen
 
-- Unraid (amd64 — das Index-Image existiert nur für linux/amd64) mit
+- Unraid (amd64 — das Image ist amd64-only, E3) mit
   Docker-Compose-Unterstützung (Plugin „Docker Compose Manager" oder
   `docker compose` im Terminal).
 - Das Repo auf dem Server, z. B. unter `/mnt/user/appdata/acoustid-offline/repo`:
@@ -33,90 +39,89 @@ später einfach zum Voll-Bootstrap verlängert — nichts löschen.
   Fingerprint-Tagesdateien der Frühzeit haben mehrere GB), die Postgres
   wächst mit dem eingespielten Zeitraum.
 
-## 2. .env anlegen
+## 2. .env anlegen und die Mounts auf Unraid-Pfade legen
 
 ```bash
 cd /mnt/user/appdata/acoustid-offline/repo
 cp .env.example .env
-# AOFF_DB_PASSWORD setzen — einziger Pflichtwert
 ```
 
-## 3. Volumes auf Unraid-Pfade legen (docker-compose.override.yml)
+`AOFF_DB_PASSWORD` bleibt **leer**: der Entrypoint erzeugt das Passwort
+beim ersten Start selbst und legt es unter `/config/db-password` ab.
 
-Ohne Override landen die benannten Volumes im Docker-Image-Pfad von
-Unraid. Für den Probelauf sollen die Daten dahin, wo sie auch produktiv
-liegen (DECISIONS 2026-07-25: Index auf den SSD-Cache-Pool, Postgres aufs
-Array) — nur so misst der Lauf ehrlich. Datei
-`docker-compose.override.yml` neben die `docker-compose.yml` legen:
+Die fünf Mounts zeigen per Vorgabe auf Verzeichnisse neben der
+Compose-Datei; für den Probelauf sollen die Daten dahin, wo sie auch
+produktiv liegen (Index auf den SSD-Cache-Pool, Postgres aufs Array) —
+nur so misst der Lauf ehrlich. Dafür genügen fünf Zeilen in der `.env`:
 
-```yaml
-# docker-compose.override.yml — Unraid-Pfade für den Probelauf.
-# Hinweis: /mnt/user/... läuft durch den FUSE-Layer (shfs). Für die
-# Postgres besser einen exklusiven Share oder direkten Disk-/Pool-Pfad
-# verwenden (z. B. /mnt/disk1/..., /mnt/cache/...), sonst misst der
-# Probelauf den FUSE-Overhead mit.
-services:
-  db:
-    volumes:
-      # Achtung PG 18: Mountpunkt ist das Elternverzeichnis
-      # /var/lib/postgresql, NICHT .../data (siehe docker-compose.yml).
-      - /mnt/disk1/appdata/acoustid-offline/db:/var/lib/postgresql
-  index:
-    volumes:
-      # SSD-Cache-Pool; Verzeichnis vorher anlegen und chownen:
-      #   mkdir -p /mnt/cache/appdata/acoustid-offline/index
-      #   chown -R 6081:6081 /mnt/cache/appdata/acoustid-offline/index
-      # (NICHT 99:100 — das Image läuft als UID/GID 6081.)
-      - /mnt/cache/appdata/acoustid-offline/index:/var/lib/acoustid-index
-  importer:
-    volumes:
-      - /mnt/user/appdata/acoustid-offline/dumps:/data/dumps
-      # Index-Verzeichnis zusätzlich read-only in den Importer mounten:
-      # nur dann kann der Report die Index-Bytegröße messen
-      # (--index-dir unten) — wichtig für die query_hashes-Empfehlung.
-      - /mnt/cache/appdata/acoustid-offline/index:/index:ro
+```bash
+cat >> .env <<'EOF'
+# Cache-Pool
+MUSICMETA_CONFIG_DIR=/mnt/cache/appdata/acoustid-offline/config
+MUSICMETA_INDEX_DIR=/mnt/cache/appdata/acoustid-offline/index
+# Array (Hinweis: /mnt/user/... läuft durch den FUSE-Layer shfs — für die
+# Postgres besser einen direkten Disk-/Pool-Pfad, sonst misst der
+# Probelauf den FUSE-Overhead mit)
+MUSICMETA_DB_DIR=/mnt/disk1/appdata/acoustid-offline/db
+MUSICMETA_IMPORT_DIR=/mnt/user/appdata/acoustid-offline/import
+MUSICMETA_BACKUP_DIR=/mnt/user/appdata/acoustid-offline/backup
+EOF
+
+mkdir -p /mnt/cache/appdata/acoustid-offline/{config,index}
+mkdir -p /mnt/disk1/appdata/acoustid-offline/db
+mkdir -p /mnt/user/appdata/acoustid-offline/{import,backup}
 ```
 
 Die Pfade sind Beispiele — Pool-/Disk-Namen an das eigene System
-anpassen. Die Mountpunkte im Container (`:/var/lib/postgresql`,
-`:/var/lib/acoustid-index`, `:/data/dumps`) sind fest.
+anpassen. Die Mountpunkte **im** Container (`/config`, `/index`,
+`/data/db`, `/import`, `/backup`) sind fest. Die Eigentümer setzt der
+Entrypoint selbst (Postgres 999, Index 6081) — **nicht** 99:100
+(nobody/users) verwenden.
 
 ## 4. `index.query_hashes` VOR dem Lauf festlegen
 
 Der Wert bestimmt die Index-Größe (Default 120 ⇒ ~40–55 GB beim
 Vollbestand; 80 ⇒ ~30–37 GB) und **eine spätere Änderung heißt
 Index-Neuaufbau**. Wer nicht mit dem Default 120 laufen will, legt vor
-dem Start eine minimale `config.yaml` an und hängt sie über
-`ACOUSTID_WATCHDOG_DATA` ein:
+dem Start eine minimale `config.yaml` ins Konfigurationsverzeichnis:
 
 ```bash
-mkdir -p /mnt/user/appdata/acoustid-offline/watchdog
-printf 'index:\n  query_hashes: 120\n' > /mnt/user/appdata/acoustid-offline/watchdog/config.yaml
-echo 'ACOUSTID_WATCHDOG_DATA=/mnt/user/appdata/acoustid-offline/watchdog' >> .env
+printf 'index:\n  query_hashes: 120\n' \
+  > /mnt/cache/appdata/acoustid-offline/config/config.yaml
 ```
 
 Fehlt die Datei, gelten die Defaults aus ARCHITECTURE §6 — für den
 Probelauf mit 120 völlig in Ordnung.
 
-## 5. Bauen und Probelauf starten
+## 5. Bauen, starten, Probelauf fahren
 
-Solange es keine veröffentlichten Images gibt (Phase 29), wird der
-Importer lokal gebaut:
+Solange es keine veröffentlichten Images gibt, wird lokal gebaut — **ein**
+Image für alles (dauert beim ersten Mal einige Minuten, der Suchindex wird
+aus der Quelle kompiliert):
 
 ```bash
-docker compose --profile job build importer
+docker compose up -d --build
+docker compose logs -f app        # beim Erststart steht hier einmalig
+                                  # das Admin-Passwort
 ```
 
-Dann in einer `screen`-/`tmux`-Sitzung starten (der Lauf ist ein
-Vordergrund-Prozess; das JSON-Ergebnis geht in die Report-Datei, das
-Log auf stderr):
+Der Container startet mit **schlafendem** Stack. Für den Importer müssen
+Datenbank und Suchindex laufen:
+
+```bash
+docker compose exec app supervisorctl -c /etc/supervisor/supervisord.conf start db index
+docker compose exec app supervisorctl -c /etc/supervisor/supervisord.conf status
+```
+
+Dann in einer `screen`-/`tmux`-Sitzung starten (das JSON-Ergebnis geht in
+die Report-Datei, das Log auf stderr):
 
 **Schritt 1 — Smoke-Lauf** (Minuten; verifiziert nur die Kette):
 
 ```bash
-docker compose --profile job run --rm importer \
+docker compose exec app /app/.venv/bin/python -m acoustid_importer \
     --mode bootstrap --end-date 2011-08-31 --index-dir /index \
-    --report /data/dumps/probelauf-smoke.json
+    --report /import/probelauf-smoke.json
 ```
 
 **Schritt 2 — Messlauf** (derselbe Befehl, späteres `--end-date`; der
@@ -124,10 +129,14 @@ Lauf setzt dank `import_state` automatisch dort fort, wo der Smoke-Lauf
 aufgehört hat):
 
 ```bash
-docker compose --profile job run --rm importer \
+docker compose exec app /app/.venv/bin/python -m acoustid_importer \
     --mode bootstrap --end-date 2012-12-31 --index-dir /index \
-    --report /data/dumps/probelauf.json
+    --report /import/probelauf.json
 ```
+
+`--index-dir /index` misst die Index-Größe für die
+`query_hashes`-Empfehlung — im Ein-Container-Betrieb liegt das
+Verzeichnis ohnehin schon da, ein zusätzlicher Mount entfällt.
 
 Als Messlauf ist ein Zeitraum gut, der ein paar Stunden läuft. Jeder
 Lauf misst nur die **selbst** verarbeiteten Bytes und rechnet daraus
@@ -154,7 +163,7 @@ Die Antwort auf die Kernfragen steht im Report unter `projection`
 | `warnings`, `escaping_fallbacks`, `unknown_fields` | Auffälligkeiten — sollten leer/0 sein |
 
 Bitte **die Report-JSON(s) komplett** ins Projekt zurückgeben (Datei
-liegt unter `/mnt/user/appdata/acoustid-offline/dumps/`), dazu kurz:
+liegt im Import-Verzeichnis, s. `MUSICMETA_IMPORT_DIR`), dazu kurz:
 welcher Pfadtyp für die Postgres verwendet wurde (FUSE `/mnt/user` oder
 direkt) und ob das System nebenher belastet war. Daraus entstehen die
 realistische Zeitangabe fürs README (Phase 29) und die
@@ -162,10 +171,13 @@ realistische Zeitangabe fürs README (Phase 29) und die
 
 ## 7. Stolpersteine
 
-- **`acoustid-index` bleibt anfangs „unhealthy"/„starting"** — normal:
-  sein Healthcheck prüft `/<name>/_health` und wird erst grün, nachdem
-  der Importer den Index angelegt hat (der Importer wartet deshalb
-  bewusst nicht auf „healthy").
+- **`/status` meldet vor dem ersten Import nie „bereit"** — normal: der
+  interne Healthcheck der API prüft `/<name>/_health` des Suchindex, und
+  den legt erst der Importer an. Der Container-Healthcheck (`GET /status`)
+  ist davon unberührt und wird sofort grün.
+- **Der Container heißt jetzt `musicmeta-offline`**, und `supervisorctl`
+  zeigt die vier Prozesse: `docker compose exec app supervisorctl -c
+  /etc/supervisor/supervisord.conf status`.
 - **Exit-Code 3 (Plattenplatz-Guard):** gemessen wird das
   Dump-Verzeichnis; Reserve ist `update.min_free_gb` (Default 50 GiB,
   `--min-free-gb` überschreibt). Platz schaffen und denselben Befehl
@@ -177,7 +189,8 @@ realistische Zeitangabe fürs README (Phase 29) und die
   erneut starten, der Lauf setzt fort.
 - Eingespielte Tagesdateien werden gelöscht (Default) — im
   Dump-Verzeichnis liegen nur Prefetch-Vorlauf und aktuelle Datei.
-- Nach dem Probelauf **nichts wegräumen**: Volumes und `import_state`
-  sind der Anfang des echten Bootstraps. Nur wenn die Auswertung ein
+- Nach dem Probelauf **nichts wegräumen**: die Bind-Mounts und
+  `import_state` sind der Anfang des echten Bootstraps. (`docker compose
+  down -v` kann Bind-Mounts nicht löschen — das ist der Grund für E13.) Nur wenn die Auswertung ein
   anderes `index.query_hashes` ergibt, braucht der Index einen
   Neuaufbau (Vorgehen wird dann nachgereicht).
