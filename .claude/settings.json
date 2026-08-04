@@ -8,7 +8,10 @@
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git merge --ff-only:*)",
-      "Bash(gh run:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run watch:*)",
+      "Bash(gh run rerun:*)",
       "Bash(docker compose config:*)",
       "Bash(docker compose ps:*)"
     ]
@@ -48,6 +51,7 @@
     ],
     "SessionStart": [
       {
+        "matcher": "startup|resume",
         "hooks": [
           {
             "type": "command",
