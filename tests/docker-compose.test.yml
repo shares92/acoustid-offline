@@ -1,26 +1,74 @@
-# Override NUR fuer lokale Integrationstests — nie im Betrieb verwenden.
+# Test-Zusammenstellung — NUR fuer lokale Integrationstests und CI.
 #
-# Der Stack veroeffentlicht bewusst weder den Datenbank- noch den Index-Port
-# (ARCHITECTURE §3). Tests laufen aber auf dem Host, brauchen also einen Weg
-# hinein. Dieses Overlay veroeffentlicht beide ausschliesslich auf dem
-# Loopback-Interface:
+# Faehrt aus **demselben Image** wie der Betrieb ausschliesslich die beiden
+# Datendienste hoch, gegen die die Integrationstests laufen: PostgreSQL und
+# den selbst gebauten acoustid-index (supervisor/supervisord.dev.conf).
+# Waechter und API bleiben aus — sie werden hier nicht gebraucht.
 #
-#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
-#   AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
-#     uv run pytest --integration=require
-#   docker compose -f docker-compose.yml -f tests/docker-compose.test.yml down -v
+# Der Punkt daran ist nicht Bequemlichkeit: bis M1a liefen die
+# Integrationstests gegen fremde Images (postgres:18, Index per Digest).
+# Jetzt testen sie genau die Artefakte, die auch ausgeliefert werden —
+# insbesondere den aus der Quelle gebauten fpindex (M0-Analyse §2.3).
 #
-# Bewusst OHNE `--wait`: der Healthcheck des Index prueft /<name>/_health und
-# wird erst gruen, wenn der Index angelegt ist — das tun die Tests selbst.
+#   docker compose -f tests/docker-compose.test.yml up -d --build
+#   AOFF_DB_HOST=127.0.0.1 AOFF_DB_PASSWORD=test-wegwerf-passwort \
+#     AOFF_INDEX_URL=http://127.0.0.1:6081 uv run pytest --integration=require
+#   docker compose -f tests/docker-compose.test.yml down -v
 #
-# In der CI ist das Overlay unnoetig: dort stellt GitHub Postgres und Index
-# als Service-Container auf localhost bereit (.github/workflows/ci.yml).
+# Ist der Host-Port 5432 belegt (eine andere Instanz auf demselben Rechner),
+# beide Seiten umstellen:  AOFF_DB_PORT=15432 docker compose … up -d
+# und denselben Wert an pytest weiterreichen.
+#
+# Bewusst OHNE `--wait` in der Anleitung: der Index legt seinen Index nicht
+# selbst an — das tun die Tests.
+
+name: musicmeta-offline-test
 
 services:
-  db:
-    ports:
-      - "127.0.0.1:${AOFF_DB_PORT:-5432}:${AOFF_DB_PORT:-5432}"
 
-  index:
+  services:
+    image: musicmeta-offline:test
+    # amd64-only (E3): auf Apple Silicon laeuft das Image unter
+    # colima --vz-rosetta, aber Docker muss die Plattform kennen.
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: musicmeta-offline-test
+    # Der Entrypoint bleibt (er legt das Cluster an); nur die
+    # Prozessdefinition ist eine andere.
+    command: ["/opt/supervisor/bin/supervisord", "-c", "/etc/supervisor/supervisord.dev.conf"]
+    environment:
+      # Ein veroeffentlichter Port trifft die Container-Adresse, nicht das
+      # Loopback-Interface — im Betrieb ist genau das unerwuenscht, hier
+      # unvermeidlich.
+      ACOUSTID_BIND_ADDRESS: "0.0.0.0"
+      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:-test-wegwerf-passwort}
+      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
     ports:
+      # Nur auf dem Loopback des Wirts: die Dienste haben weder Auth noch
+      # TLS (ARCHITECTURE §3, §5.3).
+      - "127.0.0.1:${AOFF_DB_PORT:-5432}:5432"
       - "127.0.0.1:6081:6081"
+    volumes:
+      # Benannte Volumes sind hier richtig: `down -v` SOLL sie abraeumen —
+      # es ist Wegwerf-Zustand, kein Bestand (Umkehrung von E13, die fuer
+      # den Betrieb gilt).
+      - test-config:/config
+      - test-db:/data/db
+      - test-index:/index
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -U acoustid -d acoustid && /app/.venv/bin/python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:6081/_health', timeout=5).status==200 else 1)\"",
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  test-config:
+  test-db:
+  test-index:

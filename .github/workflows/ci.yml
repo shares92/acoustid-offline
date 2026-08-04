@@ -40,9 +40,13 @@ jobs:
         run: uv run pytest --integration=off
 
   integration-tests:
-    name: Integrationstests (Postgres 18 + acoustid-index)
+    name: Integrationstests (Service-Container)
     runs-on: ubuntu-latest
 
+    # Service-Container sind Testinfrastruktur und ausdruecklich von der
+    # Ein-Container-Regel ausgenommen (DECISIONS 2026-08-04, E16): sie sind
+    # der schnelle Weg, und der Lauf gegen das **eigene** Image steht im Job
+    # `image-tests` darunter.
     services:
       db:
         # Gleiche Major-Version wie im docker-compose.yml des Projekts.
@@ -117,6 +121,83 @@ jobs:
         # `not extension`: die Bit-Verifikation braucht einen anderen
         # Container (Postgres MIT pg_acoustid) und laeuft im Job darunter.
         run: uv run pytest -m "integration and not extension" --integration=require
+
+  image-tests:
+    name: Eigenes Image (selbst gebauter fpindex + Postgres 18)
+    runs-on: ubuntu-latest
+
+    # Der Job, ohne den die CI ein **anderes Artefakt** testen wuerde als das
+    # Release (M0-Analyse §2.3): bis M1a liefen die Integrationstests gegen
+    # den Upstream-Digest des Index. Hier laufen sie gegen das Binary, das
+    # tatsaechlich ausgeliefert wird.
+    env:
+      AOFF_DB_HOST: 127.0.0.1
+      AOFF_DB_PORT: "5432"
+      AOFF_DB_NAME: acoustid
+      AOFF_DB_USER: acoustid
+      AOFF_DB_PASSWORD: ci-wegwerf-passwort
+      AOFF_INDEX_URL: http://127.0.0.1:6081
+      AOFF_INDEX_NAME: main
+
+    steps:
+      - name: Repo auschecken
+        uses: actions/checkout@v7
+
+      - name: uv einrichten
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Abhaengigkeiten installieren
+        run: uv sync --all-packages
+
+      - name: Docker-Buildx einrichten
+        uses: docker/setup-buildx-action@v3
+
+      - name: Image bauen
+        # Der Zig-Build des Index und die apt-Schichten sollen nicht bei
+        # jedem Lauf neu entstehen.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: musicmeta-offline:test
+          cache-from: type=gha,scope=musicmeta-image
+          cache-to: type=gha,mode=max,scope=musicmeta-image
+
+      - name: Image-Groesse und eingebackene Versionen melden
+        run: |
+          docker image inspect musicmeta-offline:test --format 'Image-Groesse: {{ .Size }} Bytes'
+          docker image inspect musicmeta-offline:test \
+            --format 'acoustid-index: {{ index .Config.Labels "org.musicmeta.acoustid-index.commit" }}'
+          docker run --rm --entrypoint /bin/sh musicmeta-offline:test -c \
+            '/usr/lib/postgresql/18/bin/postgres --version; /opt/supervisor/bin/supervisord --version'
+
+      - name: Datendienste aus dem eigenen Image starten
+        run: |
+          docker compose -f tests/docker-compose.test.yml up -d --wait --wait-timeout 300
+          docker compose -f tests/docker-compose.test.yml ps
+
+      - name: Dump-Fixtures aus dem Cache holen
+        uses: actions/cache@v6
+        with:
+          path: tests/fixtures/acoustid-dumps
+          key: acoustid-dumps-${{ hashFiles('tests/fixtures/fetch_fixtures.py') }}
+
+      - name: Fehlende Dump-Fixtures nachladen
+        run: uv run python tests/fixtures/fetch_fixtures.py
+
+      - name: Integrationstests gegen das eigene Image
+        run: uv run pytest -m "integration and not extension" --integration=require
+
+      - name: Logs bei Fehlschlag
+        if: failure()
+        run: docker compose -f tests/docker-compose.test.yml logs
+
+      - name: Aufraeumen
+        if: always()
+        run: docker compose -f tests/docker-compose.test.yml down -v
 
   bit-verification:
     name: Bit-Verifikation des Rescorings (pg_acoustid)

@@ -1,243 +1,113 @@
-# docker-compose.yml — Stack von acoustid-offline (ARCHITECTURE §10).
+# docker-compose.yml — die ganze Instanz (HANDOFF v2 §3, M1b).
 #
-# Enthaelt die Dienste, die der Waechter bei Bedarf startet und stoppt:
-# api, importer (One-Shot-Job), db und index. Der Waechter selbst laeuft
-# dauerhaft aus docker-compose.watchdog.yml — bewusst getrennt, damit ein
-# `down` dieses Stacks die Steuerung nicht mit abraeumt.
+# EIN Service. Was frueher fuenf Container waren (watchdog, api, db, index,
+# importer), sind jetzt Prozesse in einem Container; gesteuert werden sie
+# von supervisord unter `tini` als PID 1 (supervisor/supervisord.conf).
+# Der Waechter startet und stoppt sie ueber den supervisord-Socket —
+# **kein docker.sock mehr** (Sicherheitsgewinn, DECISIONS 2026-08-04).
+#
+#   docker compose up -d --build
+#   docker compose logs -f app        # beim Erststart steht hier das
+#                                     # Admin-Passwort (einmalig!)
 #
 # Werte kommen aus der .env im selben Verzeichnis (Vorlage: .env.example,
-# verbindliches Schema: shared/shared/env.py). Die .env wird nie committet.
+# verbindliches Schema: shared/shared/env.py). Die .env wird nie committet —
+# und ist seit M1b **optional**: alle Vorgabewerte beschreiben genau diese
+# Aufstellung, und das Datenbank-Passwort erzeugt der Entrypoint (E16).
 #
-# Stand Phase 9: `db`, `index`, `importer` (Profil `job`) und `api`.
+# ACHTUNG, Bind-Mounts statt benannter Volumes (E13): `docker compose down -v`
+# kann sie nicht loeschen. Bei benannten Volumes haette derselbe Befehl
+# spaeter bis zu 2 TB Bestand mitgenommen — die v1-Falle (LEARNINGS
+# „Compose: gleicher Projektname teilt Named Volumes").
+#
+# Cache oder Array — die Aufteilung entscheidet, ob das Array je schlaeft:
+#
+#   ./config   Cache   config.yaml, SQLite, Lookup-Cache, Logs, DB-Passwort
+#   ./index    Cache   Suchindex (~70 GB einplanen; Kaltstart auf HDD = Timeout)
+#   ./data/db  Array   PostgreSQL
+#   ./import   Array   Dump-Downloads (mehrere GB Vorlauf)
+#   ./backup   Array   Sicherungen (Job ab M2.5)
+#
+# Auf Unraid stattdessen Share-Pfade eintragen (README) — und das Image
+# selbst gehoert ebenfalls auf den Cache, sonst haelt der laufende Container
+# das Array wach.
 
-name: acoustid-offline
+name: musicmeta-offline
 
 services:
 
-  db:
-    # AcoustID-Postgres (Stack, Array). Offizielles Image, aktuelle stabile
-    # Major-Version; Minor-Updates kommen ueber ein `pull` des Major-Tags.
-    image: postgres:18
-    container_name: acoustid-db
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${AOFF_DB_NAME:-acoustid}
-      POSTGRES_USER: ${AOFF_DB_USER:-acoustid}
-      # Pflichtwert: ohne Passwort bricht `up` mit dieser Meldung ab.
-      POSTGRES_PASSWORD: ${AOFF_DB_PASSWORD:?AOFF_DB_PASSWORD fehlt - bitte in der .env setzen}
-      # Kein POSTGRES_HOST_AUTH_METHOD=trust: auch im internen Netz mit Passwort.
-    command: ["postgres", "-c", "port=${AOFF_DB_PORT:-5432}"]
-    # Nur im Compose-Netz erreichbar, kein Host-Publish (ARCHITECTURE §3):
-    # die Datenbank spricht ausschliesslich mit api und importer.
-    expose:
-      - "${AOFF_DB_PORT:-5432}"
-    volumes:
-      # Achtung, Aenderung ab Postgres 18: das Image deklariert
-      # /var/lib/postgresql als Volume und legt die Daten darunter in
-      # /var/lib/postgresql/18/docker ab (frueher /var/lib/postgresql/data).
-      # Der Mountpunkt ist deshalb das Elternverzeichnis.
-      - db-data:/var/lib/postgresql
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${AOFF_DB_USER:-acoustid} -d ${AOFF_DB_NAME:-acoustid} -p ${AOFF_DB_PORT:-5432}",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      # Erststart legt das Cluster an; danach greift der Intervall-Check.
-      start_period: 60s
-
-  index:
-    # Fingerprint-Suchindex (ARCHITECTURE §5.3). Das Projekt hat keinen
-    # Release-Prozess und nur das bewegliche Tag `main`, deshalb per Digest
-    # gepinnt (DECISIONS 2026-07-25 "Index-Image per Digest gepinnt").
-    # Tag zum Digest: main (Stand 2025-10-27, Commit 6bc929a).
-    # Aktualisieren:  docker manifest inspect --verbose \
-    #                   ghcr.io/acoustid/acoustid-index:main | grep -m1 digest
-    # Nur linux/amd64 — es gibt keine Manifest-Liste und keinen arm64-Build.
-    image: ghcr.io/acoustid/acoustid-index@sha256:c27a992649785dfd5385f2c7702a1b3942dbe609635aa79229a8ae520abdf578
-    container_name: acoustid-index
-    restart: unless-stopped
-    # Das Image setzt USER acoustid (UID/GID 6081); hier noch einmal
-    # ausdruecklich, damit die Rechte des Volumes nachvollziehbar bleiben.
-    # Auf Unraid den Share entsprechend chownen — NICHT 99:100 (nobody/users).
-    user: "6081:6081"
-    # Kein Host-Publish: der Index hat weder Auth noch TLS und darf das Netz
-    # nie sehen (ARCHITECTURE §3, §5.3). Zugriff nur aus dem Compose-Netz;
-    # fuer lokale Tests siehe tests/docker-compose.test.yml.
-    expose:
-      - "6081"
-    volumes:
-      # VOLUME-Pfad des Images. Erwartete Groesse 40–55 GB, Volume ~70 GB.
-      # Unraid: auf SSD-Cache-Pool, Share Prefer/Only: Cache (DECISIONS 2026-07-25)
-      - index-data:/var/lib/acoustid-index
-    healthcheck:
-      # Im Image gibt es weder curl noch nc noch python — aber GNU wget 1.21.4
-      # (empirisch im gepinnten Image geprueft). `--spider` schickt ein HEAD
-      # und liefert Exitcode 0 bei 200, 8 bei 404.
-      #
-      # Geprueft wird bewusst /<index>/_health und nicht /_health: das globale
-      # /_health prueft inhaltlich nichts (auch ein Server ohne jeden Index
-      # antwortet 200). Folge: der Dienst wird erst gesund, wenn der Index
-      # angelegt ist (`ensure_index` beim Bootstrap/Import). Dienste, die den
-      # Index erst anlegen (importer), duerfen daher nur mit
-      # `condition: service_started` von ihm abhaengen — `service_healthy`
-      # nur fuer Leser wie die api.
-      test:
-        [
-          "CMD",
-          "wget",
-          "--quiet",
-          "--tries=1",
-          "--timeout=5",
-          "--spider",
-          "http://127.0.0.1:6081/${AOFF_INDEX_NAME:-main}/_health",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      # Der Start liest den kompletten Index in den Page-Cache (MAP_POPULATE):
-      # produktiv ~15 min bei 40–55 GB (Forschungsbericht §"mmap-Verhalten").
-      # Solange zaehlen Fehlversuche nicht; ein Treffer macht sofort gesund.
-      start_period: 900s
-
-  importer:
-    # One-Shot-Job: Delta-Download, DB-Import, Index-Feed (ARCHITECTURE §5.2,
-    # §5.3). Laeuft NICHT bei `up` — er gehoert dem Profil `job` an und wird
-    # gezielt gestartet:
-    #
-    #   docker compose --profile job run --rm importer                  # taeglich
-    #   docker compose --profile job run --rm importer --mode bootstrap # Erst-Import
-    #   docker compose --profile job run --rm importer \
-    #     --mode bootstrap --end-date 2011-12-31 --report /data/dumps/probelauf.json
-    #
-    # Exit-Codes und Report-Format: docs/importer-job.md.
-    #
-    # Zwei Compose-Variablen bewusst OHNE `AOFF_`-Praefix (das ist der
-    # Variablensatz von shared/shared/env.py, und der Container bekaeme sie
-    # sonst als „unbekannt" gemeldet): ACOUSTID_IMPORTER_IMAGE waehlt ein
-    # anderes Image, ACOUSTID_WATCHDOG_DATA ein Host-Verzeichnis fuer die
-    # config.yaml des Waechters.
-    profiles: ["job"]
-    image: ${ACOUSTID_IMPORTER_IMAGE:-ghcr.io/shares92/acoustid-offline-importer:latest}
+  app:
+    image: ${MUSICMETA_IMAGE:-ghcr.io/shares92/acoustid-offline:latest}
+    # Das Release ist amd64-only (E3); der aarch64-Spike steht vor M9 an.
+    # Auf Apple Silicon laeuft es unter colima --vz-rosetta.
+    platform: linux/amd64
     build:
       context: .
-      dockerfile: importer/Dockerfile
-    container_name: acoustid-importer
-    # Ein Job wird nicht neugestartet: sein Exit-Code ist das Ergebnis, und
-    # der Waechter entscheidet, ob wiederholt wird (Invariante §8.4).
-    restart: "no"
-    depends_on:
-      db:
-        condition: service_healthy
-      index:
-        # Bewusst `service_started`: der Healthcheck des Index prueft
-        # /<name>/_health und wird erst gruen, wenn der Index existiert —
-        # angelegt wird er von genau diesem Job (Phase-5-Vermerk).
-        condition: service_started
-    environment:
-      AOFF_DB_HOST: ${AOFF_DB_HOST:-acoustid-db}
-      AOFF_DB_PORT: ${AOFF_DB_PORT:-5432}
-      AOFF_DB_NAME: ${AOFF_DB_NAME:-acoustid}
-      AOFF_DB_USER: ${AOFF_DB_USER:-acoustid}
-      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:?AOFF_DB_PASSWORD fehlt - bitte in der .env setzen}
-      AOFF_INDEX_URL: ${AOFF_INDEX_URL:-http://acoustid-index:6081}
-      AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-main}
-      AOFF_DATA_DIR: /data
-      AOFF_DUMP_DIR: /data/dumps
-      # Die Laufzeit-Konfiguration gehoert dem Waechter und wird hier nur
-      # gelesen (`update.min_free_gb`, `index.query_hashes`) — deshalb ein
-      # eigener, read-only gemounteter Pfad. Fehlt die Datei, gelten die
-      # Defaults aus ARCHITECTURE §6.
-      AOFF_CONFIG_PATH: /watchdog/config.yaml
-      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
-    volumes:
-      # Arbeitsverzeichnis der Tagesdateien. Der Job loescht jede Datei nach
-      # dem Commit, es liegen also nur der Vorlauf und die aktuelle darin;
-      # trotzdem grosszuegig planen (eine Fingerprint-Tagesdatei der
-      # Fruehzeit hat mehrere GB) — der Plattenplatz-Guard misst genau hier
-      # (Invariante §8.8).
-      - dump-data:/data/dumps
-      # Datenverzeichnis des Waechters (Cache-Pool, docker-compose.watchdog.yml
-      # ab Phase 14). Ueber ACOUSTID_WATCHDOG_DATA auf einen Host-Pfad umstellbar.
-      - ${ACOUSTID_WATCHDOG_DATA:-watchdog-data}:/watchdog:ro
-
-  api:
-    # AcoustID-kompatible Web-API (ARCHITECTURE §7). Laeuft, solange der
-    # Stack wach ist; der Waechter proxyt davor und setzt Auth und
-    # Rate-Limit durch — deshalb KEIN `ports:` (ARCHITECTURE §3, §7).
-    image: ${ACOUSTID_API_IMAGE:-ghcr.io/shares92/acoustid-offline-api:latest}
-    build:
-      context: .
-      dockerfile: api/Dockerfile
-    container_name: acoustid-api
+      dockerfile: Dockerfile
+    container_name: musicmeta-offline
+    # Faellt der Container aus, ist die Instanz von aussen nicht mehr
+    # erreichbar und niemand weckt mehr etwas.
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      index:
-        # Anders als der Importer ist die api ein reiner Leser: sie legt den
-        # Index nicht an und darf deshalb auf den Healthcheck warten. Der
-        # wird erst gruen, wenn `ensure_index()` gelaufen ist — das macht der
-        # Importer beim Bootstrap (Phase-5-Vermerk).
-        condition: service_healthy
-    expose:
-      - "8080"
+    # Der einzige veroeffentlichte Port des ganzen Projekts (§3, §6):
+    # API-Proxy und Admin-UI unter /admin teilen ihn sich. Postgres (5432),
+    # Suchindex (6081) und API (8081) lauschen nur auf dem Loopback des
+    # Containers. Bei Exponierung nach aussen zwingend auth.mode=apikey +
+    # TLS-Proxy davor.
+    ports:
+      - "${AOFF_PORT:-8080}:${AOFF_PORT:-8080}"
     environment:
-      AOFF_DB_HOST: ${AOFF_DB_HOST:-acoustid-db}
-      AOFF_DB_PORT: ${AOFF_DB_PORT:-5432}
-      AOFF_DB_NAME: ${AOFF_DB_NAME:-acoustid}
-      AOFF_DB_USER: ${AOFF_DB_USER:-acoustid}
-      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:?AOFF_DB_PASSWORD fehlt - bitte in der .env setzen}
-      AOFF_INDEX_URL: ${AOFF_INDEX_URL:-http://acoustid-index:6081}
-      AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-main}
-      AOFF_DATA_DIR: /data
-      # Die Laufzeit-Konfiguration gehoert dem Waechter und wird hier nur
-      # gelesen. Wichtig ist `index.query_hashes`: die Suche muss denselben
-      # Query-Extrakt bilden wie der Importer beim Indexieren, sonst findet
-      # sie nichts. Fehlt die Datei, gelten die Defaults aus ARCHITECTURE §6.
-      AOFF_CONFIG_PATH: /watchdog/config.yaml
+      AOFF_PORT: ${AOFF_PORT:-8080}
       AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
+      # Die Pfade der Mounts unten. Sie stehen hier ausdruecklich, obwohl
+      # sie den Vorgabewerten entsprechen: wer einen Mount verlegt, sieht
+      # an einer Stelle, was mitzuziehen ist.
+      AOFF_DATA_DIR: /config
+      AOFF_DUMP_DIR: /import
+      AOFF_DB_DATA_ROOT: /data/db
+      # Bewusst OHNE Default: leer heisst „nicht gesetzt", und dann leitet
+      # `EnvSettings` den Wert ab bzw. der Entrypoint erzeugt ihn
+      # (Leerstring-Konvention, DECISIONS 2026-08-04 M1a).
+      AOFF_API_BASE_URL: ${AOFF_API_BASE_URL:-}
+      AOFF_API_HEALTH_URL: ${AOFF_API_HEALTH_URL:-}
+      AOFF_API_PORT: ${AOFF_API_PORT:-}
+      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:-}
+      AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-main}
+      # Container-Werte ohne AOFF_-Praefix (sie gehoeren nicht ins Schema
+      # der Anwendung, s. .env.example).
+      ACOUSTID_INDEX_DIR: /index
+      ACOUSTID_BACKUP_DIR: /backup
     volumes:
-      # Datenverzeichnis des Waechters (Cache-Pool, docker-compose.watchdog.yml
-      # ab Phase 14). Ueber ACOUSTID_WATCHDOG_DATA auf einen Host-Pfad umstellbar.
-      - ${ACOUSTID_WATCHDOG_DATA:-watchdog-data}:/watchdog:ro
+      # Die Pfade sind ueber Variablen umstellbar (Muster aus v1:
+      # ACOUSTID_WATCHDOG_DATA) — auf Unraid stehen hier Share-Pfade, im
+      # E2E-Test Wegwerf-Verzeichnisse. Bewusst OHNE `AOFF_`-Praefix: das
+      # ist der Variablensatz der Anwendung, und der Container bekaeme sie
+      # sonst als „unbekannt" gemeldet.
+      # --- Cache-Pool ---
+      - ${MUSICMETA_CONFIG_DIR:-./config}:/config
+      - ${MUSICMETA_INDEX_DIR:-./index}:/index
+      # --- Array ---
+      - ${MUSICMETA_DB_DIR:-./data/db}:/data/db
+      - ${MUSICMETA_IMPORT_DIR:-./import}:/import
+      - ${MUSICMETA_BACKUP_DIR:-./backup}:/backup
+    # Grosszuegig: Docker killt sonst nach 10 s mitten im geordneten
+    # Herunterfahren. supervisord stoppt die Prozesse der Reihe nach, und
+    # Postgres darf seinen Checkpoint schreiben (stopwaitsecs=300).
+    stop_grace_period: 6m
     healthcheck:
-      # Der interne Healthcheck aus Phase 15 (`acoustid_api.health`): er
-      # prueft Postgres UND Suchindex und ist damit die einzige ehrliche
-      # Lebendpruefung dieses Dienstes — „uvicorn lauscht" heisst nach
-      # einem Kaltstart noch lange nicht „bereit". Denselben Endpunkt
-      # benutzt der Waechter als Weck-Bereitschaftsfrage; hier macht er
-      # zusaetzlich `docker ps` aussagekraeftig.
-      #
-      # Wie beim Waechter (DECISIONS 2026-08-01, Punkt 9): python/urllib,
-      # das Basisimage bringt weder curl noch wget mit.
+      # `/status` kommt ohne Stack aus und weckt garantiert nichts (§7,
+      # §8.2) — damit ist es die einzige richtige Lebendpruefung dieses
+      # Containers. **unhealthy heisst: der Waechter ist tot, NICHT: das
+      # System schlaeft** (K8 der M0-Analyse). Das Basisimage bringt Python
+      # mit; curl und wget nicht.
       test:
         [
           "CMD",
           "/app/.venv/bin/python",
           "-c",
-          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/_health', timeout=5).status==200 else 1)",
+          "import urllib.request,os,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('AOFF_PORT','8080')+'/status', timeout=5).status==200 else 1)",
         ]
-      interval: 15s
+      interval: 30s
       timeout: 10s
       retries: 3
-      # Der Dienst oeffnet seinen Postgres-Pool mit 30 s Geduld und prueft
-      # danach den MB-Spiegel; solange zaehlen Fehlversuche nicht.
-      start_period: 60s
-
-volumes:
-  db-data:
-  # Unraid: auf SSD-Cache-Pool, Share Prefer/Only: Cache (DECISIONS 2026-07-25)
-  index-data:
-  # Arbeitsverzeichnis des Importers (Tagesdateien). Braucht Platz fuer den
-  # Prefetch-Vorlauf, nicht fuer die ganzen 414 GB — eingespielte Dateien
-  # werden geloescht (--keep-dumps haelt sie).
-  dump-data:
-  # Datenverzeichnis des Waechters auf dem Cache-Pool (seit Phase 14 in
-  # docker-compose.watchdog.yml definiert — gleicher Projektname, also
-  # dasselbe Volume). api und importer haengen es read-only unter /watchdog
-  # ein und lesen daraus ausschliesslich die config.yaml.
-  watchdog-data:
+      # Erststart legt das Postgres-Cluster an (initdb) — das dauert.
+      start_period: 120s
