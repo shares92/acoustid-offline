@@ -17,8 +17,10 @@ da (Invariante §8.2):
 Seit Phase 15 kommen die drei Dinge dazu, mit denen der Waechter den Stack
 tatsaechlich steuert — und nur diese drei sprechen ueberhaupt nach aussen:
 
-* **Docker-Steuerung** (:mod:`acoustid_watchdog.docker`) — der Unix-Socket,
-  ueber den Stack-Container starten und stoppen (Invariante §8.1).
+* **Prozess-Steuerung** (:mod:`acoustid_watchdog.process` und
+  :mod:`acoustid_watchdog.stack`) — der Unix-Socket von supervisord, ueber
+  den Postgres, Suchindex und API starten und stoppen (Invariante §8.1).
+  Seit M1b; bis dahin war es der Docker-Socket.
 * **Weck-Koordination** (:mod:`acoustid_watchdog.wake`) — haelt Anfragen,
   bis der Stack bereit ist; genau ein Weckvorgang, egal wie viele warten.
 * **Reverse-Proxy** (:mod:`acoustid_watchdog.proxy`) — der Weg von
@@ -68,8 +70,7 @@ from acoustid_watchdog.admin import ensure_admin_user
 from acoustid_watchdog.auth import ApiKeyAuthenticator
 from acoustid_watchdog.cache import LookupCache
 from acoustid_watchdog.config_store import ConfigStore
-from acoustid_watchdog.control import ProcessGroupController
-from acoustid_watchdog.docker import DockerClient
+from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel, log_event
 from acoustid_watchdog.lifecycle import (
     ActivityTracker,
@@ -77,14 +78,19 @@ from acoustid_watchdog.lifecycle import (
     IdleStopper,
     StatePoller,
 )
+from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.ratelimit import IpRateLimiter
 from acoustid_watchdog.reload import ReloadMarker
+from acoustid_watchdog.stack import (
+    ServiceGroupController,
+    check_postgres_version,
+    default_gates,
+)
 from acoustid_watchdog.state import StackStateTracker, StackStatus
 from acoustid_watchdog.store import Database
 from acoustid_watchdog.wake import (
     ReadinessProbe,
-    StackController,
     WakeCoordinator,
 )
 from shared.config import Config
@@ -131,7 +137,8 @@ class WatchdogService:
         config_store: ConfigStore,
         state: StackStateTracker | None = None,
         *,
-        docker: DockerClient | None = None,
+        supervisor: SupervisorClient | None = None,
+        stack: ProcessGroupController | None = None,
         probe: ReadinessProbe | None = None,
         proxy: ReverseProxy | None = None,
         cache: LookupCache | None = None,
@@ -142,9 +149,12 @@ class WatchdogService:
             db: Zustandsdatenbank (Cache-Pool).
             config_store: Laufzeit-Konfiguration.
             state: Stack-Zustand; ohne Angabe ``schlafend``.
-            docker: Docker-Steuerung. Ohne Angabe entsteht ein Client auf
-                den fest verdrahteten Socket-Pfad; Tests geben eine eigene
-                Fassung mit.
+            supervisor: Steuerweg zu supervisord. Ohne Angabe entsteht ein
+                Client auf den fest verdrahteten Socket-Pfad; Tests geben
+                eine eigene Fassung mit.
+            stack: Fertige Prozessgruppen-Steuerung. Ohne Angabe entsteht
+                die Betriebsfassung (:class:`ServiceGroupController` mit
+                den Gates aus den Bootstrap-Werten).
             probe: Bereitschaftsfrage an den API-Healthcheck.
             proxy: Reverse-Proxy auf den API-Dienst.
             cache: Lookup-Cache; ohne Angabe die Vorgabedatei im
@@ -161,7 +171,7 @@ class WatchdogService:
         # Zustandsdatenbank kennt.
         self.state.on_transition = self._log_transition
 
-        self.docker = docker if docker is not None else DockerClient()
+        self.supervisor = supervisor if supervisor is not None else SupervisorClient()
         # Beide Adressen kommen aus den Bootstrap-Werten (``AOFF_API_*``)
         # und nicht mehr aus Modulkonstanten: im Ein-Container-Betrieb ist
         # der API-Dienst nicht mehr ``acoustid-api:8080``, sondern ein
@@ -176,8 +186,16 @@ class WatchdogService:
 
         # Der einzige Ort, an dem die konkrete Steuerung gewaehlt wird —
         # gehalten wird sie nur ueber ihr Protokoll. Der Ein-Container-Umbau
-        # tauscht damit genau diese eine Zeile (HANDOFF v2, M1b).
-        self.stack: ProcessGroupController = StackController(self.docker)
+        # war damit genau diese eine Zeile (HANDOFF v2, M1b).
+        self.stack: ProcessGroupController = (
+            stack
+            if stack is not None
+            else ServiceGroupController(
+                self.supervisor,
+                gates=default_gates(settings),
+                version_guard=self._guard_postgres_version,
+            )
+        )
         self.wake = WakeCoordinator(
             self.stack,
             self.probe,
@@ -252,10 +270,17 @@ class WatchdogService:
                 EventLevel.WARNING,
                 "Erststart: Admin-Passwort erzeugt und ins Containerlog geschrieben",
             )
+        # Der Versions-Drift-Guard (E14) meldet sich beim Start **einmal**
+        # laut — und danach bei jedem Weckversuch (`version_guard` der
+        # Steuerung). Der Waechter laeuft trotzdem weiter: nur so sieht der
+        # Betreiber den Befund ueberhaupt (`/status`, Admin-UI, Ereignis-Log).
+        self._report_postgres_version_drift()
+
         # Der Stack-Zustand liegt nur im Speicher (DECISIONS 2026-08-01,
-        # Punkt 6) und wird deshalb bei jedem Start neu aus Docker erhoben —
-        # der Betreiber kann den Stack zwischenzeitlich von Hand gestartet
-        # haben. Schlaegt das fehl, laeuft der Waechter trotzdem weiter.
+        # Punkt 6) und wird deshalb bei jedem Start neu aus der Steuerung
+        # erhoben — der Betreiber kann den Stack zwischenzeitlich von Hand
+        # gestartet haben. Schlaegt das fehl, laeuft der Waechter trotzdem
+        # weiter.
         stack_state = self.wake.refresh()
 
         self.log_event(
@@ -270,7 +295,7 @@ class WatchdogService:
         return self
 
     def close(self) -> None:
-        """Gibt Zustandsdatenbank, Cache, Docker-Client und Probe frei.
+        """Gibt Zustandsdatenbank, Cache, Supervisor-Client und Probe frei.
 
         Der Proxy haelt einen **asynchronen** Pool und wird deshalb in
         :meth:`aclose` geschlossen — das ist der Weg, den der Lifespan der
@@ -278,7 +303,7 @@ class WatchdogService:
         """
         self.db.close()
         self.cache.close()
-        self.docker.close()
+        self.supervisor.close()
         self.probe.close()
 
     async def aclose(self) -> None:
@@ -358,6 +383,56 @@ class WatchdogService:
                 source=CACHE_EVENT_SOURCE,
             )
         return removed
+
+    # --- Versions-Drift der Datenbank (E14) ---------------------------------
+
+    def _guard_postgres_version(self) -> None:
+        """Verweigert den Start, wenn der Bestand zu einer anderen Major gehoert.
+
+        Genau eine Major-Version steckt im Image (E14). Ein Postgres 18
+        startet auf einem 17er-Datenverzeichnis gar nicht erst — die
+        Fehlermeldung stuende aber nur im Prozesslog, und der Stack ginge
+        wortlos in ``fehler``. Deshalb wird hier **vor** dem ersten
+        ``startProcess`` geprueft: der Weckvorgang scheitert mit einem Satz,
+        den der Betreiber lesen kann.
+
+        Raises:
+            ProcessControlError: Es liegt ein Bestand einer anderen Major
+                vor.
+        """
+        drift = check_postgres_version(self.settings.db_data_root, self.settings.pg_major)
+        if drift is None:
+            return
+        raise ProcessControlError(str(drift))
+
+    def _report_postgres_version_drift(self) -> None:
+        """Schreibt einen Drift-Befund beim Start ins Log und ins Ereignis-Log.
+
+        Ohne diese Meldung merkte der Betreiber den Drift erst beim ersten
+        Weckversuch — also moeglicherweise Stunden nach dem Update, und nur
+        als 503. Eine Notification wird daraus in M2.5 (E14).
+        """
+        drift = check_postgres_version(self.settings.db_data_root, self.settings.pg_major)
+        if drift is None:
+            return
+        _LOG.error(
+            "Versions-Drift der Datenbank",
+            extra={
+                "expected_major": drift.expected,
+                "found_majors": list(drift.found),
+                "db_data_root": str(self.settings.db_data_root),
+            },
+        )
+        self.log_event(
+            EventLevel.ERROR,
+            "Versions-Drift der Datenbank — Start verweigert",
+            {
+                "expected_major": drift.expected,
+                "found_majors": list(drift.found),
+                "detail": str(drift),
+            },
+            source=STACK_EVENT_SOURCE,
+        )
 
     def log_event(
         self,

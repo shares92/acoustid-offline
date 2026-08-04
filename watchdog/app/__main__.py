@@ -30,8 +30,10 @@ def main() -> None:
     uvicorn.run(
         build_app,
         factory=True,
-        # An alle Schnittstellen des Containers; veroeffentlicht wird der
-        # Port von Compose (docker-compose.watchdog.yml).
+        # An alle Schnittstellen des Containers — der Waechter ist der
+        # einzige Dienst, der von aussen erreichbar sein SOLL (§3);
+        # veroeffentlicht wird der Port von Compose. Die drei anderen
+        # Prozesse binden dagegen ausdruecklich das Loopback.
         host="0.0.0.0",
         port=settings.port,
         log_level=settings.log_level.lower(),

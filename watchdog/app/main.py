@@ -1,15 +1,17 @@
 """HTTP-Schicht des Waechters (FastAPI) — ARCHITECTURE §4, §7.
 
-Stand Phase 18 traegt sie zwei Routen:
+Stand M1b traegt sie drei Routen:
 
 ===============  ======  =================================================
 ``/status``      GET     Stack-Zustand, Datenstand, letzter Update-Lauf,
                          Version — **weckt nie** (§7, §8.2), und **ohne
                          Auth und ohne Rate-Limit**
 ``/v2/{...}``    alle    Rate-Limit, Key-Pruefung, Lookup-Cache,
-                         Reverse-Proxy auf ``acoustid-api``, **mit
+                         Reverse-Proxy auf den API-Dienst, **mit
                          Weck-Logik** (§7 „Fehlerverhalten") und der
                          Aktivitaetsmeldung fuer den Idle-Stopp
+``/_health``     alle    **404** — der interne Healthcheck des API-Dienstes
+                         wird nie weitergereicht (:data:`DENIED_PATHS`)
 ===============  ======  =================================================
 
 Seit Phase 17 weckt `/v2/*` nur noch dann, wenn die Antwort nicht schon im
@@ -89,7 +91,7 @@ from shared.config import Config
 from shared.env import EnvSettings
 from shared.models import AuthMode
 
-__all__ = ["PROXY_METHODS", "SERVICE_NAME", "build_app", "create_app"]
+__all__ = ["DENIED_PATHS", "PROXY_METHODS", "SERVICE_NAME", "build_app", "create_app"]
 
 _LOG = logging.getLogger(__name__)
 
@@ -100,6 +102,20 @@ SERVICE_NAME: Final = "acoustid-watchdog"
 #: Methoden, die der Proxy annimmt. Absichtlich alle gaengigen: welche
 #: unter ``/v2`` erlaubt sind, sagt die API (siehe Modul-Docstring).
 PROXY_METHODS: Final = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+
+#: Pfade, die der Waechter **nie** weiterreicht — mit ausdruecklicher Route
+#: statt „faellt hinten runter".
+#:
+#: Heute gaebe es sie ohnehin nicht: der Proxy kennt nur ``/v2/{path}``, und
+#: alles andere ist 404. Genau darin liegt aber das Risiko (R12 der
+#: M0-Analyse): der interne Healthcheck des API-Dienstes
+#: (``acoustid_api.health``) ist **nur deshalb** geschuetzt. Die
+#: Scope-Erweiterung (M3-M7) bringt vier weitere Pfadfamilien —
+#: ``/caa/*``, ``/discogs/*``, ``/tadb/*``, ``/v1/*`` —, und spaetestens
+#: eine breitere Allowlist wuerde ``/_health`` erreichbar machen. Die Regel
+#: steht deshalb jetzt da, mitsamt Test: sie schreibt die Invariante fest,
+#: statt sie einem Routing-Zufall zu ueberlassen.
+DENIED_PATHS: Final = ("/_health",)
 
 
 def create_app(service: WatchdogService | None = None) -> FastAPI:
@@ -154,11 +170,34 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
     async def status(request: Request) -> JSONResponse:
         return await _status(request)
 
+    for denied_path in DENIED_PATHS:
+        # Vor der Proxy-Route registriert: FastAPI nimmt die erste passende,
+        # und eine spaetere Allowlist darf diese hier nicht ueberholen.
+        app.add_api_route(
+            denied_path,
+            _denied,
+            methods=PROXY_METHODS,
+            include_in_schema=False,
+        )
+
     @app.api_route("/v2/{path:path}", methods=PROXY_METHODS)
     async def proxy(request: Request, path: str) -> Response:
         return await _proxy(request)
 
     return app
+
+
+async def _denied(request: Request) -> Response:
+    """Ein gesperrter Pfad — 404, ohne den Stack anzufassen.
+
+    **404 und nicht 403**: der Waechter gibt nach aussen nicht preis, dass
+    es diesen Endpunkt intern gibt (dieselbe Haltung wie bei den
+    503-Antworten, die keine Prozessnamen nennen). Und ausdruecklich ohne
+    Rate-Limit, Auth, Cache und Weck-Logik: die Antwort steht fest, bevor
+    irgendetwas geprueft werden muesste.
+    """
+    _LOG.info("Gesperrter Pfad abgewiesen", extra={"path": request.url.path})
+    return JSONResponse({"status": "error", "error": {"message": "not found"}}, status_code=404)
 
 
 async def _status(request: Request) -> JSONResponse:

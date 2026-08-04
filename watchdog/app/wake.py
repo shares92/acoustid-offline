@@ -1,31 +1,32 @@
 """Wake-on-request: eine Anfrage weckt den Stack (ARCHITECTURE §3, §7).
 
-Der Kern des On-Demand-Betriebs. Drei Bausteine, bewusst getrennt:
+Der Kern des On-Demand-Betriebs. Zwei Bausteine, bewusst getrennt:
 
-* :class:`StackController` — welche Container zum Stack gehoeren und in
-  welcher Reihenfolge sie starten. Er kennt die Namen aus ARCHITECTURE §6
-  („Feste Werte") und benutzt :mod:`acoustid_watchdog.docker`; sonst nichts.
-  Nach aussen ist er nur eine von mehreren moeglichen Steuerungen: der
-  Vertrag steht als :class:`~acoustid_watchdog.control.ProcessGroupController`
-  in :mod:`acoustid_watchdog.control`.
 * :class:`ReadinessProbe` — die Bereitschaftsfrage an den API-Dienst
   (interner Healthcheck, DECISIONS 2026-08-01). Sie ist der einzige
   verlaessliche Punkt, an dem „bereit" mehr heisst als „Prozess laeuft":
   der Endpunkt prueft Datenbank **und** Suchindex. Ihre Adresse ist ein
   Bootstrap-Wert (``AOFF_API_HEALTH_URL``, :mod:`shared.env`) und keine
-  Modulkonstante mehr — im Ein-Container-Betrieb ist sie eine andere.
+  Modulkonstante — im Ein-Container-Betrieb ist sie eine andere.
 * :class:`WakeCoordinator` — haelt Anfragen, waehrend gestartet wird,
   sorgt dafuer, dass gleichzeitige Anfragen **einen** Weckvorgang ausloesen,
   legt den Stack wieder schlafen und erhebt seinen Zustand ueber die
   Steuerung.
 
+**Welche Prozesse zum Stack gehoeren, steht hier nicht** (seit M1b): das
+weiss :mod:`acoustid_watchdog.stack`, und der Koordinator kennt davon nur
+den Vertrag
+(:class:`~acoustid_watchdog.control.ProcessGroupController`). Genau
+dadurch war der Ein-Container-Umbau ein Adapter-Tausch und kein Eingriff
+in die Weck-Logik.
+
 **Warum genau ein Weckvorgang.** Ein zweiter, gleichzeitiger Start waere
-nicht nur Verschwendung: er wuerde `docker start` waehrend eines laufenden
-Starts erneut absetzen und die Zustandsanzeige flackern lassen. Der
-Koordinator haelt deshalb genau eine Aufgabe; jede weitere Anfrage haengt
-sich mit ihrer **eigenen** Frist daran (``wake.hold_timeout_s``, §6). Wer
-zuerst kam, wartet nicht laenger als wer spaeter kam — jeder bekommt seine
-volle Haltezeit ab dem eigenen Eintreffen, und **der Vorgang selbst laeuft
+nicht nur Verschwendung: er wuerde waehrend eines laufenden Starts erneut
+starten und die Zustandsanzeige flackern lassen. Der Koordinator haelt
+deshalb genau eine Aufgabe; jede weitere Anfrage haengt sich mit ihrer
+**eigenen** Frist daran (``wake.hold_timeout_s``, §6). Wer zuerst kam,
+wartet nicht laenger als wer spaeter kam — jeder bekommt seine volle
+Haltezeit ab dem eigenen Eintreffen, und **der Vorgang selbst laeuft
 mindestens so lange wie sein geduldigster Wartender** (Phase 16: die Frist
 des Vorgangs wird beim Dazukommen verlaengert, sie wird nicht mehr von der
 ersten Anfrage geerbt).
@@ -36,7 +37,7 @@ eine Aufgabe, und ein Weckvorgang wartet zuerst einen laufenden Stopp ab
 ``stopping`` eintrifft, wird also nicht abgewiesen und ueberholt den Stopp
 auch nicht: sie wartet, bis der Stack steht, und weckt ihn dann wieder —
 konservativ, weil ein halb gestoppter Stack kein bedienbarer Stack ist und
-`docker stop`/`docker start` sich sonst ins Gehege kaemen.
+Start und Stopp sich sonst ins Gehege kaemen.
 
 **Was hier NICHT steht.** Wann der Idle-Stopp faellig ist und wann der
 Zustand nachgefuehrt wird, entscheiden die beiden Dauerlaeufer in
@@ -49,7 +50,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from contextlib import suppress
 from typing import Any, Final
 
@@ -57,7 +58,6 @@ import httpx
 from starlette.concurrency import run_in_threadpool
 
 from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
-from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel
 from acoustid_watchdog.state import StackStateTracker
 from shared.models import StackState
@@ -65,26 +65,12 @@ from shared.models import StackState
 __all__ = [
     "DEFAULT_POLL_INTERVAL_S",
     "DEFAULT_RETRY_AFTER_S",
-    "STACK_CONTAINERS",
     "ReadinessProbe",
-    "StackController",
     "StackNotReadyError",
     "WakeCoordinator",
 ]
 
 _LOG = logging.getLogger(__name__)
-
-#: Container des Stacks in **Startreihenfolge** (ARCHITECTURE §6 „Feste
-#: Werte"). Der Importer fehlt bewusst: er ist ein One-Shot-Job und wird
-#: vom Scheduler gestartet (Phase 19), nie vom Wecken.
-#:
-#: Gestoppt wird in umgekehrter Reihenfolge — erst der Leser, dann seine
-#: Datenquellen.
-STACK_CONTAINERS: Final[tuple[str, ...]] = (
-    "acoustid-db",
-    "acoustid-index",
-    "acoustid-api",
-)
 
 #: Abstand zwischen zwei Bereitschaftsfragen waehrend des Weckens. Der Stack
 #: braucht Sekunden bis Minuten (Postgres-Recovery, Index-mmap); haeufigeres
@@ -169,56 +155,6 @@ class ReadinessProbe:
             self._client.close()
 
 
-class StackController:
-    """Startet und stoppt die Stack-Container — mehr Wissen hat er nicht.
-
-    Die Docker-Fassung des
-    :class:`~acoustid_watchdog.control.ProcessGroupController`; ein Test
-    haelt fest, dass sie das Protokoll erfuellt.
-    """
-
-    def __init__(
-        self,
-        docker: DockerClient,
-        containers: Sequence[str] = STACK_CONTAINERS,
-    ) -> None:
-        self.docker = docker
-        self.containers = tuple(containers)
-
-    def start(self) -> list[str]:
-        """Startet alle Stack-Container in der festgelegten Reihenfolge.
-
-        Der Aufruf wartet **nicht** auf Bereitschaft — das tut der
-        :class:`WakeCoordinator` ueber den Healthcheck der API. Bewusst
-        keine Abhaengigkeitspruefung zwischen den Containern: `depends_on`
-        gilt nur fuer `compose up`, und die API haelt einen Neustart aus,
-        wenn ihre Datenbank noch nicht da ist (``restart: unless-stopped``).
-
-        Returns:
-            Namen der Container, die dieser Aufruf wirklich gestartet hat.
-
-        Raises:
-            DockerError: Ein Container fehlt oder der Daemon antwortet nicht.
-        """
-        return [name for name in self.containers if self.docker.start(name)]
-
-    def stop(self) -> list[str]:
-        """Stoppt alle Stack-Container in umgekehrter Reihenfolge.
-
-        Returns:
-            Namen der Container, die dieser Aufruf wirklich gestoppt hat.
-        """
-        return [name for name in reversed(self.containers) if self.docker.stop(name)]
-
-    def all_running(self) -> bool:
-        """Laufen alle Stack-Container?
-
-        Raises:
-            DockerError: Ein Container fehlt oder der Daemon antwortet nicht.
-        """
-        return all(self.docker.inspect(name).running for name in self.containers)
-
-
 class WakeCoordinator:
     """Haelt Anfragen, bis der Stack bereit ist — mit genau einem Weckvorgang."""
 
@@ -235,7 +171,7 @@ class WakeCoordinator:
         Args:
             controller: Steuerung des Stacks. Bewusst nur ueber das
                 Protokoll getypt: der Koordinator kennt ``start``,
-                ``stop``, ``all_running`` — nicht die Technik dahinter.
+                ``stop``, ``inspect`` — nicht die Technik dahinter.
             probe: Bereitschaftsfrage an den API-Dienst.
             state: Zustandsanzeige (``/status``, spaeter die Admin-UI).
             log_event: ``(level, message, extra)`` — Anschluss an das
@@ -260,8 +196,14 @@ class WakeCoordinator:
         self._deadline = 0.0
         self._wakes = 0
         self._stops = 0
-        #: Aufeinanderfolgende erfolglose Docker-Abfragen (:meth:`observe`).
-        self._docker_failures = 0
+        #: Aufeinanderfolgende erfolglose Abfragen der Steuerung
+        #: (:meth:`observe`).
+        self._control_failures = 0
+        #: Zuletzt gemeldete abgestuerzte Prozesse. Nur eine **Aenderung**
+        #: ist ein Ereignis wert: der Poller fragt alle 15 s, und ein
+        #: dauerhaft toter Prozess wuerde den Ringpuffer sonst an einem
+        #: Nachmittag leeren (Muster von :attr:`_control_failures`).
+        self._crashed: tuple[str, ...] = ()
 
     @property
     def wakes(self) -> int:
@@ -390,7 +332,7 @@ class WakeCoordinator:
             self._event(EventLevel.ERROR, "Stack-Start fehlgeschlagen", {"error": detail})
             raise StackNotReadyError(f"Stack konnte nicht gestartet werden: {detail}") from exc
 
-        _LOG.info("Stack-Container gestartet", extra={"containers_started": started})
+        _LOG.info("Stack-Prozesse gestartet", extra={"processes_started": started})
 
         while True:
             if await run_in_threadpool(self._probe.ready):
@@ -400,7 +342,7 @@ class WakeCoordinator:
                 self._event(
                     EventLevel.INFO,
                     "Stack ist bereit",
-                    {"waited_s": waited_s, "containers_started": started},
+                    {"waited_s": waited_s, "processes_started": started},
                 )
                 return
             remaining = self._deadline - time.monotonic()
@@ -481,16 +423,16 @@ class WakeCoordinator:
             "Stack schlaeft",
             {
                 "reason": reason,
-                "containers_stopped": stopped,
+                "processes_stopped": stopped,
                 "took_s": round(time.monotonic() - started_at, 1),
             },
         )
         return True
 
-    # --- Zustand aus Docker erheben -----------------------------------------
+    # --- Zustand aus der Steuerung erheben ----------------------------------
 
     def refresh(self) -> StackState:
-        """Erhebt den Zustand einmal aus Docker (Start des Waechters).
+        """Erhebt den Zustand einmal aus der Steuerung (Start des Waechters).
 
         Der Zustand liegt nur im Speicher (DECISIONS 2026-08-01, Punkt 6) —
         nach einem Neustart des Waechters muss er neu erhoben werden, sonst
@@ -499,19 +441,24 @@ class WakeCoordinator:
         return self.observe(announce=False)
 
     def observe(self, *, announce: bool = True) -> StackState:
-        """Gleicht den gefuehrten Zustand mit Docker ab.
+        """Gleicht den gefuehrten Zustand mit der Steuerung ab.
 
         Die Antwort auf die Phase-15-Luecke „von Hand gestoppter Stack":
         beim Start (:meth:`refresh`) und danach im Takt des Pollers
         (:class:`acoustid_watchdog.lifecycle.StatePoller`) fragt der
-        Waechter die Container und korrigiert seine Anzeige. Erst dadurch
+        Waechter die Prozesse und korrigiert seine Anzeige. Erst dadurch
         zeigt `/status` die Wahrheit — und die erste Anfrage nach einem
         Stopp von Hand weckt, statt ins Leere zu laufen.
 
         Bewusst zurueckhaltend, damit die Anzeige nicht flackert:
 
-        * **Kein Container laeuft** -> ``schlafend``. Das ist eindeutig und
-          kommt direkt vom Daemon.
+        * **Ein Prozess ist von selbst weggefallen** -> ``fehler``. Neu in
+          M1b und der Grund fuer die Kante ``ready→error``: unter Docker
+          war „laeuft nicht" eindeutig gutartig, unter einem
+          Prozess-Supervisor nicht mehr. ``STOPPED`` ist der Idle-Stopp,
+          ``EXITED``/``FATAL``/``BACKOFF`` sind ein Absturz — und ein
+          Absturz darf sich nie als Schlaf maskieren (R8).
+        * **Es laeuft nichts (und nichts ist abgestuerzt)** -> ``schlafend``.
         * **Alles laeuft und der Healthcheck antwortet** -> ``bereit``.
         * **Alles dazwischen** (halb gestartet, laeuft aber noch nicht
           gesund) -> der gefuehrte Zustand bleibt stehen. Wer gerade
@@ -519,7 +466,7 @@ class WakeCoordinator:
           macht aus ``bereit`` noch kein ``schlafend`` (dafuer gibt es den
           Weg ueber :meth:`invalidate` im Proxy).
 
-        Ein nicht erreichbarer Docker-Daemon ist kein Fehlerzustand des
+        Eine nicht erreichbare Steuerung ist kein Fehlerzustand des
         Stacks: der Waechter muss auch dann laufen (``/status``, Admin-UI),
         damit der Betreiber ueberhaupt sieht, dass etwas nicht stimmt.
 
@@ -529,23 +476,32 @@ class WakeCoordinator:
                 Zustand „neu", ohne dass jemand etwas getan haette.
         """
         try:
-            running = self._controller.all_running()
+            status = self._controller.inspect()
         except ProcessControlError as exc:
-            self._docker_failures += 1
+            self._control_failures += 1
             # Nur der erste Fehlschlag einer Serie ist eine Warnung wert;
-            # ein dauerhaft fehlender Socket wuerde sonst das Log fluten.
-            log = _LOG.warning if self._docker_failures == 1 else _LOG.debug
+            # eine dauerhaft tote Steuerung wuerde sonst das Log fluten.
+            log = _LOG.warning if self._control_failures == 1 else _LOG.debug
             log(
-                "Stack-Zustand nicht ermittelbar — Docker antwortet nicht",
-                extra={"error": str(exc), "attempts": self._docker_failures},
+                "Stack-Zustand nicht ermittelbar — die Prozess-Steuerung antwortet nicht",
+                extra={"error": str(exc), "attempts": self._control_failures},
             )
             return self._state.state
-        if self._docker_failures:
-            _LOG.info("Docker antwortet wieder", extra={"attempts": self._docker_failures})
-            self._docker_failures = 0
+        if self._control_failures:
+            _LOG.info(
+                "Prozess-Steuerung antwortet wieder",
+                extra={"attempts": self._control_failures},
+            )
+            self._control_failures = 0
 
         previous = self._state.state
-        if not running:
+        if status.crashed:
+            return self._observe_crash(status.crashed, previous, announce=announce)
+        if self._crashed:
+            _LOG.info("Kein Prozess mehr im Fehlerzustand", extra={"was": list(self._crashed)})
+            self._crashed = ()
+
+        if not status.running:
             self.invalidate()
             if previous is StackState.ERROR:
                 # Der Fehlerzustand bleibt stehen, bis ihn ein Weckversuch
@@ -565,6 +521,35 @@ class WakeCoordinator:
         changed = self._state.try_to(StackState.READY)
         if changed is not None and announce and previous is not StackState.STARTING:
             self._event(EventLevel.INFO, "Stack wurde ausserhalb des Waechters gestartet")
+        return self._state.state
+
+    def _observe_crash(
+        self, crashed: tuple[str, ...], previous: StackState, *, announce: bool
+    ) -> StackState:
+        """Ein Prozess ist von selbst weggefallen (M1b, Kante ``ready→error``).
+
+        Der Zustand wird **nachsichtig** gesetzt (``try_to``): waehrend
+        eines Weckvorgangs gehoert die Anzeige dem Vorgang, und aus
+        ``schlafend`` heraus gibt es keine Kante in den Fehler — ein
+        Prozess, den niemand gestartet hat, ist kein Betriebsfehler. Der
+        Befund steht dann trotzdem im Ereignis-Log: gemeldet wird, was
+        passiert ist, angezeigt nur, was die Zustandsmaschine erlaubt.
+        """
+        detail = "Prozess unerwartet beendet: " + ", ".join(crashed)
+        new = crashed != self._crashed
+        self._crashed = crashed
+        if new:
+            _LOG.error("Prozess unerwartet beendet", extra={"processes": list(crashed)})
+        self.invalidate()
+        changed = self._state.try_to(StackState.ERROR, detail=detail)
+        if new and announce and changed is None:
+            # Kein Zustandswechsel (also kein Ereignis aus dem Tracker) —
+            # der Befund darf trotzdem nicht verschwinden.
+            self._event(
+                EventLevel.WARNING,
+                "Prozess unerwartet beendet",
+                {"processes": list(crashed), "stack_state": self._state.state.value},
+            )
         return self._state.state
 
     # --- Hilfen -------------------------------------------------------------

@@ -26,9 +26,11 @@ dahinter.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 __all__ = [
+    "GroupStatus",
     "ProcessControlError",
     "ProcessGroupController",
 ]
@@ -51,6 +53,38 @@ class ProcessControlError(Exception):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class GroupStatus:
+    """Was die Steuerung ueber die Gruppe sagt — eine Frage, drei Antworten.
+
+    Der Ersatz fuer das ``all_running() -> bool`` der Naht-Phase, und der
+    Grund fuer den Tausch steht in der M0-Analyse (§2.1, R8): unter Docker
+    war „laeuft nicht" **eindeutig gutartig** — ein Container, den niemand
+    gestartet hat, schlief. Unter einem Prozess-Supervisor ist das nicht
+    mehr so. Ein Prozess kann gestoppt sein (``STOPPED`` — genau das will
+    der Idle-Stopp) oder von selbst weggefallen sein (``EXITED``, ``FATAL``,
+    ``BACKOFF``). Beides sieht in einem Bool gleich aus, und ein Absturz
+    duerfte sich nie als Schlaf maskieren.
+
+    Deshalb liefert die Steuerung beide Halbwahrheiten getrennt: ob alles
+    laeuft, und was **unerwartet** weg ist.
+    """
+
+    #: Laeuft alles, was zur Gruppe gehoert?
+    running: bool
+    #: Namen der Prozesse, die von selbst weg sind — leer ist der Normalfall.
+    #: Ein gestoppter (schlafender) Prozess steht hier **nicht**.
+    crashed: tuple[str, ...] = ()
+    #: Prozessname -> Zustandsname der Steuerung (``RUNNING``, ``FATAL``, …).
+    #: Reine Diagnose fuers Log; `/status` erweitert darum erst M2 (additiv).
+    states: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def healthy(self) -> bool:
+        """Laeuft alles und ist nichts abgestuerzt?"""
+        return self.running and not self.crashed
+
+
 @runtime_checkable
 class ProcessGroupController(Protocol):
     """Startet und stoppt die Dienste des Stacks — mehr Wissen hat er nicht.
@@ -58,8 +92,8 @@ class ProcessGroupController(Protocol):
     Der ganze Ausschnitt, den der
     :class:`~acoustid_watchdog.wake.WakeCoordinator` von seiner Steuerung
     kennt. Wer ihn erfuellt, kann den Stack wecken und schlafen legen:
-    heute :class:`~acoustid_watchdog.wake.StackController` ueber die
-    Docker-Engine-API, spaeter der Supervisor-Gegenpart.
+    seit M1b :class:`~acoustid_watchdog.stack.ServiceGroupController` ueber
+    supervisord; in der Naht-Phase war es die Docker-Fassung.
 
     ``runtime_checkable``, damit ein Test die Zusage nachweisen kann
     (``isinstance``); geprueft wird dabei nur, dass die drei Methoden da
@@ -90,10 +124,16 @@ class ProcessGroupController(Protocol):
         """
         ...
 
-    def all_running(self) -> bool:
-        """Laeuft alles, was zum Stack gehoert?
+    def inspect(self) -> GroupStatus:
+        """Erhebt den Zustand der ganzen Gruppe in **einem** Aufruf.
+
+        Returns:
+            :class:`GroupStatus` — laeuft alles, und was ist unerwartet
+            weggefallen.
 
         Raises:
-            ProcessControlError: wie bei :meth:`start`.
+            ProcessControlError: wie bei :meth:`start`. Wichtig: das heisst
+                „ich weiss es nicht", nicht „der Stack ist kaputt" — der
+                Aufrufer laesst seine Anzeige dann stehen.
         """
         ...

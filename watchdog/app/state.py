@@ -24,19 +24,31 @@ von           nach (und wer den Wechsel ausloest)
 ============  ==========================================================
 ``sleeping``  ``starting`` (eine Anfrage weckt),
               ``ready`` (Poller: von Hand gestarteter Stack)
-``starting``  ``ready`` (bereit), ``error`` (Docker-Startfehler),
+``starting``  ``ready`` (bereit), ``error`` (Startfehler der Steuerung),
               ``sleeping`` (Poller: kein Weckvorgang mehr, Stack steht)
 ``ready``     ``stopping`` (Idle-Stopp), ``starting`` (erneutes Wecken
               nach verworfener Bereitschaft), ``sleeping`` (Poller: von
-              Hand gestoppter Stack)
+              Hand gestoppter Stack), ``error`` (Poller: ein Prozess ist
+              im Betrieb abgestuerzt — seit M1b)
 ``stopping``  ``sleeping`` (Stopp fertig), ``error`` (Stopp gescheitert)
 ``error``     ``starting`` (naechster Weckversuch — der Weg aus dem
               Fehler heraus), ``ready`` (Poller: Stack laeuft wieder)
 ============  ==========================================================
 
+**Die Kante ``ready`` -> ``error`` ist neu** (M1b) und war in v1
+ausdruecklich verboten. Der Grund fuer beides ist derselbe Satz aus
+verschiedenen Welten: unter Docker war „laeuft nicht" eindeutig gutartig —
+ein Container, den der Betreiber von Hand gestoppt hatte, schlief eben.
+Unter einem Prozess-Supervisor unterscheidet sich „gestoppt" (``STOPPED``,
+genau das will der Idle-Stopp) von „von selbst weggefallen" (``EXITED``,
+``FATAL``, ``BACKOFF``). Ohne diese Kante muesste ein Absturz im laufenden
+Betrieb als ``schlafend`` angezeigt werden — er wuerde sich also als Schlaf
+maskieren, und der Betreiber saehe einen Gutzustand (M0-Analyse §2.1, R8).
+
 **Nicht erlaubt** sind unter anderem: ``sleeping`` -> ``stopping`` (was
-steht, wird nicht gestoppt), ``ready`` -> ``error`` (ein Fehlerzustand
-entsteht nur bei einem gescheiterten Start oder Stopp), ``stopping`` ->
+steht, wird nicht gestoppt), ``sleeping`` -> ``error`` (was niemand
+gestartet hat, kann nicht abstuerzen; der Poller meldet einen solchen
+Befund ins Ereignis-Log, ohne den Zustand zu aendern), ``stopping`` ->
 ``starting`` (erst faellt der Stack ganz, dann weckt ihn die naechste
 Anfrage — :meth:`acoustid_watchdog.wake.WakeCoordinator.stop_stack`) und
 ``error`` -> ``stopping`` (ein Stack im Fehlerzustand gilt nicht als
@@ -48,14 +60,15 @@ laufend).
   Weg nehmen die Stellen, die ihren Ausgangszustand kennen (Wecken,
   Stoppen) — dort waere ein verbotener Wechsel ein Programmfehler.
 * :meth:`StackStateTracker.try_to` **protokolliert** und laesst den Zustand
-  stehen. Den Weg nimmt der Hintergrund-Poller: er erhebt, was Docker
-  sagt, und darf einen laufenden Weck- oder Stoppvorgang nicht ueberholen.
+  stehen. Den Weg nimmt der Hintergrund-Poller: er erhebt, was die
+  Prozess-Steuerung sagt, und darf einen laufenden Weck- oder Stoppvorgang
+  nicht ueberholen.
 
 **Warum im Speicher und nicht in der SQLite.** Der Zustand beschreibt, was
-die Container gerade tun — beim Start des Waechters ist ein gespeicherter
+die Prozesse gerade tun — beim Start des Waechters ist ein gespeicherter
 Wert bestenfalls veraltet und schlimmstenfalls falsch (der Betreiber kann
 den Stack zwischenzeitlich von Hand gestartet haben). Er wird deshalb beim
-Start aus Docker erhoben und danach laufend nachgefuehrt
+Start aus der Steuerung erhoben und danach laufend nachgefuehrt
 (:class:`acoustid_watchdog.lifecycle.StatePoller`).
 
 ``sleeping`` ist ausdruecklich der **Gutzustand**, kein Mangel
@@ -90,7 +103,15 @@ _LOG = logging.getLogger(__name__)
 ALLOWED_TRANSITIONS: Final[dict[StackState, frozenset[StackState]]] = {
     StackState.SLEEPING: frozenset({StackState.STARTING, StackState.READY}),
     StackState.STARTING: frozenset({StackState.READY, StackState.ERROR, StackState.SLEEPING}),
-    StackState.READY: frozenset({StackState.STARTING, StackState.STOPPING, StackState.SLEEPING}),
+    StackState.READY: frozenset(
+        {
+            StackState.STARTING,
+            StackState.STOPPING,
+            StackState.SLEEPING,
+            # Seit M1b: Prozessabsturz im laufenden Betrieb (Modul-Docstring).
+            StackState.ERROR,
+        }
+    ),
     StackState.STOPPING: frozenset({StackState.SLEEPING, StackState.ERROR}),
     StackState.ERROR: frozenset({StackState.STARTING, StackState.READY}),
 }

@@ -9,9 +9,11 @@ beendet (:mod:`acoustid_watchdog.main`):
 :class:`IdleStopper`    legt den Stack nach ``idle.timeout_min`` ohne
                         Nutzung schlafen — aber nur im Ruhezustand
                         (Invariante §8.5)
-:class:`StatePoller`    gleicht den gefuehrten Zustand mit Docker ab, damit
-                        ein von Hand gestoppter oder gestarteter Stack
-                        auffaellt (Phase-15-Luecke)
+:class:`StatePoller`    gleicht den gefuehrten Zustand mit der
+                        Prozess-Steuerung ab, damit ein von Hand
+                        gestoppter oder gestarteter Stack auffaellt
+                        (Phase-15-Luecke) — und seit M1b, damit ein
+                        **Absturz** auffaellt (Kante ``ready→error``)
 ======================  ===================================================
 
 **Was „Leerlauf" heisst** (ARCHITECTURE §6, „Feste Werte"): *keine
@@ -37,10 +39,10 @@ die ganze Timeout-Frist waere ja waehrend des Laufs verstrichen. Nach dem
 Job hat der Betreiber (und die Admin-UI) wieder das volle Fenster.
 
 **Warum zwei Aufgaben und nicht eine.** Sie haben verschiedene Takte und
-verschiedene Kosten: der Zustandsabgleich fragt Docker (billig, aber nach
-aussen) und soll zeitnah greifen, der Idle-Stopp rechnet nur mit einer Uhr
-und darf gemuetlich sein. Zusammengelegt muesste einer der beiden im
-falschen Takt laufen.
+verschiedene Kosten: der Zustandsabgleich fragt die Prozess-Steuerung
+(billig, aber nach aussen) und soll zeitnah greifen, der Idle-Stopp rechnet
+nur mit einer Uhr und darf gemuetlich sein. Zusammengelegt muesste einer
+der beiden im falschen Takt laufen.
 """
 
 from __future__ import annotations
@@ -73,9 +75,10 @@ __all__ = [
 
 _LOG = logging.getLogger(__name__)
 
-#: Abstand zweier Zustandsabgleiche mit Docker. Ein Abgleich kostet drei
-#: ``inspect``-Aufrufe auf dem lokalen Socket (und einen Healthcheck, wenn
-#: alles laeuft) — Millisekunden. 15 Sekunden sind der Kompromiss aus „ein
+#: Abstand zweier Zustandsabgleiche mit der Prozess-Steuerung. Ein Abgleich
+#: kostet **einen** ``getAllProcessInfo``-Aufruf auf dem lokalen Socket (und
+#: einen Healthcheck, wenn alles laeuft) — Millisekunden; unter Docker waren
+#: es noch drei. 15 Sekunden sind der Kompromiss aus „ein
 #: von Hand gestoppter Stack faellt schnell auf" (die Admin-UI pollt
 #: `/status` alle 5 s, §6) und „der Waechter ist leise": im Normalbetrieb
 #: sind das vier Aufrufe je Minute auf einen Unix-Socket, ohne eine Zeile
@@ -254,7 +257,21 @@ class IdleStopper:
 
 
 class StatePoller:
-    """Fuehrt den Stack-Zustand aus Docker nach (Phase-15-Luecke)."""
+    """Fuehrt den Stack-Zustand aus der Prozess-Steuerung nach.
+
+    Zwei Aufgaben in einem Takt (Phase-15-Luecke und M1b): einen von Hand
+    gestoppten oder gestarteten Stack bemerken — und einen **Absturz**.
+    Das zweite ist neu und der Grund, warum der Poller nicht nach „laeuft
+    alles?" fragt, sondern nach dem Zustand jedes Prozesses: unter Docker
+    war „laeuft nicht" gutartig, unter supervisord unterscheidet sich
+    gestoppt von abgestuerzt (:meth:`acoustid_watchdog.wake.
+    WakeCoordinator.observe`).
+
+    Gefragt wird per **Polling**, nicht per Push: ein supervisord-
+    Eventlistener ist ein eigener, von supervisord gespawnter Prozess mit
+    stdin/stdout-Protokoll — also ein Brueckenprozess und ein eigener
+    Ausbauschritt, kein Bestandteil von M1b (M0-Analyse §2.1).
+    """
 
     def __init__(
         self,
@@ -268,26 +285,26 @@ class StatePoller:
         self.checks = 0
 
     async def check(self) -> StackState | None:
-        """Ein Abgleich mit Docker.
+        """Ein Abgleich mit der Prozess-Steuerung.
 
         Returns:
             Der Zustand nach dem Abgleich, oder ``None``, wenn dieser Takt
             uebersprungen wurde, weil gerade geweckt oder gestoppt wird.
 
-        Waehrend eines Weck- oder Stoppvorgangs sind die Container in
-        Bewegung; eine Momentaufnahme aus Docker wuerde dann nur die
-        Anzeige flackern lassen (``startet`` -> ``schlafend`` -> ``bereit``)
-        und im schlimmsten Fall einen laufenden Vorgang uebergehen.
+        Waehrend eines Weck- oder Stoppvorgangs sind die Prozesse in
+        Bewegung; eine Momentaufnahme wuerde dann nur die Anzeige flackern
+        lassen (``startet`` -> ``schlafend`` -> ``bereit``) und im
+        schlimmsten Fall einen laufenden Vorgang uebergehen.
         """
         if self._coordinator.busy:
             return None
         self.checks += 1
-        # Der Abgleich spricht ueber den Socket mit Docker und ggf. per HTTP
-        # mit der API — beides synchron, also in den Threadpool.
+        # Der Abgleich spricht ueber den Socket mit supervisord und ggf. per
+        # HTTP mit der API — beides synchron, also in den Threadpool.
         return await run_in_threadpool(self._coordinator.observe)
 
     async def run(self) -> None:
-        """Gleicht bis zum Abbruch periodisch mit Docker ab."""
+        """Gleicht bis zum Abbruch periodisch ab."""
         while True:
             await asyncio.sleep(self.interval_s)
             try:
