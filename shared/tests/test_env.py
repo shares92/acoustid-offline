@@ -15,19 +15,41 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_defaults_without_any_environment() -> None:
     settings = EnvSettings.from_env({})
     assert settings.port == 8080
-    assert settings.data_dir == Path("/data")
-    assert settings.config_path == Path("/data/config.yaml")
-    assert settings.dump_dir == Path("/data/dumps")
-    assert settings.db_host == "acoustid-db"
+    # Ein Container, ein Netzwerk-Namensraum: alle Adressen sind Loopback,
+    # und die Pfade sind die Mounts aus HANDOFF v2 §3.
+    assert settings.data_dir == Path("/config")
+    assert settings.config_path == Path("/config/config.yaml")
+    assert settings.dump_dir == Path("/import")
+    assert settings.db_host == "127.0.0.1"
     assert settings.db_port == 5432
     assert settings.db_name == "acoustid"
     assert settings.db_user == "acoustid"
     assert settings.db_password.get_secret_value() == ""
-    assert settings.api_base_url == "http://acoustid-api:8080"
-    assert settings.api_health_url == "http://acoustid-api:8080/_health"
-    assert settings.api_port == 8080
-    assert settings.index_url == "http://acoustid-index:6081"
+    assert settings.db_password_file == Path("/config/db-password")
+    assert settings.db_data_root == Path("/data/db")
+    assert settings.pg_major == 18
+    assert settings.api_base_url == "http://127.0.0.1:8081"
+    assert settings.api_health_url == "http://127.0.0.1:8081/_health"
+    assert settings.api_port == 8081
+    assert settings.index_url == "http://127.0.0.1:6081"
     assert settings.log_level == "INFO"
+
+
+def test_the_watchdog_data_dir_never_lands_on_the_array() -> None:
+    """Risiko R1 der M0-Analyse, als Test.
+
+    ``/data`` ist in v2 das **Array**. Laegen SQLite, Keys und Lookup-Cache
+    dort, schriebe der Waechter im laufenden Betrieb auf die Spindeln — das
+    Array schliefe nie, und kein anderer Test wuerde es merken (die
+    Waechter-Suite laeuft auf ``tmp_path``). Deshalb steht die Zusage hier
+    als eigener Satz.
+    """
+    settings = EnvSettings.from_env({})
+
+    for path in (settings.data_dir, settings.config_path):
+        assert not path.is_relative_to("/data"), path
+    # Und die Gegenprobe: der Datenbestand gehoert sehr wohl dorthin.
+    assert settings.db_data_root.is_relative_to("/data")
 
 
 def test_every_variable_can_be_overridden() -> None:
@@ -41,10 +63,13 @@ def test_every_variable_can_be_overridden() -> None:
         "AOFF_DB_NAME": "aoff",
         "AOFF_DB_USER": "aoff_user",
         "AOFF_DB_PASSWORD": "geheim",
+        "AOFF_DB_PASSWORD_FILE": "/run/secrets/db",
         "AOFF_API_BASE_URL": "http://127.0.0.1:8081",
         "AOFF_API_HEALTH_URL": "http://127.0.0.1:8081/_health",
         "AOFF_API_PORT": "8081",
         "AOFF_INDEX_URL": "http://index:6081",
+        "AOFF_DB_DATA_ROOT": "/mnt/array/db",
+        "AOFF_PG_MAJOR": "19",
         "AOFF_LOG_LEVEL": "debug",
     }
     settings = EnvSettings.from_env(environ)
@@ -57,17 +82,20 @@ def test_every_variable_can_be_overridden() -> None:
     assert settings.db_name == "aoff"
     assert settings.db_user == "aoff_user"
     assert settings.db_password.get_secret_value() == "geheim"
+    assert settings.db_password_file == Path("/run/secrets/db")
     assert settings.api_base_url == "http://127.0.0.1:8081"
     assert settings.api_health_url == "http://127.0.0.1:8081/_health"
     assert settings.api_port == 8081
     assert settings.index_url == "http://index:6081"
+    assert settings.db_data_root == Path("/mnt/array/db")
+    assert settings.pg_major == 19
     assert settings.log_level == "DEBUG"
 
 
-def test_paths_follow_the_data_dir() -> None:
+def test_the_config_path_follows_the_data_dir() -> None:
     settings = EnvSettings.from_env({"AOFF_DATA_DIR": "/srv/aoff"})
     assert settings.config_path == Path("/srv/aoff/config.yaml")
-    assert settings.dump_dir == Path("/srv/aoff/dumps")
+    assert settings.db_password_file == Path("/srv/aoff/db-password")
 
 
 def test_explicit_paths_win_over_the_data_dir() -> None:
@@ -75,7 +103,17 @@ def test_explicit_paths_win_over_the_data_dir() -> None:
         {"AOFF_DATA_DIR": "/srv/aoff", "AOFF_CONFIG_PATH": "/etc/config.yaml"}
     )
     assert settings.config_path == Path("/etc/config.yaml")
-    assert settings.dump_dir == Path("/srv/aoff/dumps")
+
+
+def test_the_dump_dir_does_not_follow_the_data_dir() -> None:
+    """Seit M1b ein eigener Mount (v2 §3) — und das mit Absicht.
+
+    ``data_dir`` liegt auf dem Cache, die Tagesdateien des Importers sind
+    mehrere GB gross und gehoeren aufs Array. Eine Ableitung haette sie
+    lautlos auf den Cache-Pool gelegt.
+    """
+    settings = EnvSettings.from_env({"AOFF_DATA_DIR": "/srv/aoff"})
+    assert settings.dump_dir == Path("/import")
 
 
 def test_the_health_url_follows_the_api_base_url() -> None:
@@ -207,3 +245,50 @@ def test_env_example_documents_exactly_the_known_variables() -> None:
     documented = set(re.findall(r"^(AOFF_[A-Z0-9_]+)=", text, flags=re.MULTILINE))
     known = {env_var_name(name) for name in EnvSettings.model_fields}
     assert documented == known
+
+
+# --- Datenbank-Passwort aus einer Datei (M1b) ------------------------------
+
+
+def test_the_password_file_is_read_when_the_variable_is_empty(tmp_path: Path) -> None:
+    """Der Weg, den der Entrypoint benutzt (E16).
+
+    Er erzeugt das Passwort beim ersten Start. Exportieren allein genuegt
+    nicht: ein `docker compose exec` startet einen Prozess **neben** ihm und
+    erbt seine Umgebung nicht — der Importer-Lauf haenge dann daran, wie man
+    in den Container gekommen ist.
+    """
+    secret = tmp_path / "db-password"
+    secret.write_text("aus-der-datei\n", encoding="utf-8")
+    settings = EnvSettings.from_env({"AOFF_DB_PASSWORD_FILE": str(secret)})
+
+    assert "aus-der-datei" in settings.db_dsn().get_secret_value()
+
+
+def test_the_variable_wins_over_the_file(tmp_path: Path) -> None:
+    """Ein gesetzter Wert gewinnt — so wird ein v1-Bestand uebernommen."""
+    secret = tmp_path / "db-password"
+    secret.write_text("aus-der-datei", encoding="utf-8")
+    settings = EnvSettings.from_env(
+        {"AOFF_DB_PASSWORD": "aus-der-umgebung", "AOFF_DB_PASSWORD_FILE": str(secret)}
+    )
+
+    assert "aus-der-umgebung" in settings.db_dsn().get_secret_value()
+
+
+def test_a_missing_password_file_names_both_ways(tmp_path: Path) -> None:
+    """Die Fehlermeldung nennt Variable **und** Datei — sonst sucht man falsch."""
+    settings = EnvSettings.from_env({"AOFF_DB_PASSWORD_FILE": str(tmp_path / "gibtsnicht")})
+
+    with pytest.raises(EnvError, match="gibtsnicht"):
+        settings.db_dsn()
+
+
+def test_the_password_file_never_appears_in_a_repr(tmp_path: Path) -> None:
+    """Auch der Weg ueber die Datei fuehrt nicht zu einem Klartext im Log."""
+    secret = tmp_path / "db-password"
+    secret.write_text("streng-geheim", encoding="utf-8")
+    settings = EnvSettings.from_env({"AOFF_DB_PASSWORD_FILE": str(secret)})
+
+    assert "streng-geheim" not in f"{settings!r} {settings!s}"
+    assert "streng-geheim" not in str(settings.db_dsn())

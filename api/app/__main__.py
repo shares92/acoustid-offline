@@ -1,9 +1,16 @@
 """Start des API-Dienstes: ``python -m acoustid_api``.
 
-Der Dienst laeuft im Compose-Netz **ohne** veroeffentlichten Port; davor
-sitzt der Waechter als Proxy (ARCHITECTURE §3). Der Port hier ist deshalb
-fest der containerinterne 8080 und bewusst nicht der ``AOFF_PORT`` des
-Waechters — der gehoert dem Proxy.
+Der Dienst laeuft **ohne** veroeffentlichten Port; davor sitzt der Waechter
+als Proxy (ARCHITECTURE §3, HANDOFF v2 §3).
+
+**Adresse und Port sind seit M1b bindend** und kommen aus den
+Bootstrap-Werten: im Ein-Container-Betrieb teilen sich Waechter und API
+einen Netzwerk-Namensraum. Ein fester Port 8080 waere der des Waechters —
+die Kollision faellt erst beim ersten Wecken auf (`EADDRINUSE`, Risiko R9
+der M0-Analyse), also lange nach dem Start. Und ``0.0.0.0`` waere in dieser
+Aufstellung eine echte Oeffnung nach aussen: die API kennt weder Auth noch
+Rate-Limit, beides setzt der Waechter durch (§7 „Durchsetzungsort Auth &
+Rate-Limit"). Deshalb ``127.0.0.1:<AOFF_API_PORT>``.
 
 Zugaenge und Log-Level kommen wie ueberall aus den ``AOFF_``-Variablen
 (``shared.env``), die Laufzeit-Konfiguration aus der ``config.yaml``.
@@ -17,8 +24,9 @@ import uvicorn
 
 from shared.env import EnvSettings
 
-#: Containerinterner Port des API-Dienstes.
-PORT: Final = 8080
+#: Adresse, an die der Dienst bindet. Fest: eine erreichbare API waere ein
+#: Weg an Auth und Rate-Limit vorbei (Modul-Docstring).
+HOST: Final = "127.0.0.1"
 
 
 def main() -> None:
@@ -27,10 +35,8 @@ def main() -> None:
     uvicorn.run(
         "acoustid_api.main:build_app",
         factory=True,
-        # An alle Schnittstellen des Containers — veroeffentlicht wird
-        # trotzdem keine: der Compose-Dienst hat kein `ports:`.
-        host="0.0.0.0",
-        port=PORT,
+        host=HOST,
+        port=settings.api_port,
         log_level=settings.log_level.lower(),
         access_log=False,  # der Waechter protokolliert die Zugriffe
     )

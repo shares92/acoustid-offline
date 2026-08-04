@@ -43,8 +43,29 @@ _LOG = logging.getLogger(__name__)
 #: Praefix aller Bootstrap-Variablen (ARCHITECTURE §6).
 ENV_PREFIX = "AOFF_"
 
-_DEFAULT_DATA_DIR = Path("/data")
-_DEFAULT_API_BASE_URL = "http://acoustid-api:8080"
+#: Datenverzeichnis des Waechters — der **Cache**-Mount (HANDOFF v2 §3).
+#: Bis M1a war das ``/data``; im Ein-Container-Betrieb ist ``/data`` das
+#: Array, und SQLite, Keys und Lookup-Cache duerfen dort nicht liegen: der
+#: Waechter schreibt im laufenden Betrieb und wuerde die Spindeln nie
+#: schlafen lassen (Risiko R1 der M0-Analyse).
+_DEFAULT_DATA_DIR = Path("/config")
+
+#: Arbeitsverzeichnis der Dump-Downloads — ein **eigener** Mount (v2 §3),
+#: bewusst nicht mehr von ``data_dir`` abgeleitet: die Tagesdateien sind
+#: mehrere GB gross und gehoeren aufs Array, ``data_dir`` liegt auf dem
+#: Cache. Ein abgeleiteter Vorgabewert wuerde sie lautlos auf den Cache
+#: legen.
+_DEFAULT_DUMP_DIR = Path("/import")
+
+#: Wurzel der Postgres-Datenverzeichnisse; darunter liegt je Major-Version
+#: ein Verzeichnis (``/data/db/18``). Array-Mount.
+_DEFAULT_DB_DATA_ROOT = Path("/data/db")
+
+#: Alle Dienste teilen sich im Ein-Container-Betrieb einen
+#: Netzwerk-Namensraum; erreichbar ist nur der Waechter-Port.
+_DEFAULT_API_PORT = 8081
+_DEFAULT_API_BASE_URL = f"http://127.0.0.1:{_DEFAULT_API_PORT}"
+
 _LEVEL_NAMES = frozenset(logging.getLevelNamesMapping())
 
 
@@ -79,25 +100,48 @@ class EnvSettings(BaseModel):
         str_strip_whitespace=True,
     )
 
-    #: AOFF_PORT — ein Port fuer API-Proxy und Admin-UI (/admin).
+    #: AOFF_PORT — ein Port fuer API-Proxy und Admin-UI (/admin). Der
+    #: einzige veroeffentlichte Port des Containers.
     port: int = Field(default=8080, ge=1, le=65535)
-    #: AOFF_DATA_DIR — Datenverzeichnis des Waechters (SSD-Cache-Pool).
+    #: AOFF_DATA_DIR — Datenverzeichnis des Waechters (Cache-Mount
+    #: ``/config``; **nie** unter ``/data``, das ist das Array).
     data_dir: Path = _DEFAULT_DATA_DIR
     #: AOFF_CONFIG_PATH — Default: <data_dir>/config.yaml.
     config_path: Path = _DEFAULT_DATA_DIR / "config.yaml"
-    #: AOFF_DUMP_DIR — Arbeitsverzeichnis des Importers; Default:
-    #: <data_dir>/dumps.
-    dump_dir: Path = _DEFAULT_DATA_DIR / "dumps"
+    #: AOFF_DUMP_DIR — Arbeitsverzeichnis des Importers (Mount ``/import``,
+    #: Array). Folgt bewusst **nicht** `data_dir` (siehe Modulkonstante).
+    dump_dir: Path = _DEFAULT_DUMP_DIR
 
-    #: AOFF_DB_* — Zugang zur AcoustID-Postgres (Stack, Array).
-    db_host: str = "acoustid-db"
+    #: AOFF_DB_* — Zugang zur AcoustID-Postgres (containerintern, Loopback).
+    db_host: str = "127.0.0.1"
     db_port: int = Field(default=5432, ge=1, le=65535)
     db_name: str = "acoustid"
     db_user: str = "acoustid"
-    #: Pflichtwert vor dem ersten Start; leer bleibt zulaessig, damit der
-    #: Waechter (der keine Postgres braucht) ohne ihn startet. `db_dsn()`
-    #: meldet das Fehlen genau dann, wenn der Zugang gebraucht wird.
+    #: Wird seit M1b vom Entrypoint erzeugt (E16) — kein `.env`-Pflichtwert
+    #: mehr. Leer bleibt zulaessig, damit der Waechter (der keine Postgres
+    #: braucht) ohne ihn startet; `db_dsn()` meldet das Fehlen genau dann,
+    #: wenn der Zugang gebraucht wird.
     db_password: SecretStr = SecretStr("")
+    #: AOFF_DB_PASSWORD_FILE — Datei, aus der das Passwort gelesen wird,
+    #: wenn `db_password` leer ist. Default: <data_dir>/db-password.
+    #:
+    #: **Warum eine Datei und nicht nur die Umgebung.** Der Entrypoint
+    #: erzeugt das Passwort beim ersten Start und koennte es exportieren —
+    #: aber nur an *seine* Kinder. Ein `docker compose exec` (Bootstrap,
+    #: Importer-Lauf, Admin-Skript) startet einen Prozess **neben** ihm und
+    #: saehe davon nichts; der Zugang haenge dann daran, wie man
+    #: hineingekommen ist. Die Datei ist fuer alle dieselbe Quelle — und
+    #: taugt zugleich als Docker-Secret (§8.10 „Secrets nie im Repo").
+    db_password_file: Path = _DEFAULT_DATA_DIR / "db-password"
+    #: AOFF_DB_DATA_ROOT — Wurzel der Postgres-Datenverzeichnisse
+    #: (``<root>/<major>``). Der Waechter braucht sie fuer den
+    #: Versions-Drift-Guard (E14), sonst niemand: die Datenbank spricht er
+    #: nie an (Invariante §8.2).
+    db_data_root: Path = _DEFAULT_DB_DATA_ROOT
+    #: AOFF_PG_MAJOR — Major-Version, die **dieses Image** mitbringt. Der
+    #: Wert wird im Dockerfile gesetzt und ist keine Betreiber-Einstellung:
+    #: er beschreibt das Artefakt, gegen das der Drift-Guard prueft.
+    pg_major: int = Field(default=18, ge=1, le=999)
 
     #: AOFF_API_BASE_URL — Basis-URL des API-Dienstes; das Ziel des
     #: Reverse-Proxys im Waechter (``/v2/*``). Bootstrap-Wert, weil der
@@ -110,16 +154,14 @@ class EnvSettings(BaseModel):
     #: „sind Datenbank und Index angebunden?". Ohne eigenen Wert folgt er
     #: `api_base_url`.
     api_health_url: str = f"{_DEFAULT_API_BASE_URL}/_health"
-    #: AOFF_API_PORT — Port, auf dem der API-Dienst lauscht. Heute ist er
-    #: reine Dokumentation: im Compose-Stack hat jeder Dienst seine eigene
-    #: Adresse, und die beiden URLs oben tragen den Port bereits. Er steht
-    #: schon jetzt im Schema, weil der Ein-Container-Umbau ihn braucht —
-    #: dort teilen Waechter und API einen Netzwerk-Namensraum, und der
-    #: Waechter belegt `port` (8080) bereits.
-    api_port: int = Field(default=8080, ge=1, le=65535)
+    #: AOFF_API_PORT — Port, auf dem der API-Dienst lauscht. Seit M1b
+    #: bindend: Waechter und API teilen sich einen Netzwerk-Namensraum, und
+    #: der Waechter belegt `port` (8080) bereits. Der Dienst lauscht damit
+    #: auf ``127.0.0.1:<api_port>`` und ist von aussen nicht erreichbar.
+    api_port: int = Field(default=_DEFAULT_API_PORT, ge=1, le=65535)
 
-    #: AOFF_INDEX_URL — acoustid-index, nur Compose-intern erreichbar.
-    index_url: str = "http://acoustid-index:6081"
+    #: AOFF_INDEX_URL — acoustid-index, nur containerintern erreichbar.
+    index_url: str = "http://127.0.0.1:6081"
     #: AOFF_INDEX_NAME — Name des Suchindex im acoustid-index. Ein Server kann
     #: mehrere halten; wir fahren genau einen. Bootstrap-Wert, weil auch der
     #: Healthcheck des Containers (`/<name>/_health`) ihn braucht — dort gibt
@@ -135,11 +177,16 @@ class EnvSettings(BaseModel):
     def _derive_defaults(cls, data: Any) -> Any:
         """Werte, die einem anderen folgen, solange sie nicht gesetzt sind.
 
-        `config_path`/`dump_dir` folgen `data_dir`, `api_health_url` folgt
+        `config_path` folgt `data_dir`, `api_health_url` folgt
         `api_base_url`. Zweck ist in beiden Faellen derselbe: wer die
-        Wurzel umzieht, muss die abgeleiteten Werte nicht mitpflegen — und
+        Wurzel umzieht, muss den abgeleiteten Wert nicht mitpflegen — und
         eine halb umgezogene Umgebung (neue Basis-URL, alter Healthcheck)
         kann gar nicht erst entstehen.
+
+        **`dump_dir` folgt seit M1b nicht mehr** (v2 §3): es ist ein eigener
+        Mount auf dem Array, `data_dir` liegt auf dem Cache. Die Ableitung
+        haette mehrere GB Tagesdateien lautlos auf den Cache-Pool gelegt —
+        genau die Art Fehler, gegen die die Ableitung sonst schuetzt.
         """
         if not isinstance(data, Mapping):
             return data
@@ -147,8 +194,8 @@ class EnvSettings(BaseModel):
         data_dir = Path(values.get("data_dir") or _DEFAULT_DATA_DIR)
         if not values.get("config_path"):
             values["config_path"] = data_dir / "config.yaml"
-        if not values.get("dump_dir"):
-            values["dump_dir"] = data_dir / "dumps"
+        if not values.get("db_password_file"):
+            values["db_password_file"] = data_dir / "db-password"
         if not values.get("api_health_url"):
             base = str(values.get("api_base_url") or _DEFAULT_API_BASE_URL)
             values["api_health_url"] = f"{base.rstrip('/')}/_health"
@@ -192,13 +239,19 @@ class EnvSettings(BaseModel):
     def db_dsn(self) -> SecretStr:
         """Postgres-DSN aus den `AOFF_DB_*`-Werten.
 
+        Das Passwort kommt aus der Variablen oder — wenn sie leer ist — aus
+        `db_password_file`. Gelesen wird **hier** und nicht beim Bauen der
+        Einstellungen: der Waechter braucht den Zugang nie, und eine
+        fehlende Datei duerfte seinen Start nicht verhindern.
+
         Raises:
-            EnvError: `AOFF_DB_PASSWORD` ist nicht gesetzt.
+            EnvError: Weder Variable noch Datei liefern ein Passwort.
         """
-        password = self.db_password.get_secret_value()
+        password = self.db_password.get_secret_value() or self._password_from_file()
         if not password:
             raise EnvError(
-                f"{env_var_name('db_password')} ist nicht gesetzt — "
+                f"{env_var_name('db_password')} ist nicht gesetzt und "
+                f"{self.db_password_file} nicht lesbar — "
                 "ohne Passwort ist kein Postgres-Zugang moeglich"
             )
         user = quote(self.db_user, safe="")
@@ -206,6 +259,18 @@ class EnvSettings(BaseModel):
         return SecretStr(
             f"postgresql://{user}:{secret}@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    def _password_from_file(self) -> str:
+        """Das Passwort aus `db_password_file`, oder leer.
+
+        Jeder Lesefehler heisst dasselbe wie „keine Datei": der Aufrufer
+        bekommt gleich eine Meldung, die beide Wege nennt. Ein Stacktrace
+        ueber fehlende Rechte waere hier keine bessere Auskunft.
+        """
+        try:
+            return self.db_password_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
 
 
 def env_var_name(field_name: str) -> str:
