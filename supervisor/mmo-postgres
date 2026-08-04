@@ -1,0 +1,23 @@
+#!/bin/sh
+# Startet die eingebackene Postgres unter supervisord (`[program:db]`).
+#
+# Ein Wrapper und keine `command=`-Zeile in der supervisord-Konfiguration,
+# weil Datenverzeichnis und Major-Version aus der Umgebung kommen (der
+# Entrypoint setzt sie) — und weil `exec` dafuer sorgt, dass supervisord die
+# **Postgres** als Kind sieht und nicht eine Shell davor: sonst ginge das
+# `stopsignal=INT` (Fast Shutdown) an die Shell und die Datenbank bekaeme am
+# Ende ein SIGKILL (R10).
+set -eu
+
+PGDATA="${PGDATA:-${AOFF_DB_DATA_ROOT:-/data/db}/${AOFF_PG_MAJOR:-18}}"
+PGBIN="/usr/lib/postgresql/${AOFF_PG_MAJOR:-18}/bin"
+
+# Loopback im Betrieb; die Test-Zusammenstellung (tests/docker-compose.test.yml)
+# setzt 0.0.0.0, weil ein veroeffentlichter Port die Container-Adresse trifft
+# und nicht das Loopback-Interface.
+BIND="${ACOUSTID_BIND_ADDRESS:-127.0.0.1}"
+
+exec "${PGBIN}/postgres" \
+    -D "${PGDATA}" \
+    -c listen_addresses="${BIND}" \
+    -p "${AOFF_DB_PORT:-5432}"

@@ -1,0 +1,31 @@
+# Was nicht in den Build-Kontext gehoert.
+#
+# Der Kontext ist das Repo-Wurzelverzeichnis (das Image braucht alle
+# Workspace-Member). Alles, was hier steht, wird gar nicht erst uebertragen —
+# das spart bei den Fixtures schnell Hunderte MB.
+
+.git
+.github
+.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+
+# Fixtures und Testbeiwerk (nie im Image)
+tests/fixtures/acoustid-dumps
+tests/pg_acoustid
+
+# Steuerungs- und Entwicklungsdateien
+.env
+docs
+sessions
+unraid
+# Steuerungsdateien des Projekts (gross, aendern sich staendig — sie wuerden
+# sonst bei jeder Doku-Zeile den Layer-Cache verwerfen). README.md bleibt:
+# die Wurzel-pyproject.toml verweist darauf.
+ARCHITECTURE.md
+DECISIONS.md
+LEARNINGS.md
+PROGRESS.md

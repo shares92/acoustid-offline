@@ -1,0 +1,16 @@
+#!/bin/sh
+# Startet den eingebackenen acoustid-index (fpindex) unter supervisord.
+#
+# Das Binary ist aus der Quelle gebaut (GPL-3.0, THIRD-PARTY-NOTICES.md);
+# Aufrufform und Vorgabepfad stammen aus dem Upstream-Dockerfile, damit ein
+# bestehendes Index-Verzeichnis aus v1 unveraendert weiterlaeuft.
+#
+# `exec`, damit supervisord den Index selbst als Kind fuehrt (Signale).
+set -eu
+
+BIND="${ACOUSTID_BIND_ADDRESS:-127.0.0.1}"
+
+exec /usr/local/bin/fpindex \
+    --dir "${ACOUSTID_INDEX_DIR:-/index}" \
+    --address "${BIND}" \
+    --port "${ACOUSTID_INDEX_PORT:-6081}"
