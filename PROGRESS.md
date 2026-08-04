@@ -10,26 +10,34 @@ docs/archive/HANDOFF-v1.md) + docs/research/m0-impact-analyse.md;
 technische Referenz: ARCHITECTURE.md (beschreibt bis M1/M2 den
 gebauten v1-Stand, siehe Kopfvermerk dort).
 
-**Status (2026-08-04): Phasen 0–18 (v1) und M0 (Impact-Analyse v2)
-abgeschlossen.** HANDOFF v2 übernommen: Ein-Container-Modell mit
-supervisord+tini, Scope-Erweiterung Discogs/CAA/TheAudioDB, Migration
-in Phasen M1a–M9 (korrigierter Plan unten). Alle M0-Entscheide E1–E16
-sind vom Betreiber bestätigt (DECISIONS 2026-08-04). Code unverändert
-seit `2570ea5` (1649 Tests, CI grün). **Warten auf Go für M1a.**
+**Status (2026-08-04, spät): Phasen 0–18 (v1), M0 und M1a
+abgeschlossen.** HANDOFF v2 übernommen (Ein-Container mit
+supervisord+tini, Phasen M1a–M9, Entscheide E1–E16 bestätigt —
+DECISIONS 2026-08-04). M1a (Naht-Phase, `ff018d1`): Naht-Vertrag
+`control.py`, Adressen in `EnvSettings`, `FakeSupervisor`
+(supervisord-treu nach Zweitreview-Nacharbeit), dbimport-Assertion
+(Task-Chip erledigt). **1701 Tests** (Unit 1479 + Integration;
+Compose-E2E 6/6 doppelt gefahren), Doppel-Review (Fable + GPT 5.6
+blind, 5 Findings → 4 gefixt, 1 als Entscheid dokumentiert).
+**Unraid-Probelauf läuft** auf Tower (Betreiber-Freigabe für
+Server-Tests 2026-08-04). **Warten auf Go für M1b.**
 
-## Session-Übergabe (2026-08-04, nach M0)
+## Session-Übergabe (2026-08-04, nach M0 + M1a)
 
-**Kurzbeschreibung:** Session vom 04.08.: HANDOFF v2 eingelesen, per
-Betreiber-Go die M0-Impact-Analyse gefahren — vier parallele
-Opus-Analysen (Wächter; API/Importer/Shared; Infra/CI/Doku;
-Supervisor-Recherche), Synthese durch den Orchestrator,
-Doppel-Review des Ergebnisses (Opus 13 + GPT-5.6 12 Findings, alle
-verifiziert und eingearbeitet), HOCH-Befunde vom Orchestrator selbst
-am Code nachgeprüft. Ergebnis: docs/research/m0-impact-analyse.md
-(Betroffenheitsliste, Korrekturen K1–K10 an v2, korrigierter
-Phasenplan, Entscheide E1–E16). Betreiber hat E1–E16 wie empfohlen
-entschieden; Doku-Sweep ausgeführt (HANDOFF-Umzug, DECISIONS,
-PROGRESS, ARCHITECTURE-Vermerk, LEARNINGS-Rubriken).
+**Kurzbeschreibung:** Session vom 04.08.: (1) HANDOFF v2 eingelesen,
+M0-Impact-Analyse gefahren (vier parallele Opus-Analysen, Synthese
+Orchestrator, Doppel-Review Opus+GPT-5.6 mit 25 verifizierten
+Findings) → docs/research/m0-impact-analyse.md; Betreiber hat E1–E16
+entschieden, Doku-Sweep `5a38d2f`. (2) M1a per Opus-Bau-Agent im
+Worktree gebaut (Stand-Vorprüfung bestanden), vom Orchestrator
+verifiziert (Diff-Review, ruff, Unit, E2E-Zweitlauf), blinder
+GPT-5.6-Review fand 4 fixwürdige Findings (Compose-Verdrahtung der
+neuen Env-Variablen, drei supervisord-Treue-Fehler der Attrappe) —
+Nacharbeit verifiziert, ff-Merge `ff018d1`. (3) Betreiber gab
+Server-Freigabe: Unraid-Probelauf (docs/probelauf-unraid.md) von
+Claude auf Tower gestartet (Setup: PG direkt auf /mnt/disk11, Index
+auf NVMe-Cache chown 6081, Repo/Dumps auf appdata; Smoke-Lauf läuft,
+Messlauf bis 2012-12-31 folgt).
 
 **Aktueller Stand — funktioniert (getestet, CI grün, unverändert):**
 Alles aus dem v1-Stand bis Phase 18: Shared (Config/Env/Logging/
@@ -40,34 +48,37 @@ submission_status — bug-für-bug-dokumentiert), Wächter-Kern
 Zustandsmaschine/Idle-Stopp, Lookup-Cache, Auth & Rate-Limit).
 Ergebnistabelle unten.
 
-**Existiert noch nicht:** der gesamte v2-Umbau (M1a–M2: Supervisor,
-ein Image, Umbenennung), Scheduler/Notify/Backup/Metrics (M2.5 — die
-alten Phasen 19–22 wurden nie gebaut), Discogs/Cover/CAA/TADB/v1-API
-(M3–M7), Admin-UI (M8), E2E/Release (M9). Nie gelaufen: Voll-Bootstrap
-am echten Datenbestand, echter Upstream-Submit.
+**Existiert noch nicht:** der Ein-Container-Umbau selbst (M1b:
+Supervisor, ein Image; M2: Umbenennung), Scheduler/Notify/Backup/
+Metrics (M2.5 — die alten Phasen 19–22 wurden nie gebaut),
+Discogs/Cover/CAA/TADB/v1-API (M3–M7), Admin-UI (M8), E2E/Release
+(M9). Nie gelaufen: Voll-Bootstrap am echten Datenbestand, echter
+Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung M1a** einholen (Naht-Phase, läuft weiter auf
-   Docker — kleinster risikofreier Einstieg in den v2-Umbau).
-2. **Task-Chip task_e5db0b72** (DB-Assertion für die entescapte
-   2011er-Meta-Zeile in den dbimport-Integrationstests): Kleinstposten,
-   vor M1b erledigen — am besten als Beifang der M1a-Session.
-3. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
-   Anleitung docs/probelauf-unraid.md; liefert jetzt zusätzlich die
-   M1b-Messwerte (PG-Start/Stopp, Index-Kaltstart → LEARNINGS-Rubriken)
-   und die query_hashes-Empfehlungstabelle.
-4. **Daten-Flaute seit 2026-07-22** bei data.acoustid.org vor
+1. **Go-Entscheidung M1b** einholen (Ein-Container-Umbau; Block unten,
+   inkl. Py-3.14-Check für supervisord als erstem Prüfpunkt).
+2. **Unraid-Probelauf abschließen** (läuft auf Tower, von Claude
+   gestartet — Betreiber-Freigabe 2026-08-04): Smoke-Lauf in Arbeit,
+   danach Messlauf (`--end-date 2012-12-31`); Report-JSONs auswerten →
+   query_hashes-Empfehlungstabelle + README-Zeitangabe +
+   LEARNINGS-Messwerte. Nichts wegräumen — der Stand ist der Anfang
+   des echten Bootstraps.
+3. **Daten-Flaute:** entschärft — Deltas liegen wieder bis 2026-07-27
+   vor (geprüft 2026-08-04); Export hinkt aber ~8 Tage nach. Vor
    Produktivstart erneut prüfen (ARCHITECTURE §12).
-5. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
-6. **XFF-Betreiber-Entscheid** (Rate-Limit hinter TLS-Proxy):
+4. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
+5. **XFF-Betreiber-Entscheid** (Rate-Limit hinter TLS-Proxy):
    spätestens M9 beim TLS-Hinweis.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung), dann per
-AskUserQuestion das Go für **M1a** einholen und bei Go einen
-Opus-Bau-Agenten mit dem M1a-Block unten beauftragen — inklusive
+AskUserQuestion das Go für **M1b** einholen und bei Go einen
+Opus-Bau-Agenten mit dem M1b-Block unten beauftragen — inklusive
 Stand-Vorprüfung im Auftragstext (DECISIONS 2026-08-01) und
-Sperrzonen-Vermerk (Arbeitsregeln).
+Sperrzonen-Vermerk (Arbeitsregeln). Probelauf-Stand auf Tower prüfen
+(`tail /mnt/user/appdata/acoustid-offline/smoke.log`, Reports unter
+`/mnt/user/appdata/acoustid-offline/dumps/`).
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
@@ -149,35 +160,10 @@ DECISIONS.md; Berichte: docs/research/.
 | 16 | Wächter: Zustandsmaschine, Idle-Stopp & Startfehler | a42c192 | `ALLOWED_TRANSITIONS` (25 Paare), IdleStopper (Job-Blockade §8.5 via `JobSource`), StatePoller 15 s, Weck-Frist gehört dem Vorgang; E2E 4/4 |
 | 17 | Wächter: Lookup-Cache | 8c3816c | Eigene SQLite selbstheilend, Schlüssel SHA-256 per Sperrliste, nur 200+`status: ok`, Byte-Parität, LRU über Sequenz, Hit ≠ Aktivität, `invalidate_cache(reason)`; E2E 5/5 |
 | 18 | Wächter: Auth & Rate-Limit | 2570ea5 | Reihenfolge Limit → Auth → Cache → Wecken (Abweisungen wecken nie), `apikey` gegen `api_key` (sha256 konstant-zeitig), Whitelist Picard/beets, Codes 2/4/14/19, 60-s-Gleitfenster je IP (LRU 2048); E2E 6/6 |
-| **M0** | **Impact-Analyse HANDOFF v2** | (dieser Commit) | docs/research/m0-impact-analyse.md: Betroffenheit (~10 % Wächter-Code, 0 Zeilen API/Importer/Shared-Steuerung, ~26 % Wächter-Testzeilen, E2E/Repo-Layout-Tests), Korrekturen K1–K10 an v2, Phasenplan M1a–M9, Entscheide E1–E16 (Betreiber bestätigt); Doppel-Review Opus+GPT-5.6, alle 25 Findings verifiziert/eingearbeitet |
+| **M0** | **Impact-Analyse HANDOFF v2** | 5a38d2f | docs/research/m0-impact-analyse.md: Betroffenheit (~10 % Wächter-Code, 0 Zeilen API/Importer/Shared-Steuerung, ~26 % Wächter-Testzeilen, E2E/Repo-Layout-Tests), Korrekturen K1–K10 an v2, Phasenplan M1a–M9, Entscheide E1–E16 (Betreiber bestätigt); Doppel-Review Opus+GPT-5.6, alle 25 Findings verifiziert/eingearbeitet |
+| **M1a** | **Naht-Phase (weiter auf Docker)** | 51e3541…ff018d1 | `control.py` (ProcessGroupController-Protocol + ProcessControlError), Adressen/`api_port` in EnvSettings (Defaults exakt erhalten; Compose reicht `AOFF_API_*` durch, Leerstring = Ableitungs-Schalter), `FakeSupervisor` supervisord-treu (SPAWN_ERROR-Kette, EXITED-Absturzpfad, `start_failure()`, PID-Logik — 3 Treue-Fixes aus blindem GPT-5.6-Review), dbimport-Assertion 2011er-Meta (Task-Chip task_e5db0b72 erledigt); 1701 Tests, E2E 6/6 doppelt, kein Verhaltensunterschied |
 
 ---
-
-## M1a: Naht-Phase (läuft weiter auf Docker)
-
-Ziel: Die Docker-Naht so umbauen, dass M1b ein reiner Adapter-Tausch
-wird — ohne Verhaltensänderung, alle 1649 Tests + E2E unverändert grün.
-
-Aufgaben:
-- [ ] `ProcessGroupController`-Protocol einziehen (`wake.py:222`
-      typisiert heute konkret `StackController`; Vorbild `JobSource`,
-      `lifecycle.py:129–139`); `service.py:173` gegen das Protocol
-      verdrahten
-- [ ] Fehlerbasisklasse `ProcessControlError` über `DockerError`
-      (drei `except`-Stellen: `wake.py:381,462,527`)
-- [ ] `API_HEALTH_URL`/`API_BASE_URL` (`wake.py:90,93`) aus den
-      Modulkonstanten nach `EnvSettings` (fünf Testdateien importieren
-      sie); `MMO_API_PORT`-Feld vorbereiten (Name noch `AOFF_…`, die
-      Umbenennung kommt in M2)
-- [ ] `FakeSupervisor`-Attrappe neben `FakeDaemon` in
-      `watchdog_stubs.py` (Zustands-Dict, `calls`, `fail_on`,
-      supervisord-Zustände STOPPED/STARTING/RUNNING/BACKOFF/FATAL/
-      EXITED) + eigene Tests
-- [ ] Beifang: Task-Chip task_e5db0b72 (DB-Assertion entescapte
-      2011er-Meta-Zeile in `importer/tests/`)
-
-Definition of Done: Suite + Compose-E2E unverändert grün; kein
-Verhaltensunterschied; `docker.py` bleibt in Betrieb.
 
 ## M1b: Ein-Container-Umbau
 
@@ -237,6 +223,21 @@ Aufgaben:
       fpindex
 - [ ] Messwerte erheben → LEARNINGS-Rubriken (PG-Start/Stopp,
       Index-Kaltstart auf SSD — entscheidet den E12-Mess-Vorbehalt)
+
+Hinweise (aus M1a): Der Adapter-Tausch ist genau eine Zeile
+(`service.py`: `self.stack: ProcessGroupController = …`).
+`FakeSupervisor.start_failure()` bildet den gescheiterten Weckvorgang
+ab (`STARTING→BACKOFF→FATAL` → `ready` wird nie erreicht), `crash()`
+den Absturz im Betrieb (`RUNNING→EXITED`) — damit lassen sich die
+beiden E15-Richtungen getrennt messen. Beim Tausch nachziehen:
+`WakeCoordinator._docker_failures` + Logtexte „Docker antwortet
+nicht/wieder" (`wake.py`, bewusst in M1a belassen); optional
+`ReadinessSource`-Protocol für `FakeProbe` (heute
+`# type: ignore[arg-type]` in Tests). Leerstring-Konvention für
+abgeleitete Env-Werte übernehmen (DECISIONS 2026-08-04 M1a).
+Messungen auf Tower fahren (SSH-Zugang, Betreiber-Freigabe
+2026-08-04) — der Probelauf-Bestand dort ist zugleich das
+Migrations-Testobjekt für das Volume-Rezept.
 
 Definition of Done: Suite grün; portierter E2E grün (lokal); CI grün
 inkl. Lauf gegen eigenen fpindex-Build; `docker.py` + docker.sock +

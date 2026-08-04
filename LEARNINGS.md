@@ -509,6 +509,28 @@ Menschenpasswörter ⇒ KDF (argon2), Maschinen-Token ⇒ schneller Hash +
 konstant-zeitiger Vergleich; im Anfragepfad grundsätzlich keine
 speicherharten Funktionen.
 
+## [Prozess] Attrappen fremder Systeme sind Paritäts-Code — gegen die Original-Semantik reviewen
+
+Was: Der neu gebaute `FakeSupervisor` (M1a) wirkte plausibel und hatte
+eigene Tests — trotzdem fand der blinde Zweitreview drei Treue-Fehler
+gegenüber echtem supervisord: falscher Fault-Code für Startfehler
+(FAILED statt SPAWN_ERROR 50), ein Zustandsübergang, den das Original
+nicht kennt (`RUNNING→FATAL` direkt statt über
+`STARTING→BACKOFF→FATAL`; Absturz ist real `RUNNING→EXITED`), und eine
+PID im BACKOFF-Zustand (real 0, der Prozess ist tot).
+Warum: Eine Attrappe definiert, wogegen alle späteren Tests laufen —
+Treue-Fehler machen genau die kritischen Pfade (Startfehler, Absturz,
+`ready→error`) auf Zuständen grün, die das echte System nie erzeugt.
+Die eigenen Tests der Attrappe helfen nicht: sie stammen aus derselben
+(Fehl-)Lektüre. Dasselbe Muster wie bei der Bit-Verifikation
+(Phase 9): eigene Tests aus derselben Quelle sind keine Verifikation.
+Anwenden: Test-Attrappen externer Systeme wie Paritäts-Code behandeln —
+Zustandsmaschine, Fehlercodes und Feld-Semantik einzeln gegen Doku UND
+Quellcode des Originals belegen (hier supervisor/states.py,
+rpcinterface.py); einen unabhängigen Reviewer explizit auf die
+Attrappen-Treue ansetzen; wo möglich später einen Kontrakt-Test gegen
+das echte System ergänzen (M1b: pytest-Fixture mit echtem supervisord).
+
 ---
 
 ## Messwert-Rubriken v2-Migration (HANDOFF v2 §16: „LEARNINGS.md sammelt Messwerte")

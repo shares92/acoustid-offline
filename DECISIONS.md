@@ -5,6 +5,38 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-04: M1a-Entscheide — Naht-Modul, Adress-Ableitung, Attrappen-Treue
+
+Entscheidung (Phase M1a, Commits `51e3541`…`ff018d1`):
+(a) Der Naht-Vertrag (`ProcessGroupController`-Protocol +
+`ProcessControlError`) liegt in einem **eigenen Modul**
+`watchdog/app/control.py` — nicht in `wake.py`: die Steuerungsmodule
+müssen die Fehlerbasis importieren, `wake` importiert die Steuerung;
+in `wake.py` wäre es ein Importzyklus. (b) `api_health_url` **folgt**
+`api_base_url`, wenn ungesetzt (`_derive_defaults`, Muster wie
+`config_path`/`dump_dir` unter `data_dir`); in Compose wird
+`AOFF_API_HEALTH_URL` bewusst **ohne** Default durchgereicht
+(`${AOFF_API_HEALTH_URL:-}`) — der Leerstring ist der Schalter für die
+Ableitung. Diese Konvention übernimmt M1b für weitere abgeleitete
+Werte. (c) `ReadinessProbe` verlangt die Adresse als Pflichtparameter
+(bewusste Signaturänderung in der Naht-Phase): ein eingebauter Default
+wäre ein zweiter Ort für die Umgebung und bliebe bei einer Umstellung
+still falsch. (d) `FakeSupervisor` bildet die echte
+supervisord-Semantik nach: Fault-Kette `BAD_NAME → ALREADY_STARTED →
+SPAWN_ERROR(50)`, Absturz = `RUNNING→EXITED` (die Kante
+`RUNNING→FATAL` existiert im Original nicht und ist über die
+Attrappen-API nicht erreichbar), `FATAL` nur über
+`start_failure()` (`STARTING→BACKOFF→FATAL`), PID nur für
+STARTING/RUNNING/STOPPING.
+Begründung: (a)–(c) Bau-Agent, im Review bestätigt; (d) Konsequenz aus
+dem blinden GPT-5.6-Zweitreview — drei Treue-Fehler der Attrappe
+(falscher Fault-Code, unmöglicher Zustandsübergang, PID bei BACKOFF)
+hätten M1b-Tests auf Pfaden grün gemacht, die das echte supervisord
+nie erzeugt.
+Alternativen: Vertrag in `wake.py` (Zyklus), Health-URL mit
+Compose-Default (halb umgezogene Umgebung bliebe lautlos), Attrappe
+„einfach genug" lassen (M1b testete gegen Fiktion) — verworfen.
+
 ## 2026-08-04: M0-Betreiber-Entscheide E1–E16 zur v2-Migration
 
 Entscheidung (alle vom Betreiber bestätigt; Herleitung, Optionen und
