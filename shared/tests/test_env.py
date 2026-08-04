@@ -100,6 +100,20 @@ def test_an_explicit_health_url_wins_over_the_base_url() -> None:
     assert settings.api_health_url == "http://api:9/gesund"
 
 
+def test_an_empty_health_url_still_follows_the_base_url() -> None:
+    """Genau so reicht Compose sie durch (`${AOFF_API_HEALTH_URL:-}`).
+
+    Der Container bekommt die Variable **gesetzt, aber leer** — nur dann
+    greift die Ableitung. Stuende in der Compose-Datei derselbe Default wie
+    im Schema, liefe ein Betreiber, der nur die Basis-URL umzieht, lautlos
+    mit dem alten Healthcheck weiter.
+    """
+    settings = EnvSettings.from_env(
+        {"AOFF_API_BASE_URL": "http://127.0.0.1:8081", "AOFF_API_HEALTH_URL": ""}
+    )
+    assert settings.api_health_url == "http://127.0.0.1:8081/_health"
+
+
 def test_empty_values_count_as_unset() -> None:
     settings = EnvSettings.from_env({"AOFF_PORT": "", "AOFF_DB_PASSWORD": "   "})
     assert settings.port == 8080

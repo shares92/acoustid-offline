@@ -64,10 +64,25 @@ services:
       AOFF_DATA_DIR: /data
       AOFF_CONFIG_PATH: /data/config.yaml
       AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
+      # Ziel des Reverse-Proxys (/v2/*) und die Bereitschaftsfrage des
+      # Weckens. Seit M1a Bootstrap-Werte statt Codekonstanten — ohne
+      # Durchreichen kaemen sie hier nie an: der Container erbt die .env
+      # nicht (kein `env_file`), sie dient nur der Interpolation dieser
+      # Datei.
+      AOFF_API_BASE_URL: ${AOFF_API_BASE_URL:-http://acoustid-api:8080}
+      # Bewusst OHNE Default: leer heisst „nicht gesetzt", und dann leitet
+      # `EnvSettings` den Healthcheck aus der Basis-URL ab (shared/env.py,
+      # `_derive_defaults`). Stuende hier derselbe Default, koennte ein
+      # Betreiber die API umziehen (AOFF_API_BASE_URL) und haette lautlos
+      # weiter den alten Healthcheck — genau die halb umgezogene Umgebung,
+      # die die Ableitung verhindern soll.
+      AOFF_API_HEALTH_URL: ${AOFF_API_HEALTH_URL:-}
       # Bewusst KEINE AOFF_DB_*/AOFF_INDEX_*-Variablen: der Waechter
       # spricht nie mit der Postgres und nie mit dem Suchindex
       # (Invariante §8.2). Was er ueber den Datenbestand weiss, steht in
-      # seiner eigenen SQLite.
+      # seiner eigenen SQLite. AOFF_API_PORT fehlt aus demselben Grund:
+      # im Compose-Stack traegt die Basis-URL den Port, bindend wird er
+      # erst im Ein-Container-Betrieb (M1b).
     volumes:
       # Dasselbe Volume, das der Stack unter /watchdog read-only mountet:
       # dort liegt die config.yaml, die api und importer lesen, und daneben
