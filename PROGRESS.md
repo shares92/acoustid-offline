@@ -1,162 +1,132 @@
-# PROGRESS.md — acoustid-offline
+# PROGRESS.md — musicmeta-offline (vormals acoustid-offline)
 
 Übergabe- und Steuerungsdatei: Statuskopf, Session-Übergabe, kompakte
 Ergebnisliste der abgeschlossenen Phasen und der vollständige Plan der
 offenen Phasen. Die ausführlichen Aufgabenblöcke erledigter Phasen
-liegen in der Git-Historie dieser Datei und im Session-Archiv
-(`sessions/`). Quelle des Plans: docs/HANDOFF.md; technische Referenz:
-ARCHITECTURE.md.
+(inkl. der alten v1-Blöcke 19–29) liegen in der Git-Historie dieser
+Datei und im Session-Archiv (`sessions/`). Quelle des Plans:
+docs/HANDOFF.md (**v2**, „musicmeta-offline"; v1 archiviert unter
+docs/archive/HANDOFF-v1.md) + docs/research/m0-impact-analyse.md;
+technische Referenz: ARCHITECTURE.md (beschreibt bis M1/M2 den
+gebauten v1-Stand, siehe Kopfvermerk dort).
 
-**Status (2026-08-01): Phasen 0–18 abgeschlossen — Auth (`apikey`)
-und IP-Rate-Limit stehen am Proxy, auch für Cache-Hits bei
-schlafendem Stack. Repo https://github.com/shares92/acoustid-offline,
-Phase-18-Commit `2570ea5` (danach Doku-Update), Arbeitsbaum sauber,
-CI grün (1649 Tests, drei Jobs: Lint+Unit 1391+43 übersprungen,
-Integration PG+Index 198, Bit-Verifikation pg_acoustid 8; 3 network-
-und 6 compose-Tests laufen nie in CI, der Compose-E2E lief lokal
-zweifach grün). Warten auf Go für Phase 19 (Wächter — Scheduler &
-Update-Zyklus); danach ist der volle 5-Phasen-Doku-Sweep (15–19)
-fällig.**
+**Status (2026-08-04): Phasen 0–18 (v1) und M0 (Impact-Analyse v2)
+abgeschlossen.** HANDOFF v2 übernommen: Ein-Container-Modell mit
+supervisord+tini, Scope-Erweiterung Discogs/CAA/TheAudioDB, Migration
+in Phasen M1a–M9 (korrigierter Plan unten). Alle M0-Entscheide E1–E16
+sind vom Betreiber bestätigt (DECISIONS 2026-08-04). Code unverändert
+seit `2570ea5` (1649 Tests, CI grün). **Warten auf Go für M1a.**
 
-## Session-Übergabe (Session-Ende 2026-08-01, nach Phase 18)
+## Session-Übergabe (2026-08-04, nach M0)
 
-**Kurzbeschreibung:** Session vom 01.08. (Wächter-Kern): Phasen 14–18
-nacheinander gebaut (je ein Opus-Bau-Agent im Worktree,
-Stand-Vorprüfung jeweils bestanden), vom Orchestrator verifiziert
-(Code-Review + Suite + ruff; E2E ab Phase 15 jeweils doppelt gefahren
-— Agent und Orchestrator), ff-Merges
-`7ce2cd5`/`3f9daee`/`a42c192`/`8c3816c`/`2570ea5`, alle CI-Läufe
-beobachtet und grün, 5-Phasen-Doku-Sweep (10–14) und Doku-Updates
-nach 15–18 erledigt. Session-Archiv:
-`sessions/2026-08-01-phasen-14-18-waechter-kern.md`. **Die Go-Frage
-zu Phase 19 und die XFF-Frage wurden am Session-Ende verworfen — kein
-Go erteilt, kein Entscheid gefallen.**
+**Kurzbeschreibung:** Session vom 04.08.: HANDOFF v2 eingelesen, per
+Betreiber-Go die M0-Impact-Analyse gefahren — vier parallele
+Opus-Analysen (Wächter; API/Importer/Shared; Infra/CI/Doku;
+Supervisor-Recherche), Synthese durch den Orchestrator,
+Doppel-Review des Ergebnisses (Opus 13 + GPT-5.6 12 Findings, alle
+verifiziert und eingearbeitet), HOCH-Befunde vom Orchestrator selbst
+am Code nachgeprüft. Ergebnis: docs/research/m0-impact-analyse.md
+(Betroffenheitsliste, Korrekturen K1–K10 an v2, korrigierter
+Phasenplan, Entscheide E1–E16). Betreiber hat E1–E16 wie empfohlen
+entschieden; Doku-Sweep ausgeführt (HANDOFF-Umzug, DECISIONS,
+PROGRESS, ARCHITECTURE-Vermerk, LEARNINGS-Rubriken).
 
-**Aktueller Stand — funktioniert (getestet, CI grün):** Shared-Paket
-(Config/Env/Logging/Modelle), DB-Migrationen (core/indexes),
-Index-Client (msgpack), Importer komplett (Download, Parser mit
-Epochen-Lesart, transaktionaler Import, Index-Feed, Bootstrap-Job mit
-9 Exit-Codes und Probelauf-Modus), API komplett (/v2/lookup mit
-meta/MB-Resolver, /v2/submit off/local/local+upstream mit
-Upstream-Queue, /v2/lookup/batch, /v2/submission_status) — alles
-bug-für-bug-kompatibel dokumentiert (docs/api-lookup.md,
-docs/api-submit.md, docs/importer-job.md). **Wächter (Phasen 14–15):**
-Grundgerüst `acoustid_watchdog` (SQLite-Zustandsdatenbank mit
-`user_version`-Migrationsläufer, event_log-Ringpuffer 5000, `GET
-/status` baulich weckfrei, Erststart mit argon2-Passwort nur ins
-Containerlog), Reverse-Proxy `/v2/*` (streamend, roh — 405-Eigenheit
-bleibt durchgereicht), Docker-Steuerung über den Socket (3 Routen,
-httpx über uds, keine Fremdbibliothek), Wake-on-request
-(Einzel-Weckvorgang via Task+shield, Timeout → 503+Retry-After 30,
-E2E-verifiziert: Weckdauer ~1,3 s lokal), interner API-Healthcheck
-`GET /_health` (DB+Index, ohne MB), Reload-Signal komplett
-(Sendeseite Marke `config.yaml.reload` + Empfangsseite
-`api/app/reload.py`, 10-s-Intervall, Teilmenge submit.*/
-mb.keep_submitted_mbid). **Phase 16:** Zustandsmaschine mit
-Übergangstabelle (`ALLOWED_TRANSITIONS`, streng `to()` vs. nachsichtig
-`try_to()`), Idle-Stopp (`idle.timeout_min`, Job-Blockade §8.5 über
-`JobSource`/`update_run`, Job setzt Leerlaufuhr zurück), Docker-Poller
-(15 s, erkennt Hand-Stopp/-Start, überspringt bei laufenden
-Vorgängen), Startfehler-Pfad mit Erholung aus `error`, Weck-Frist
-gehört jetzt dem Vorgang (jeder Wartende verlängert auf seine
-Haltezeit). **Phase 17:** Lookup-Cache als eigene SQLite-Datei
-(`lookup-cache.sqlite3`, selbstheilend — Defekt ⇒ wegwerfen und neu),
-Schlüssel = SHA-256 per Sperrliste (alles außer `client`/
-`clientversion`), nur HTTP 200 + `status: ok` wird eingelagert
-(Batch/xml/jsonp bewusst nicht), Byte-Parität ohne `X-Cache`,
-LRU-Verdrängung über monotone Sequenz bis 90 % von
-`cache.max_size_mb`, Hit zählt nicht als Aktivität, Invalidierung
-über `service.invalidate_cache(reason)` (Submit im Proxy-Pfad;
-`delta_import` Phase 19, `manual` Phase 25) — auch bei
-`cache.enabled=false`. **Phase 18:** Reihenfolge Rate-Limit → Auth →
-Cache → Wecken (abgewiesene Anfragen wecken nie, Tripwire-getestet);
-`apikey`-Modus gegen `api_key`-Tabelle (sha256-Hash-Vergleich
-konstant-zeitig, „zuletzt benutzt" auf 1 Schreibvorgang/60 s je Key
-gedrosselt), Whitelist-Schalter Picard/beets, Fehlercodes belegt
-(fehlender client 2/400, ungültiger Key 4/400, Limit 14/429 mit
-gerechnetem Retry-After, Rumpf > 1 MiB 19/413); IP-Limiter als
-exaktes gleitendes 60-s-Fenster (LRU-Deckel 2048 IPs, abgelehnte
-Anfragen zählen nicht); 503-Text jetzt generisch (Original-Wortlaut
-Code 13), /status bleibt offen.
-**Existiert noch nicht:** Wächter-Rest (Phasen 19–22: Scheduler,
-Notify, Backup, Metrics), Admin-UI (23–27, Designpaket abgenommen
-unter docs/design/), E2E/Release (28–29). Nie gelaufen:
-Voll-Bootstrap am echten Datenbestand, echter Upstream-Submit.
+**Aktueller Stand — funktioniert (getestet, CI grün, unverändert):**
+Alles aus dem v1-Stand bis Phase 18: Shared (Config/Env/Logging/
+Modelle), DB-Migrationen, Index-Client, Importer komplett, API komplett
+(/v2/lookup, /v2/submit off/local/local+upstream, Batch,
+submission_status — bug-für-bug-dokumentiert), Wächter-Kern
+(Grundgerüst/SQLite/Status, Proxy/Docker-Steuerung/Wecken,
+Zustandsmaschine/Idle-Stopp, Lookup-Cache, Auth & Rate-Limit).
+Ergebnistabelle unten.
+
+**Existiert noch nicht:** der gesamte v2-Umbau (M1a–M2: Supervisor,
+ein Image, Umbenennung), Scheduler/Notify/Backup/Metrics (M2.5 — die
+alten Phasen 19–22 wurden nie gebaut), Discogs/Cover/CAA/TADB/v1-API
+(M3–M7), Admin-UI (M8), E2E/Release (M9). Nie gelaufen: Voll-Bootstrap
+am echten Datenbestand, echter Upstream-Submit.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung Phase 19** einholen (Scheduler & Update-Zyklus;
-   Hinweise im Phasenblock: Stop-Timeout, Submit-während-Lauf-Entscheid,
-   drain_queue/retry_forward, Cache-Invalidierung) — die Go-Frage vom
-   01.08. wurde verworfen, kein Go erteilt. Nach Phase 19 ist der
-   volle 5-Phasen-Doku-Sweep (15–19) fällig.
-2. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
-   Anleitung docs/probelauf-unraid.md; Report-JSONs zurückgeben →
-   daraus query_hashes-Empfehlungstabelle + README-Zeitangabe.
-3. **Task-Chip offen** (task_e5db0b72): DB-Assertion für die
-   entescapte 2011er-Meta-Zeile in den dbimport-Integrationstests
-   (`importer/tests/`; manuell am 01.08. bereits bestätigt).
+1. **Go-Entscheidung M1a** einholen (Naht-Phase, läuft weiter auf
+   Docker — kleinster risikofreier Einstieg in den v2-Umbau).
+2. **Task-Chip task_e5db0b72** (DB-Assertion für die entescapte
+   2011er-Meta-Zeile in den dbimport-Integrationstests): Kleinstposten,
+   vor M1b erledigen — am besten als Beifang der M1a-Session.
+3. **Unraid-Probelauf** (Phase-8-DoD-Rest, Betreiber-Hardware):
+   Anleitung docs/probelauf-unraid.md; liefert jetzt zusätzlich die
+   M1b-Messwerte (PG-Start/Stopp, Index-Kaltstart → LEARNINGS-Rubriken)
+   und die query_hashes-Empfehlungstabelle.
 4. **Daten-Flaute seit 2026-07-22** bei data.acoustid.org vor
    Produktivstart erneut prüfen (ARCHITECTURE §12).
-5. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst Phase 28
-   (Vormerkungen stehen in den Phasenblöcken).
-6. **XFF-Betreiber-Entscheid** (Rate-Limit hinter TLS-Proxy,
-   Vertrauensliste als §6-Schlüssel?) — Frage am 01.08. verworfen;
-   Hinweis steht im Phase-29-Block, spätestens dort entscheiden.
+5. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
+6. **XFF-Betreiber-Entscheid** (Rate-Limit hinter TLS-Proxy):
+   spätestens M9 beim TLS-Hinweis.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
---oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung, s.
-Arbeitsregeln), dann per AskUserQuestion das Go für Phase 19 einholen
-und bei Go einen Opus-Bau-Agenten mit dem Phase-19-Block unten
-beauftragen — inklusive Stand-Vorprüfung im Auftragstext (DECISIONS
-2026-08-01). Nach Phase 19: voller 5-Phasen-Doku-Sweep (15–19) mit
-Diff-Anzeige.
+--oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung), dann per
+AskUserQuestion das Go für **M1a** einholen und bei Go einen
+Opus-Bau-Agenten mit dem M1a-Block unten beauftragen — inklusive
+Stand-Vorprüfung im Auftragstext (DECISIONS 2026-08-01) und
+Sperrzonen-Vermerk (Arbeitsregeln).
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
-  (anweisungsgleich mit Migrations-SQL bzw. deckungsgleich mit
-  Parser-SPECS) — nie freihändig editieren.
+  — nie freihändig editieren; Discogs/Covers werden NEUE Abschnitte.
 - Bug-für-Bug-Paritäten der API sind Absicht (Abweichungstabellen in
-  docs/api-lookup.md / docs/api-submit.md) — vermeintliche
-  „Original-Bugs" nicht fixen.
+  docs/api-lookup.md / docs/api-submit.md) — „Original-Bugs" nicht
+  fixen.
 - `compare2`/`extract_query`/Chromaprint-Encoder nur mit
   Bit-Verifikation (CI-Job `extension`) ändern.
-- Index-Image bleibt per Digest gepinnt; Doc-ID-Bereich für
-  Submissions ist [2^31, 2^32-1] (u32-Grenze real).
-- Fixtures (`tests/fixtures/acoustid-dumps/*.jsonl.gz`) nie committen
-  (Lizenzentscheid); Beschaffung über fetch_fixtures.py.
-- Skripte/Container nie mit CWD=Repo-Root starten
-  (Namespace-Paket-Falle); psycopg wird in shared bewusst lazy geladen.
-- Lokale Integrationstests auf Apple Silicon brauchen colima mit
+- Angewendete Migrations-SQL-Dateien nie editieren (Drift-Sperre) —
+  Schema-Änderungen nur als neue Migration (betrifft E8).
+- Doc-ID-Bereich für Submissions ist [2^31, 2^32-1] (u32-Grenze real).
+- Fixtures (`tests/fixtures/acoustid-dumps/*.jsonl.gz`) nie committen;
+  Beschaffung über fetch_fixtures.py. `pg_acoustid` nie ausliefern.
+- Skripte/Container nie mit CWD=Repo-Root starten (Namespace-Falle);
+  psycopg in shared bewusst lazy.
+- Lokale Integrationstests auf Apple Silicon: colima mit
   `--vz-rosetta`; CI-Flakes durch Docker-Hub-Timeouts → `gh run rerun
-  --failed` genügt.
+  --failed`.
+- **Neu (v2):** fpindex ist GPL-3.0 → Einbacken nur mit NOTICES/
+  Quellangebot (E7). `/data` ist in v2 das **Array** — Wächter-Daten
+  gehören nach `/config` (R1). acoustid-index ist amd64-only (E3).
+  `down -v` löscht künftig bei Named Volumes bis zu 2 TB → Release-
+  Compose nur mit Bind-Mounts (E13). PG-v1-Volume mountet
+  `/var/lib/postgresql` mit Daten unter `18/docker` — Volume-Migration
+  nur nach dokumentiertem, geprobtem Rezept (R3).
 
 ## Arbeitsregeln
 
 - Session-Start: zuerst ARCHITECTURE.md und PROGRESS.md lesen, dann
-  fragen, welche Phase dran ist. **Zusätzlich seit 2026-08-01: vor
-  jedem Bau-Agenten-Start `git log` + Statuskopf prüfen; Bau-Aufträge
-  enthalten die Vorprüfung „Phase bereits umgesetzt? → nicht bauen,
-  sondern prüfen und melden" (DECISIONS 2026-08-01).**
+  fragen, welche Phase dran ist. Vor jedem Bau-Agenten-Start `git log`
+  + Statuskopf prüfen; Bau-Aufträge enthalten die Vorprüfung „Phase
+  bereits umgesetzt? → nicht bauen, sondern prüfen und melden"
+  (DECISIONS 2026-08-01).
 - Implementierung einer Phase erst nach explizitem Go des Auftraggebers.
-- Keine Annahmen außerhalb des Handoffs — bei Unklarheit nachfragen.
+- Keine Annahmen außerhalb des Handoffs (jetzt: v2 + Impact-Analyse) —
+  bei Unklarheit nachfragen (Optionen + Empfehlung).
+- **Jeder M-Auftrag trägt den Sperrzonen-Vermerk** (§7 der
+  Impact-Analyse: §5.1/§5.2, API-Paritäten, Bit-Verifikation,
+  Migrations-Drift-Sperre, Fixtures/pg_acoustid).
+- M3/M4/M6 beginnen mit ihrem **Recherche-Gate** (§14 v2); Ergebnisse
+  als Bericht nach docs/research/, erst dann Datenmodell/Bau.
 - Nach jeder abgeschlossenen Phase: Statusvermerk hier, Doku aktuell
   halten, bevor die nächste Phase beginnt; danach Pause + Go-Frage.
-- Nach Abschluss jeder 5. Phase: PROGRESS.md, DECISIONS.md und (falls
-  relevant) ARCHITECTURE.md und LEARNINGS.md eigenständig aktualisieren
-  und die Diffs zeigen, bevor es weitergeht. (Nächster Sweep: nach
-  Phase 19.)
-- Jede UI-Phase endet mit Sicht-Check am gerenderten Ergebnis
-  (Screenshot vs. Design, Desktop + schmale Breite).
-- Admin-UI (Phasen 23–27): Das abgenommene Designpaket unter
-  docs/design/ (inkl. Prototyp-Runtime support.js, verifiziert) ist
-  die Referenz — Designentscheidungen werden nicht neu getroffen.
+- Nach Abschluss jeder 5. Phase: voller Doku-Sweep (PROGRESS,
+  DECISIONS, ggf. ARCHITECTURE/LEARNINGS) mit Diff-Anzeige.
+  (Zählung neu ab M0; nächster voller Sweep nach M2.5.)
+- Jede UI-Phase endet mit Sicht-Check am gerenderten Ergebnis.
+- Admin-UI (M8): Referenz ist das Designpaket unter docs/design/ bzw.
+  dessen v2-Fassung (DESIGN_HANDOFF v2, separate Design-Session).
+- Messwerte aus M1b/Probelauf/Importläufen in die LEARNINGS-Rubriken
+  eintragen (v2 §16).
 
 ---
 
-## Ergebnisse der abgeschlossenen Phasen 0–14
+## Ergebnisse der abgeschlossenen Phasen 0–18 (v1) und M0
 
-Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
-`abd1225`); Entscheide: DECISIONS.md; Berichte: docs/research/.
+Vollständige Aufgabenblöcke: Git-Historie dieser Datei; Entscheide:
+DECISIONS.md; Berichte: docs/research/.
 
 | Phase | Titel | Commit(s) | Kernergebnis |
 |---|---|---|---|
@@ -167,267 +137,321 @@ Vollständige Aufgabenblöcke: Git-Historie dieser Datei (bis Commit
 | 4 | DB-Schema & Migrationen | 1f294c4 | Eigener Runner, Gruppen core/indexes, lz4 in core, postgres:18; DDL testgekoppelt an §5.2 |
 | 5 | Index-Client | 620aa5a | msgpack-Client (query/wire/client/errors), Digest-Pin, AOFF_INDEX_NAME, 12-Befunde-Addendum |
 | 6 | Importer: Download & Parser | 0893abe | Epochen-Lesart COPY-Escaping (≤2024-12-04, HOCH), Range-Resume (iter_raw), Arbeitsliste mit Lücken-Meldung |
-| 7 | Importer: DB-Import & Index-Feed | 85d7d40 | Datei=Transaktion inkl. import_state, Resume, Feed 1000er nach id; **nachverifiziert 2026-08-01** (1338 Tests) |
+| 7 | Importer: DB-Import & Index-Feed | 85d7d40 | Datei=Transaktion inkl. import_state, Resume, Feed 1000er nach id; nachverifiziert 2026-08-01 (1338 Tests) |
 | 8 | Bootstrap, Guard & One-Shot-Job | c915fb8 | Bulk-Pfad (core→Import→indexes→Feed), 9 Exit-Codes, Report-Schema, Probelauf-Modus; **DoD-Rest: Unraid-Lauf offen** |
 | 9 | API: /v2/lookup Kern | 027597c | Match-Pipeline mit compare2-Nachbau, Bit-Verifikations-CI (fand Phase-5-Fehler), docs/api-lookup.md |
 | 10 | API: MB-Resolver & meta | a467064, ea008a6 | shared/mb (Circuit-Breaker, Selfcheck, Staleness), meta bug-für-bug, Online-Redirects, degradierter Betrieb |
 | 11 | API: /v2/submit off/local | ead4790, b15c60b | local_submission, synchrone Indexierung, Doc-ID u32-Finding [2^31, 2^32-1], docs/api-submit.md |
 | 12 | API: Upstream & Queue | 657ee14 | drain_queue/retry_forward, ≤3 req/s, 7-Fehler-Grenze → upstream_forward_gave_up, Mock-Upstream-Tests |
 | 13 | API: Batch & submission_status | 1d8874a | queries/responses-Vertrag (Teilfehler bei 200, Limit 100→19/413, meta-Bündelung); Status nie 404 |
-| 14 | Wächter: Grundgerüst, SQLite & /status | 7ce2cd5 | Paket `acoustid_watchdog` (FastAPI), SQLite-Migrationsläufer (`PRAGMA user_version`), event_log-Ringpuffer 5000 exakt, /status baulich weckfrei, Erststart-Passwort argon2 nur ins Containerlog, Reload-Marke `config.yaml.reload`, compose+Healthcheck; am echten Container verifiziert |
-| 15 | Wächter: Proxy, Docker-Steuerung & Wecken | 3f9daee | Reverse-Proxy `/v2/*` roh/streamend (405-Parität bleibt), DockerClient (3 Routen, httpx über uds, unversioniert), WakeCoordinator (ein Weckvorgang via Task+shield; Timeout → 503+Retry-After 30, Zustand bleibt `starting`), API `GET /_health` (DB+Index, ohne MB) + Reload-Empfang (10 s, Teilmenge, Rest zurückgeschrieben+Warnung), E2E-Wecktest (Marker `compose`, opt-in): Weckdauer ~1,3 s lokal |
-| 16 | Wächter: Zustandsmaschine, Idle-Stopp & Startfehler | a42c192 | `ALLOWED_TRANSITIONS` (25 Paare getestet; streng `to()` / nachsichtig `try_to()`), IdleStopper (30-s-Takt, Job-Blockade §8.5 via `JobSource`→`update_run`, Job setzt Leerlaufuhr zurück), StatePoller (15 s, Hand-Stopp/-Start erkannt, skip bei `busy`, `error` bleibt sichtbar), Weck-Frist gehört dem Vorgang, Anfragen bei `stopping` warten und wecken danach; E2E 4/4 |
-| 17 | Wächter: Lookup-Cache | 8c3816c | Eigene SQLite (`lookup-cache.sqlite3`, selbstheilend), Schlüssel SHA-256 per Sperrliste (ohne `client`/`clientversion`, gzip-Rumpf nur für Schlüssel entpackt), nur 200+`status: ok` (Batch/xml/jsonp nicht), Byte-Parität ohne `X-Cache`, LRU über monotone Sequenz (90 %-Räumung), Hit ≠ Aktivität, `invalidate_cache(reason)` submit/delta_import/manual, wirkt auch bei `enabled=false`; E2E 5/5 (Hit 0,01 s bei gestopptem Stack) |
-| 18 | Wächter: Auth & Rate-Limit | 2570ea5 | Reihenfolge Limit → Auth → Cache → Wecken (Abweisungen wecken nie, Tripwire); `apikey` gegen `api_key` (sha256 konstant-zeitig, zuletzt-benutzt gedrosselt 60 s), Whitelist Picard/beets, Codes belegt (2/400, 4/400, 14/429 gerechneter Retry-After, 19/413); Limiter exaktes 60-s-Gleitfenster (LRU 2048 IPs, Abweisungen zählen nicht); 503-Text generisch; E2E 6/6 (apikey schützt Cache-Hit bei gestopptem Stack) |
+| 14 | Wächter: Grundgerüst, SQLite & /status | 7ce2cd5 | Paket `acoustid_watchdog` (FastAPI), SQLite-Migrationsläufer, event_log-Ringpuffer 5000, /status baulich weckfrei, Erststart-Passwort argon2 nur Containerlog, Reload-Marke, compose+Healthcheck |
+| 15 | Wächter: Proxy, Docker-Steuerung & Wecken | 3f9daee | Reverse-Proxy `/v2/*` roh/streamend, DockerClient (uds), WakeCoordinator (Task+shield; Timeout → 503+Retry-After 30), `GET /_health`, Reload-Empfang; E2E: Weckdauer ~1,3 s lokal (leerer Teststack) |
+| 16 | Wächter: Zustandsmaschine, Idle-Stopp & Startfehler | a42c192 | `ALLOWED_TRANSITIONS` (25 Paare), IdleStopper (Job-Blockade §8.5 via `JobSource`), StatePoller 15 s, Weck-Frist gehört dem Vorgang; E2E 4/4 |
+| 17 | Wächter: Lookup-Cache | 8c3816c | Eigene SQLite selbstheilend, Schlüssel SHA-256 per Sperrliste, nur 200+`status: ok`, Byte-Parität, LRU über Sequenz, Hit ≠ Aktivität, `invalidate_cache(reason)`; E2E 5/5 |
+| 18 | Wächter: Auth & Rate-Limit | 2570ea5 | Reihenfolge Limit → Auth → Cache → Wecken (Abweisungen wecken nie), `apikey` gegen `api_key` (sha256 konstant-zeitig), Whitelist Picard/beets, Codes 2/4/14/19, 60-s-Gleitfenster je IP (LRU 2048); E2E 6/6 |
+| **M0** | **Impact-Analyse HANDOFF v2** | (dieser Commit) | docs/research/m0-impact-analyse.md: Betroffenheit (~10 % Wächter-Code, 0 Zeilen API/Importer/Shared-Steuerung, ~26 % Wächter-Testzeilen, E2E/Repo-Layout-Tests), Korrekturen K1–K10 an v2, Phasenplan M1a–M9, Entscheide E1–E16 (Betreiber bestätigt); Doppel-Review Opus+GPT-5.6, alle 25 Findings verifiziert/eingearbeitet |
 
 ---
 
-## Phase 19: Wächter — Scheduler & Update-Zyklus
+## M1a: Naht-Phase (läuft weiter auf Docker)
 
-Ziel: Täglicher, vollautomatischer Delta-Import inkl. Wecken und
-Wieder-Einschlafen.
+Ziel: Die Docker-Naht so umbauen, dass M1b ein reiner Adapter-Tausch
+wird — ohne Verhaltensänderung, alle 1649 Tests + E2E unverändert grün.
 
 Aufgaben:
-- [ ] Scheduler: `update.time` → Stack wecken → Importer-Job starten →
-      Ergebnis überwachen → Cache invalidieren → Stack schlafen legen
-- [ ] `update_run`-Historie aus dem Importer-Report befüllen
+- [ ] `ProcessGroupController`-Protocol einziehen (`wake.py:222`
+      typisiert heute konkret `StackController`; Vorbild `JobSource`,
+      `lifecycle.py:129–139`); `service.py:173` gegen das Protocol
+      verdrahten
+- [ ] Fehlerbasisklasse `ProcessControlError` über `DockerError`
+      (drei `except`-Stellen: `wake.py:381,462,527`)
+- [ ] `API_HEALTH_URL`/`API_BASE_URL` (`wake.py:90,93`) aus den
+      Modulkonstanten nach `EnvSettings` (fünf Testdateien importieren
+      sie); `MMO_API_PORT`-Feld vorbereiten (Name noch `AOFF_…`, die
+      Umbenennung kommt in M2)
+- [ ] `FakeSupervisor`-Attrappe neben `FakeDaemon` in
+      `watchdog_stubs.py` (Zustands-Dict, `calls`, `fail_on`,
+      supervisord-Zustände STOPPED/STARTING/RUNNING/BACKOFF/FATAL/
+      EXITED) + eigene Tests
+- [ ] Beifang: Task-Chip task_e5db0b72 (DB-Assertion entescapte
+      2011er-Meta-Zeile in `importer/tests/`)
+
+Definition of Done: Suite + Compose-E2E unverändert grün; kein
+Verhaltensunterschied; `docker.py` bleibt in Betrieb.
+
+## M1b: Ein-Container-Umbau
+
+Ziel: Ein Image, ein Container; supervisord + tini steuert die
+Dauerdienste; AcoustID-Teil bleibt lauffähig (E2E portiert in dieser
+Phase).
+
+Aufgaben:
+- [ ] **Erster Prüfpunkt:** supervisord unter Python 3.14 verifizieren
+      (PyPI weist bis 3.13 aus) — sonst eigener Interpreter im Image
+      oder Neubewertung melden
+- [ ] `process.py` (`SupervisorClient`: XML-RPC über Unix-Socket 0700;
+      `inspect`/`start`/`stop`/`signal`/`states`; Faults
+      ALREADY_STARTED/NOT_RUNNING → bool-Idempotenz wie heute 204/304;
+      BAD_NAME = Image-Bug; blockierende Aufrufe via
+      `asyncio.to_thread`, Read-Timeout > größtes `stopwaitsecs`)
+- [ ] `ServiceGroupController`: **sequenzieller** Start PG → Index →
+      API mit Readiness-Gate je Prozess (pg_isready/psycopg-Connect;
+      Index TCP + `/:index/_health`; API `/_health`) — die API bricht
+      ohne DB nach 30 s ab (`api/app/service.py:120`)
+- [ ] Zustandsmaschine: neue Kante `ready→error` (Prozessabsturz im
+      Betrieb) bzw. gewollter Zustand in `observe()` — Absturz darf
+      sich nicht als Schlaf maskieren; StatePoller pollt
+      `getAllProcessInfo()` (Eventlistener wäre ein eigener
+      Brückenprozess — nicht in M1b)
+- [ ] supervisord-Konfiguration: `autostart=false` +
+      `autorestart=unexpected` (begrenzte startretries) für db/index/
+      api; Wächter `autorestart=true`; Index abweichend
+      `autostart=true` (E12: resident); Postgres `stopsignal=INT`,
+      `stopwaitsecs` großzügig, `user=postgres`; Logs auf `/config`,
+      Wächter-Log **zusätzlich stdout** (Erstpasswort-Weg)
+- [ ] Ein Multi-Stage-Dockerfile (uv-App + PG 18 + fpindex aus Quelle
+      mit Commit-Pin + NOTICES/Quellangebot E7; `WORKDIR /`-Regel;
+      tini als PID 1; initdb-Entrypoint für leeres `/data/db/18/`,
+      Schemata via Migrationen); eine Compose-Datei (ein Service,
+      Bind-Mounts, `stop_grace_period`, Healthcheck = `GET /status`)
+- [ ] Volume-Layout: `/config` (Wächter-Daten — R1-Test „data_dir nie
+      unter Array-Mounts"), `/data/db/<major>/`, Index-Volume auf
+      Cache (E2), `/import`, `/backup`-Mount vorbereiten (K9);
+      Versions-Drift-Guard (Startverweigerung + Log)
+- [ ] Interner API-Port (`MMO_API_PORT`, Bind 127.0.0.1) + Deny-Regel
+      für `/_health` im Proxy + Test
+- [ ] **Volume-Migrationsrezept v1→v2** schreiben (PG-Layout
+      `18/docker` → `/data/db/18/`; Index-Verzeichnis) und auf
+      Betreiber-Hardware **proben**, bevor produktiv geschnitten wird
+- [ ] Tests: `test_watchdog_supervisor.py` (Ersatz für
+      `test_watchdog_docker.py`), Umstellung der Attrappen-Aufbauten
+      auf `FakeSupervisor`, neue Szenarien (Absturz→`error`,
+      Idle-Stopp bleibt gestoppt / Crash wird neu gestartet — beide
+      Richtungen messen, E15; Stopp-Verhalten mit TERM-ignorierendem
+      Dummy), Pfad-Whitelist-Test für Logs/Sockets (R13),
+      `test_repo_layout.py` auf neue Struktur
+- [ ] **E2E portieren** (`supervisorctl status` statt `docker
+      inspect`; fünf Nachweise bleiben) — in dieser Phase, nicht
+      später; Dev-Compose für lokale Integrationstests (nur PG+Index
+      aus dem einen Image); mind. ein CI-Lauf gegen den selbstgebauten
+      fpindex
+- [ ] Messwerte erheben → LEARNINGS-Rubriken (PG-Start/Stopp,
+      Index-Kaltstart auf SSD — entscheidet den E12-Mess-Vorbehalt)
+
+Definition of Done: Suite grün; portierter E2E grün (lokal); CI grün
+inkl. Lauf gegen eigenen fpindex-Build; `docker.py` + docker.sock +
+`docker-compose.watchdog.yml` entfernt; Migrationsrezept geprobt.
+
+## M2: Umbenennung
+
+Ziel: musicmeta-offline überall; ein Betreiber-Release zusammen mit M1.
+
+Aufgaben:
+- [ ] Env-Prefix `AOFF_` → `MMO_` (env.py:44) mit Übergangslesen +
+      Deprecation-Warnung (eine Release-Runde)
+- [ ] Config-Keys: `submit.*` → `acoustid.submit.*`, `update.time` →
+      `acoustid.update.time`, `update.min_free_gb` → `disk.min_free_gb`
+      (Default 100), `index.query_hashes` →
+      `acoustid.index.query_hashes`; AliasChoices + einmaliger
+      Umschreiber beim Wächter-Start + Test mit v1-config.yaml (E9);
+      neue Keys als Platzhalter gemäß v2 §7 (Secrets als SecretStr)
+- [ ] `reload.py`-Pfade (`config.submit.*`) nachziehen;
+      `_FILE_HEADER`, Logging-`HANDLER_NAME`, User-Agent-Strings
+      (`importer/app/download.py:82`, `api/app/upstream.py:193`)
+- [ ] Repo-Umbenennung in dokumentierter Reihenfolge: erst alle
+      Repo-Inhalte (pyproject-Name, LICENSE-Zeile, Doku, .env.example,
+      Badges), dann GitHub-Rename shares92/acoustid-offline →
+      shares92/musicmeta-offline (alten Namen nie neu belegen; lokale
+      Klone `git remote set-url`), GHCR-Paket beim ersten Push auf
+      öffentlich stellen, alte Pakete als „eingestellt" markieren
+- [ ] /status: nur additive Erweiterungen (Feld `stack` bleibt);
+      eingebackene PG-/Index-Versionen ausweisen (§12)
+- [ ] Doku-Umschrift ARCHITECTURE §3/§4/§6/§10 auf v2-Stand
+      (Sperrzonen §5.1/§5.2 unangetastet)
+
+Definition of Done: Suite/CI grün unter neuem Namen; v1-config.yaml
+und AOFF_-Env werden mit Warnung korrekt migriert (Tests); ein
+Release-Tag baut das eine Image.
+
+## M2.5: Scheduler, Notifications, Backup, Metrics (alte Phasen 19–22)
+
+Ziel: Täglicher vollautomatischer Delta-Import inkl. Wecken/Schlafen;
+Kanäle ntfy/Webhook + SMTP; zeitgesteuerte Sicherung; optionaler
+Prometheus-Endpoint. Danach voller 5-Phasen-Doku-Sweep (M1a–M2.5).
+
+Aufgaben:
+- [ ] Scheduler: `acoustid.update.time` → Prozesse wecken →
+      Importer-Job als **Wächter-Subprozess** (E10; Argumente,
+      returncode, `--report`-Datei) → Ergebnis überwachen →
+      `invalidate_cache("delta_import")` → schlafen legen
+- [ ] `update_run`-Migration: neue Job-Typen (acoustid-delta,
+      discogs-dump, caa-crawl, nachzügler, backup, queue-send) —
+      CHECK-Constraint + `RunKind` erweitern; Historie aus dem
+      Importer-Report befüllen
 - [ ] Fehlgeschlagener Lauf → automatische Wiederholung im nächsten
-      Zyklus (Invariante §8.4); Plattenplatz-Guard-Ergebnis behandeln
+      Zyklus; `disk.min_free_gb`-Guard je Schreibpfad (E11)
 - [ ] Interne Trigger-API für manuelle Läufe (Basis für /admin/jobs)
+- [ ] Notify-Modul (ntfy/Webhook + SMTP, leer = aus); Ereignisse:
+      Import fehlgeschlagen, Plattenplatz knapp, Stack-Start-Fehler,
+      `upstream_forward_gave_up`, Versions-Drift (E14);
+      Testnachricht-Funktion je Kanal
+- [ ] Backup-Job (`backup.time` → `/backup`, K9): local_submission +
+      Wächter-SQLite + config.yaml; `backup.include_covers`-Schalter
+      (Default false); zählt als Job (blockiert Idle-Stopp);
+      Restore-Anleitung; **lookup-cache.sqlite3 gehört NICHT ins
+      Backup**
+- [ ] `GET /metrics` (nur bei `metrics.enabled`): Lookups,
+      Cache-Quote, Weckvorgänge, Prozess-Zustand, Import-Läufe/-Dauer
 - [ ] Compose-Test: simulierter Zyklus inkl. Fehler-Retry-Pfad
 
-Hinweis (aus Phase 17): Die Cache-Invalidierung nach erfolgreichem
-Delta-Import ist ein Aufruf von
-`service.invalidate_cache(reason="delta_import")` — Schnittstelle
-steht, Ereignis inklusive.
+Hinweise (aus v1-Phasen, übernommen):
+- Beim Stoppen des Importer-Subprozesses großzügige Frist — SIGTERM
+  wirkt erst nach der laufenden Tagesdatei (sonst SIGKILL statt
+  geordnetem Exit-Code 8).
+- Ein Submit während des Update-Laufs erhöht die Index-Version und
+  lässt den Index-Feed am `expected_version`-Guard scheitern (Lauf
+  endet als Fehler, Resume intakt) — **in dieser Phase entscheiden:**
+  Submits während des Laufs zurückstellen ODER Feed ohne Guard.
+- Aufrufpunkte für den Update-Lauf: `drain_queue(connection, service,
+  limit=…, max_attempts=…)` und `retry_forward(connection, service,
+  local_track_ids=…)` (`api/app/upstream.py`; beide werfen bewusst
+  durch).
+- „Stack-Start-Fehler"-Ereignisse existieren (Quelle `wake`/`stack`,
+  Phase 16); ein Stack im `error`-Zustand bleibt bewusst stehen —
+  die Notification macht ihn aktiv sichtbar.
+- Ereignis `upstream_forward_gave_up` trägt `local_track_id`,
+  `forward_attempts`, `forward_error` (Phase 12).
 
-Definition of Done: Zyklus-Test grün; Historie korrekt; Stack schläft
-nach dem Lauf wieder.
+Definition of Done: Zyklus-Test grün; Historie korrekt; Prozesse
+schlafen nach dem Lauf; alle vier Notify-Ereignisse feuern in Tests
+auf beiden Kanälen; Backup-Tests grün + Restore dokumentiert;
+Metrics-Tests grün. Danach 5-Phasen-Doku-Sweep.
 
-Hinweis (aus Phase 8): Beim Stoppen des Importer-Containers ein
-großzügiges Stop-Timeout setzen — SIGTERM wirkt erst nach der laufenden
-Tagesdatei; Dockers 10-s-Default führt zu SIGKILL (sicheres Rollback,
-aber der Lauf endet ohne den geordneten Exit-Code 8).
+## M3: Discogs-Spiegel
 
-Hinweis (aus Phase 11): Ein Submit während des Update-Laufs erhöht die
-Index-Version und lässt den Index-Feed des Importers am
-`expected_version`-Guard scheitern (Lauf endet als Fehler, Resume
-intakt — DECISIONS „Phase-7-Import-Details" Punkt 7). In dieser Phase
-entscheiden: Submits während des Laufs im Wächter zurückstellen ODER
-den Feed ohne Guard fahren.
+**Recherche-Gate zuerst** (§14.2, Bericht nach docs/research/):
+exaktes XML-Schema der Monats-Dumps (Referenz discogs-load/
+discogs-xml2db), Dump-URL/-Rhythmus für den Verfügbarkeits-Check,
+Token-Rate-Limits der Bilder-API. Erst danach Datenmodell.
 
-Hinweis (aus Phase 12): Die beiden Aufrufpunkte für den Update-Lauf
-sind `drain_queue(connection, service, limit=…, max_attempts=…)` und
-`retry_forward(connection, service, local_track_ids=…)`
-(`api/app/upstream.py`; `MAX_FORWARD_ATTEMPTS` exportiert). Beide
-werfen bewusst durch, damit der Lauf Fehler sieht — anders als der
-Anfragepfad.
+Aufgaben: Schema `discogs` (neue Migrationen; E8-Schema-Migration
+`CREATE SCHEMA acoustid` spätestens hier mit erledigen), Dump-Importer
+(etappenweise je Entitätstyp, resumierbar über `dump_state`,
+Stale-statt-Sperre), täglicher Verfügbarkeits-Check
+(`discogs.update.check_time`), API-kompatibles GET-Subset
+(`/discogs/releases|masters|artists|labels/{id}`), Proxy-Routing +
+Auth + Fehlerformat der Discogs-API, Cache-Invalidierung
+quellen-selektiv (Umbau von „vollständig", DECISIONS 2026-08-04).
 
-## Phase 20: Benachrichtigungen
+Definition of Done: Import eines echten (Teil-)Dumps grün; GET-Subset
+antwortformat-verifiziert; Verfügbarkeits-Check getestet.
 
-Ziel: ntfy/Webhook und SMTP, einzeln schaltbar.
+## M4: Cover-Subsystem
 
-Aufgaben:
-- [ ] Notify-Modul: ntfy/Webhook-URL + SMTP (Host, Port, User, Pass,
-      From, To); leer = Kanal aus
-- [ ] Ereignisse anbinden: Import fehlgeschlagen, Plattenplatz knapp,
-      Stack-Start-Fehler, Upstream-Submit dauerhaft fehlgeschlagen
-- [ ] Testnachricht-Funktion je Kanal (für /admin/config)
-- [ ] Tests mit Mock-HTTP/Mock-SMTP je Kanal und Ereignis
+**Recherche-Gate zuerst** (§14.3): offizieller CAA-Bulk-Bezugsweg
+(IA-Bulk/rsync — verkürzt den Erst-Crawl), verträgliche Crawl-Rate,
+exaktes URL-/Größenschema.
 
-Definition of Done: Alle vier Ereignisse feuern in Tests auf beiden
-Kanälen; Testnachricht-Funktion vorhanden.
+Aufgaben: Schema `covers` (`artwork`, `crawl_state`),
+**Beschaffungs-Queue-Infrastruktur** in `shared` (je Quelle eine Queue
+mit Drossel/Backoff; CAA-Queue geteilt Crawler+Lazy; Wiederverwendung
+der `api/app/upstream.py`-Muster bewerten), Beschaffungskette
+CAA → TADB → Discogs (erste Quelle gewinnt), Pillow-Normalisierung
+(max. 1200px, JPEG, eine Datei je Release,
+`/data/covers/<mbid[0:2]>/<mbid>.jpg`), CAA-kompatibler Endpoint
+(`/caa/release/{mbid}/front` + Größen-Suffixe), Negativ-Cache
+(`covers.negative_retry_days`), Backup-Erweiterung
+(artwork-Metadaten).
 
-Hinweis (aus Phase 12): Der Auslöser für „Upstream-Submit dauerhaft
-fehlgeschlagen" ist das ERROR-Ereignis `upstream_forward_gave_up`
-(Felder `local_track_id`, `forward_attempts`, `forward_error`).
+Definition of Done: Kette mit Mock-Quellen vollständig getestet;
+Endpoint liefert Bild; Negativ-Fall mit `next_retry_at`.
 
-Hinweis (aus Phase 16): Für „Stack-Start-Fehler" existieren bereits
-die ERROR-Ereignisse `Stack-Start fehlgeschlagen` und `Stack-Stopp
-fehlgeschlagen` (Quelle `wake`) sowie die Zustandswechsel-Ereignisse
-(Quelle `stack`) — die Notification hängt sich dort an. Ein Stack im
-`error`-Zustand bleibt bewusst stehen (kein Idle-Stopp, Entscheid
-2026-08-01), bis der nächste Weckversuch ihn auflöst — der Betreiber
-sieht den Fehler in /status, die Notification macht ihn aktiv
-aufmerksam.
+## M5: CAA-Crawler
 
-## Phase 21: Backup-Job
+Aufgaben: Release-Verzeichnis aus dem MB-Spiegel
+(`cover_art_archive`-Schema — **neue GRANTS für die Read-only-Rolle
+prüfen/erweitern**, Selfcheck + Verfügbarkeitsprüfung §14.5), Drossel
+(`caa.crawl.rate_per_s`), Resume über `crawl_state`-Cursor,
+abschaltbar (Default aus), täglicher Nachzügler-Job nach dem
+AcoustID-Lauf, Crawler zählt als Aktivität (hält wach — via
+`JobSource`, §10.5), Notify-Ereignisse (abgeschlossen, festgefahren).
 
-Ziel: Zeitgesteuerte Sicherung der lokalen Unikate.
+Definition of Done: Crawler-Simulation mit Mock-CAA grün (Resume,
+Drossel, Abbruch); Idle-Interaktion getestet.
 
-Aufgaben:
-- [ ] Backup-Job (`backup.time`): `local_submission`-Daten +
-      Wächter-SQLite → `backup.dir`; leeres Ziel = Backup aus
-- [ ] Lauf-Historie in `update_run` (Typ Backup)
-- [ ] Idle-/Job-Interaktion: Backup zählt als laufender Job
-      (blockiert Idle-Stopp)
-- [ ] Restore-Anleitung für die Doku (README-Baustein)
-- [ ] Tests: konsistente Sicherung, Historieneintrag, deaktivierter Fall
+## M6: TheAudioDB-Proxy-Cache
 
-Definition of Done: Backup-Tests grün; Restore dokumentiert.
+**Recherche-Gate zuerst** (§14.4): API-Umfang je Key-Klasse,
+Rate-Limits, Cache-Erlaubnis laut ToS (Lizenzrisiko §15.2.6).
 
-Hinweis (aus Phase 17): `lookup-cache.sqlite3` gehört ausdrücklich
-NICHT ins Backup (Wegwerfware, potenziell 512 MiB); gesichert wird
-nur `watchdog.sqlite3` + config.yaml (+ local_submission-Daten).
+Aufgaben: transparenter Cache-Proxy `/tadb/…` (Pfadschema der
+Original-API, Betreiber-Key, leer = Quelle aus), Ablage
+`/data/tadb/…` (JSON + Bilder), Cache unbegrenzt, Invalidierung
+einzeln/gesamt (Admin ab M8), 404-Semantik `not_cached_offline`/
+`source_disabled`, eigene Beschaffungs-Queue.
 
-## Phase 22: Metrics
+Definition of Done: Hit/Miss/Offline/Disabled-Fälle getestet.
 
-Ziel: Optionaler Prometheus-Endpoint im Wächter.
+## M7: Vereinheitlichte /v1-API
 
-Aufgaben:
-- [ ] `GET /metrics` (Prometheus-Format), nur bei `metrics.enabled`
-      (Default aus)
-- [ ] Kernmetriken: Lookups, Cache-Hits/-Quote, Weckvorgänge,
-      Stack-Zustand, Import-Läufe/-Dauer/-Ergebnis
-- [ ] Tests: Exposition valide; deaktiviert → nicht erreichbar
+Aufgaben: `mbref`-Modul (MBID↔Discogs über URL-Relationships im
+MB-Spiegel — Grants/Selfcheck wie M5), `POST /v1/identify`
+(Fingerprint+Duration → AcoustID-Match + MB-Metadaten + Discogs +
+TADB + Cover-URL + Score), `GET /v1/release/{mbid}`,
+`GET /v1/cover/{mbid}` (löst bei Miss die Kette aus); fehlende
+Teilquellen als `null`-Blöcke mit Grund (`not_cached_offline`/
+`source_disabled`/`not_found`) — nie Gesamtfehler; Lookup-Cache
+quellenübergreifend (v1-Pakete + TADB-Antworten, §6.10).
 
-Definition of Done: Metrics-Tests grün.
+Definition of Done: Paket-Antworten mit allen Degradationsfällen
+getestet; Cache-Verhalten je Quelle verifiziert.
 
-## Phase 23: Admin-UI — Grundgerüst & Login
+## M8: Admin-UI komplett (alte Phasen 23–27 + v2-Erweiterung)
 
-Referenz: abgenommenes Designpaket unter docs/design/.
+Referenz: DESIGN_HANDOFF v2 (separate Design-Session; klären, was vom
+abgenommenen v1-Paket unter docs/design/ trägt).
 
-Ziel: Basis-Layout, Navigation, Login, Statusindikator.
+Umfang: Grundgerüst + Login (Base-Layout, 6 Bereiche + Logout,
+Session-Cookie, Erststart-Hinweis, Zustands-Indikator mit
+HTMX-Polling — `schlafend` als Gutzustand), Dashboard (Karten inkl.
+Vier-Quellen-Datenstand, Crawler-Steuerung, Prozess-Badges),
+Konfiguration (alle §7-Schlüssel, Secrets maskiert, Reload-Felder,
+Testnachricht/MB-Test/Cache-leeren-Aktionen), API-Keys & Jobs
+(Key-Verwaltung wie v1-Plan; Jobs: Update/Backup/Crawl jetzt, mit
+„weckt"-Hinweis, Fortschritt, Abbrechen; Historie mit Filtern), Logs &
+Stats (event_log-Ansicht, Kennzahlen + Zeitreihen ohne Build-Schritt).
+Jede Fläche mit Sicht-Check (Desktop + schmal).
 
-Aufgaben:
-- [ ] Base-Layout + Navigation (6 Bereiche + Logout) gemäß Design;
-      CSS ohne Build-Schritt
-- [ ] Login `/admin/login`: Passwortfeld, Fehlermeldung,
-      Rate-Limit-Hinweis nach Fehlversuchen, Erststart-Hinweis
-      (Passwort im Container-Log); Session-Cookie
-- [ ] Stack-Zustands-Indikator auf jeder Seite (HTMX-Polling 5 s);
-      `schlafend` als guter Zustand gestaltet
-- [ ] Sicht-Check: Screenshot vs. Design (Desktop + schmal)
+Hinweise (aus v1): `EVENT_LOG_LIMIT = 5000` (`watchdog/app/events.py`)
+— braucht die Logansicht mehr, dort erhöhen. Beim Umschalten
+`local` → `local+upstream` anzeigen, dass der nächste
+Warteschlangenlauf den gesamten bisher lokalen Bestand nachschiebt
+(500 Gruppen je Lauf, ≤ 3 req/s).
 
-Definition of Done: Login + Navigation funktional; kein UI-Aufruf weckt
-das Array; Sicht-Check bestanden.
+Definition of Done: alle Bereiche funktional gegen echte
+Wächter-Logik; kein UI-Aufruf weckt das Array; Sicht-Checks bestanden.
 
-## Phase 24: Admin-UI — Dashboard
+## M9: Abschluss — E2E, Clients, Release (alte Phasen 28–29)
 
-Ziel: Statuszentrale gemäß DESIGN_HANDOFF §4.2.
+Aufgaben: Compose-E2E-Szenarien (schlafend → weckt → idle → schläft;
+Update-Zyklus; Batch; Cache-Hit bei schlafenden Prozessen; apikey;
+Rate-Limit; neu: /v1-Paket, Cover-Kette, Quellen-Ausfälle), E2E in CI
+(Ein-Container macht es billig), Drittclient-Test (Picard/beets per
+URL-Umbiegung), DroppedNeedle-Test mit dem Betreiber, erster echter
+Upstream-Lauf (Application-Key registrieren, mit EINER Einreichung
+beginnen; unbestätigt: Fehlerantwort bei ungültigem Key, Verhalten
+> 3 req/s), Batch-Kosten jenseits der 100er-Grenze auf Zielhardware
+messen, arm64-Spike (E3: fpindex für aarch64 + 198 Integrationstests
+— erst bei Grün ins Release), `release.yml` (ein Image → GHCR, Tag +
+`latest`, Versionen im Label), README final (Unraid Cache/Array inkl.
+„Image + /config auf den Cache", Bootstrap-Zeiten aus den Messungen,
+Restore, Lizenzen inkl. GPL-NOTICES, TLS/apikey-Hinweis),
+Unraid-Community-App-Template (ein Container, Mounts inkl. /backup,
+UID-Matrix), .env.example final, **XFF-Betreiber-Entscheid**
+(Rate-Limit hinter TLS-Proxy — Vertrauenslisten-Schlüssel, Default
+leer = heutiges Verhalten).
 
-Aufgaben:
-- [ ] Fünf Karten: Stack-Status (zustandsabhängige Buttons `Wecken`/
-      `Jetzt schlafen legen`/`Neu starten` mit Bestätigungsdialog),
-      Datenstand, Aktivität, System, Letzte Ereignisse
-- [ ] Zustands-Badges: Import läuft (x von y), Backup läuft,
-      Upstream-Queue: N, MB nicht erreichbar, Plattenplatz knapp
-- [ ] Alle fünf Stack-Zustände + Badges mit Fixture-Zuständen prüfbar
-- [ ] Sicht-Check
-
-Definition of Done: Alle Zustände darstellbar und korrekt verdrahtet;
-Sicht-Check bestanden.
-
-## Phase 25: Admin-UI — Konfiguration
-
-Ziel: config.yaml vollständig über die UI editierbar.
-
-Aufgaben:
-- [ ] Formulare aller Gruppen (API & Auth, Submit, Betrieb, Cache,
-      Benachrichtigungen, Backup, MusicBrainz, Admin-Passwort)
-- [ ] Inline-Validierung; Secrets maskiert („ändern" statt Anzeige);
-      Reload-auslösende Felder gekennzeichnet + API-Reload-Signal
-- [ ] Aktions-Buttons: Testnachricht ntfy/SMTP, MB-Verbindungstest
-      (weckt nicht), Cache jetzt leeren
-- [ ] Sicht-Check
-
-Definition of Done: Roundtrip UI → config.yaml → UI fehlerfrei; alle
-§6-Schlüssel erreichbar; Sicht-Check bestanden.
-
-Hinweis (aus Phase 12): Beim Umschalten `local` → `local+upstream` am
-Schalter anzeigen, dass der nächste Warteschlangenlauf den gesamten
-bisher nur lokalen Bestand nachschiebt (500 Gruppen je Lauf,
-≤ 3 req/s).
-
-## Phase 26: Admin-UI — API-Keys & Jobs
-
-Ziel: Key-Verwaltung und manuelle Job-Steuerung.
-
-Aufgaben:
-- [ ] Keys: Tabelle (Label, maskierter Key, aktiv, erstellt, zuletzt
-      benutzt); Erzeugen mit einmaliger Klartext-Anzeige + Kopieren;
-      (De)aktivieren; Löschen mit Bestätigung; im Modus `none` bedienbar
-      mit Hinweis
-- [ ] Jobs-Aktionen: Update/Backup jetzt, Upstream-Queue senden — je
-      mit „weckt das Array"-Hinweis + Bestätigung; Fortschritt per
-      Polling; Abbrechen-Button
-- [ ] Jobs-Historie: `update_run`-Tabelle mit Filtern (Typ, Ergebnis),
-      aufklappbare Fehlermeldung
-- [ ] Sicht-Check
-
-Definition of Done: Aktionen laufen gegen die Wächter-Logik (Phase 19/21);
-Historie + Filter funktional; Sicht-Check bestanden.
-
-## Phase 27: Admin-UI — Logs & Statistiken
-
-Ziel: Ereignis-Log und Kennzahlen sichtbar machen.
-
-Aufgaben:
-- [ ] Logs: `event_log`-Ansicht (Zeit, Level, Quelle, Nachricht),
-      Filter Level/Quelle/Freitext, Auto-Refresh umschaltbar
-- [ ] Stats: Kennzahlen-Kacheln (Tracks, Fingerprints, lokale
-      Submissions, Datenstand) + Zeitreihen (Lookups/Tag,
-      Cache-Hit-Quote, Weckvorgänge/Tag, Import-Dauer, DB-/Index-Größe)
-      mit Chart-Lösung gemäß Design-Entscheid (kein Build-Schritt)
-- [ ] Datenerfassung ergänzen, wo nötig (DB-/Index-Größe beim
-      Update-Lauf, sofern nicht schon in Phase 19 erfasst)
-- [ ] Sicht-Check
-
-Hinweis (aus Phase 14): Das Ereignis-Log ist auf
-`EVENT_LOG_LIMIT = 5000` Einträge begrenzt (Konstante in
-`watchdog/app/events.py`, kein §6-Schlüssel) — braucht die Logansicht
-mehr Historie, dort erhöhen.
-
-Definition of Done: Beide Seiten funktional mit echten Wächter-Daten
-(Fixtures für Zeitreihen); Sicht-Check bestanden.
-
-## Phase 28: End-to-End & Client-Kompatibilität
-
-Ziel: Gesamtsystem-Nachweis inkl. echter Clients.
-
-Aufgaben:
-- [ ] Compose-E2E-Szenarien: schlafend → Lookup weckt → Antwort →
-      idle → schläft; täglicher Update-Zyklus; Batch; Cache-Hit bei
-      schlafendem Stack; apikey-Modus; Rate-Limit
-- [ ] Drittclient-Test: Picard und/oder beets per URL-Umbiegung gegen
-      die Instanz
-- [ ] DroppedNeedle-Test mit dem Betreiber koordinieren
-- [ ] E2E-Suite in CI integrieren (soweit ohne Array-Hardware machbar)
-
-Definition of Done: E2E-Suite grün; mindestens ein Drittclient
-verifiziert; DroppedNeedle-Test durchgeführt oder terminiert.
-
-Hinweis (aus Phase 12): Erster echter Upstream-Lauf gehört hierher —
-Application-Key registrieren (acoustid.org/new-application, sofort
-aktiv) und mit EINER Einreichung beginnen; unbestätigt sind die exakte
-Fehlerantwort bei ungültigem Key und das Verhalten oberhalb von
-3 req/s (docs/api-submit.md, offene Punkte).
-
-Hinweis (aus Phase 13): Der Batch hat jenseits der 100er-Grenze keine
-Kostenbremse (100 × 40 Kandidaten Rescoring synchron im Threadpool) —
-Dauer auf der Zielhardware hier mitmessen.
-
-## Phase 29: Release, README & Unraid-Template
-
-Ziel: Veröffentlichbares Gesamtpaket.
-
-Aufgaben:
-- [ ] release.yml: drei Images (watchdog, api, importer) → GHCR mit
-      einem gemeinsamen Release-Tag (Invariante §8.11)
-- [ ] README final: Unraid-Setup (Array/Cache-Zuordnung), generisches
-      Docker-Setup, Bootstrap-Anleitung mit realistischer Zeitangabe
-      (aus Phase 0/8), Restore, Lizenzhinweis, TLS/apikey-Hinweis bei
-      Exponierung
-
-Hinweis (aus Phase 18, offener Betreiber-Entscheid): Hinter einem
-TLS-Reverse-Proxy sehen alle Clients für das Rate-Limit dieselbe IP
-(X-Forwarded-For wird bewusst nicht ausgewertet — fälschbar).
-Empfehlung des Bau-Agenten: Vertrauenslisten-Schlüssel in §6 (Default
-leer = heutiges Verhalten). Spätestens hier beim TLS-Hinweis
-entscheiden und dokumentieren.
-- [ ] Unraid-Community-App-Template (XML) im Repo
-- [ ] .env.example final abgleichen
-
-Definition of Done: Tag-Release baut drei Images mit identischem Tag;
-Template validiert; README vollständig; Erfolgskriterien aus
-ARCHITECTURE.md §1 nachweisbar erfüllt.
+Definition of Done: E2E-Suite grün (CI); mind. ein Drittclient
+verifiziert; DroppedNeedle-Test durchgeführt oder terminiert;
+Tag-Release baut das Image; Template validiert; README vollständig;
+v2-§1-Erfolgskriterien nachweisbar.

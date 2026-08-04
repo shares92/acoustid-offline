@@ -6,6 +6,16 @@ und [docs/DESIGN_HANDOFF.md](docs/DESIGN_HANDOFF.md) (Admin-UI). Bei Widerspruch
 
 Stand: 2026-07-25 (aus Architektur-Session; exaktes DB-Spaltenschema folgt aus Phase 0).
 
+> **Vermerk 2026-08-04 (M0, v2-Migration läuft):** docs/HANDOFF.md ist
+> jetzt **v2** („musicmeta-offline", Ein-Container-Modell; v1 unter
+> docs/archive/HANDOFF-v1.md). Diese Datei beschreibt bis auf Weiteres
+> den **gebauten v1-Stand**; §3/§4/§6/§8/§10 werden phasenweise mit
+> M1/M2 ersetzt (Plan: PROGRESS.md, Analyse:
+> docs/research/m0-impact-analyse.md). **Unverändert und testgekoppelt
+> bleiben §5.1 (Ströme-Tabelle) und §5.2 (DDL)** — v2 §8 bestätigt das
+> Schema `acoustid`; Discogs/Covers kommen später als neue Abschnitte
+> daneben, nie als Edit an §5.2.
+
 ---
 
 ## 1. Zielsetzung

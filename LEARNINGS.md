@@ -508,3 +508,23 @@ Anwenden: Hash-Härte nach Entropie der Geheimnisse wählen:
 Menschenpasswörter ⇒ KDF (argon2), Maschinen-Token ⇒ schneller Hash +
 konstant-zeitiger Vergleich; im Anfragepfad grundsätzlich keine
 speicherharten Funktionen.
+
+---
+
+## Messwert-Rubriken v2-Migration (HANDOFF v2 §16: „LEARNINGS.md sammelt Messwerte")
+
+Noch leer — wird ab M1b/Probelauf befüllt; korrigiert v2-§15.1 und die
+E12-/R15-Vorbehalte (docs/research/m0-impact-analyse.md).
+
+- **PG-Start/Stopp am echten Bestand** (Fast-Shutdown-Dauer,
+  Recovery-Zeit, Checkpoint-Kosten je Idle-Zyklus): —
+- **Index-Kaltstart auf SSD-Cache** (MAP_POPULATE bei 40–55 GB;
+  entscheidet E12-Mess-Vorbehalt): —
+- **Weckdauer gesamt am echten Bestand** (heute nur leerer Teststack:
+  ~1,3 s): —
+- **Import-Dauern** (AcoustID-Bootstrap/Delta, Discogs-Monatsdump je
+  Etappe): —
+- **CAA-Crawl-Rate real** (Drossel 2/s, Sperren/Backoffs): —
+- **Bestandsgrößen** (PG je Schema, Index, Cover, TADB-Cache; gegen
+  v2-§15.1-Schätzung): —
+- **Image-Größe + CI-Buildzeit** des Ein-Container-Images: —

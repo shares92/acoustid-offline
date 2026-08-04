@@ -5,6 +5,112 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-04: M0-Betreiber-Entscheide E1–E16 zur v2-Migration
+
+Entscheidung (alle vom Betreiber bestätigt; Herleitung, Optionen und
+Belege: docs/research/m0-impact-analyse.md §5):
+- **E1 Supervisor:** supervisord + `tini` als PID 1 — nur für die
+  Dauerdienste (Postgres, Index, API, Wächter). Py-3.14-Verträglichkeit
+  von supervisord ist der erste M1b-Prüfpunkt.
+- **E2+E12 Index:** Volume auf dem SSD-Cache (v1-Messentscheid bleibt)
+  UND Prozess bleibt beim Idle-Stopp resident — nur Postgres + API
+  schlafen. Bewusste Abweichung von v2 §1.2/§3 (dort Schlaf-Gruppe),
+  unter Mess-Vorbehalt (M1b: Index-Kaltstart auf SSD messen).
+- **E3 arm64:** Release amd64-only für M1–M8; §12-Zusage relativiert;
+  eigener aarch64-Spike (fpindex aus Quelle, 198 Integrationstests)
+  vor M9 entscheidet über arm64.
+- **E4 Phasenfolge:** M1a (Naht, weiter auf Docker) / M1b
+  (Ein-Container inkl. E2E-Portierung) / M2 (Umbenennung) / **M2.5**
+  (alte Phasen 19–22: Scheduler, Notify, Backup, Metrics) / M3–M7 mit
+  **Recherche-Gates** (§14.2–14.4 je vor dem Datenmodell) / M8 =
+  Admin-UI **komplett** / M9 Abschluss.
+- **E5 Release-Schnitt:** M1+M2 als ein Betreiber-Release; alte
+  `AOFF_`-Variablen eine Runde mit Deprecation-Warnung weiterlesen.
+- **E6 Struktur:** uv-Workspace bleibt; v2-§11 wird logisch gemappt;
+  neue Subsysteme als neue Member (`mmo_discogs_dump`, `mmo_covers`,
+  `mmo_tadb`, `mmo_mbref`).
+- **E7 GPL:** THIRD-PARTY-NOTICES + Quell-/Commit-Pin + Quellangebot
+  für das eingebackene fpindex-Binary (GPL-3.0).
+- **E8 DB:** neue Migration `CREATE SCHEMA acoustid` + `SET SCHEMA` +
+  `search_path` je Verbindung; Alt-SQL bleibt unangetastet
+  (Drift-Sperre).
+- **E9 Config-Migration:** AliasChoices (eine Release-Runde) +
+  einmaliger Umschreiber beim Wächter-Start + Test mit v1-config.yaml
+  (gegen stille Amnesie: `submit.mode: off` → `local`).
+- **E10 Jobs:** Importer/Discogs/Crawler/Backup/Queue-Send laufen als
+  direkte Subprozesse des **Wächters** (Argumente, returncode, Report
+  ohne Umweg). §8.1/§10.1 wird damit präzisiert: „Nur der Supervisor
+  startet/stoppt **Dauerdienste**; Jobs sind Kinder des Wächters" —
+  supervisord-`[program:*]` kann keine Per-Lauf-Argumente übergeben
+  (beide Zweit-Reviews unabhängig).
+- **E11 Plattenplatz-Guard:** ein Schlüssel `disk.min_free_gb`
+  (ersetzt `update.min_free_gb`, Default 100), geprüft gegen **jeden**
+  Schreib-/Staging-Pfad (mehrere Mounts = mehrere Dateisysteme).
+- **E13 Release-Compose:** Bind-Mounts (Named Volumes nur Dev/Test) —
+  die `down -v`-Falle würde sonst auf 1–2 TB wachsen.
+- **E14 Postgres:** genau eine Major (18) im Image; Datenlayout
+  `/data/db/<major>/`; Versions-Drift-Guard im Wächter (M1b:
+  Startverweigerung + Log; Notification ab M2.5); Major-Upgrade als
+  dokumentiertes Verfahren statt „pg_upgrade im Entrypoint" (bewusste
+  Abweichung von v2 §12).
+- **E15 Supervision-Politik:** `autostart=false` +
+  `autorestart=unexpected` (begrenzte startretries) für PG/Index/API —
+  per `stopProcess` Gestopptes wird nicht neu gestartet (kein
+  Idle-Stopp-Loop), Abstürze schon; Wächter selbst `autorestart=true`;
+  Regressionstests messen beide Richtungen. Postgres `stopsignal=INT`
+  (Fast Shutdown) + großzügiges `stopwaitsecs` + Compose
+  `stop_grace_period`.
+- **E16 Kleinteile:** `auth.allow_known_client_keys` und
+  `mb.keep_submitted_mbid` bleiben; `index.query_hashes` →
+  `acoustid.index.query_hashes` (M2); Importer-`REPORT_SCHEMA`-String
+  bleibt stabil; DB-Passwort intern künftig vom Entrypoint erzeugt;
+  alte GHCR-Pakete bleiben stehen („eingestellt"); CI-Service-Container
+  sind Testinfrastruktur und ausdrücklich von der Ein-Container-Regel
+  ausgenommen; supervisord-Socket 0700, kein inet_http_server; Logs
+  auf `/config`, **Ausnahme:** Wächter-Log zusätzlich auf stdout
+  (Erstpasswort-Weg über `docker logs` bleibt); `/status`-Feld `stack`
+  bleibt, Erweiterungen nur additiv.
+Begründung: M0-Impact-Analyse (vier parallele Analysen, doppelt
+reviewt: Opus 13 + GPT-5.6 12 Findings, alle verifiziert/eingearbeitet).
+Alternativen: je Entscheid in der Analyse dokumentiert und verworfen.
+
+## 2026-08-04: HANDOFF v2 „musicmeta-offline" übernommen — gekippte v1-Entscheide
+
+Entscheidung: Das Projekt folgt ab sofort HANDOFF v2 (docs/HANDOFF.md,
+03.08.2026; v1 archiviert als docs/archive/HANDOFF-v1.md). Damit sind
+folgende v1-Entscheide **gekippt** (Alteinträge bleiben als Historie
+stehen):
+1. Stack aus 5 Containern / zwei Compose-Dateien → **ein** Container,
+   **eine** Compose-Datei (Auftraggeber-Entscheidung v2 §3).
+2. Getrennte Images Wächter/API/Importer → ein Image.
+3. Wächter steuert Docker über /var/run/docker.sock (Eintrag
+   2026-07-25) → interner Prozess-Supervisor; docker.sock entfällt
+   ersatzlos.
+4. Offizielle Postgres-/Index-Images, Index per Digest gepinnt
+   (Eintrag 2026-07-25) → Postgres + fpindex werden ins eigene Image
+   eingebacken; aus dem Digest-Pin wird ein Quell-/Commit-Pin.
+5. Name acoustid-offline → musicmeta-offline (Scope-Erweiterung um
+   Discogs, Cover Art Archive, TheAudioDB).
+6. `update.time` → `acoustid.update.time` (+ neue Scheduler-Keys);
+   `update.min_free_gb` Default 50 → 100 (als `disk.min_free_gb`,
+   s. E11).
+7. CAA außerhalb des Scopes → Voll-Spiegel + Lazy-Fallback.
+8. Lookup-Cache-Invalidierung **vollständig** (Eintrag 2026-08-01) →
+   ab M3 quellen-selektiv (v2 §10.6; TADB-Cache nur manuell).
+9. MIT-Lizenzbegründung („GPL-Index läuft nur als separater
+   HTTP-Dienst", Eintrag 2026-07-25) → fortgeschrieben: auch
+   eingebacken bleiben es getrennte Prozesse mit HTTP-Schnittstelle
+   (bloße Zusammenstellung), aber die **Weitergabe** des Binaries
+   erzeugt GPL-Pflichten → E7.
+Nicht gekippt (v2 §16 bestätigt): AcoustID-Fachlogik, Schema
+`acoustid` (logisch — physisch erst mit E8 angelegt), Lookup-Cache-
+Mechanik, Config-System, Auth/Keys, Rate-Limit, Bug-für-Bug-Paritäten.
+Begründung: Betreiber-Handoff v2 vom 03.08.2026; Impact-Analyse
+docs/research/m0-impact-analyse.md (dort auch die Korrekturen K1–K10
+an v2 selbst, u. a. amd64-only-Index, Index-Volume, Backup-Mount).
+Alternativen: Neuaufsetzen statt Migration — von v2 §16 ausdrücklich
+ausgeschlossen.
+
 ## 2026-08-01: Stand-Vorprüfung vor jedem Bau-Agenten; Nachverifikation statt Doppelbau
 
 Entscheidung: Jeder Bau-Auftrag an einen Agenten enthält künftig die

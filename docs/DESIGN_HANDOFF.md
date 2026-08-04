@@ -1,4 +1,10 @@
-# DESIGN_HANDOFF.md — Admin-UI acoustid-offline
+# DESIGN_HANDOFF.md — Admin-UI acoustid-offline (v1)
+
+**Vermerk 2026-08-04 (M0):** HANDOFF v2 (musicmeta-offline) kündigt eine
+v2-Fassung dieses Dokuments aus einer separaten Design-Session an (§13.5);
+sie wird für M8 gebraucht. Bis dahin bleibt dieses v1-Dokument samt
+abgenommenem Designpaket unter docs/design/ die Referenz; was davon
+trägt, klärt M8.
 
 Input für die Claude-Design-Session. Beschreibt Screens, Komponenten,
 Zustände und Interaktionen der Admin-UI. Technische Rahmenbedingungen
