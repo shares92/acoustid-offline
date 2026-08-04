@@ -37,6 +37,13 @@ Thumbs.db
 .idea/
 .vscode/
 
+# --- Claude-Arbeitsstand ---------------------------------------------------
+# Agenten-Worktrees liegen unter .claude/worktrees/ (komplette Zweit-Checkouts)
+# und duerfen nie ins oeffentliche Repo; settings.local.json ist persoenlich.
+# Versioniert bleiben .claude/settings.json und .claude/hooks/.
+.claude/worktrees/
+.claude/settings.local.json
+
 # --- AcoustID-Datenbestand -------------------------------------------------
 # Dump-Fixtures werden bewusst NICHT verteilt (Lizenz CC BY-SA 3.0, Groesse).
 # Beschaffung: tests/fixtures/fetch_fixtures.py
