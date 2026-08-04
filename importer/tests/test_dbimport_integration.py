@@ -252,6 +252,56 @@ def test_the_old_escaping_epoch_imports_completely(db: psycopg.Connection, dumps
     assert count(db, "meta", "src_day = DATE '2011-08-19'") == 11_677
 
 
+def test_the_old_epoch_values_arrive_unescaped_in_the_database(
+    db: psycopg.Connection, dumps: Path
+) -> None:
+    r"""Der Durchstich der Alt-Epoche bis in die Spalte (Phase 7, Task-Chip).
+
+    Die Zeilenzahl oben belegt nur, dass jede Zeile *lesbar* war. Hier steht
+    der Wert selbst: in der Datei liegt ``(12\\" Remix)`` — ueber dem JSON
+    liegt das Text-Escaping von ``COPY … TO STDOUT``, das jeden Backslash
+    verdoppelt. Ohne Unescape waere die Zeile kein gueltiges JSON gewesen;
+    mit ihm muss in der Spalte ein **echtes** Anfuehrungszeichen und
+    **kein** Backslash stehen — sonst haette der Parser die Ebene zwar
+    entfernt, aber der Wert waere trotzdem verfaelscht.
+
+    Die Gegenprobe steht im Parser-Test (`test_unescape_copy_text_only_halves_backslashes`);
+    dieser Test haelt fest, dass zwischen Parser und Spalte niemand mehr
+    etwas daran aendert.
+    """
+    path = dumps / "2011-08-19-meta-update.jsonl.gz"
+    if not path.exists():
+        pytest.skip("Fixture 2011-08-19-meta-update fehlt")
+    import_file(db, path)
+
+    row = db.execute(
+        "SELECT track, artist, album, track_no, disc_no, year, created, src_day "
+        "FROM meta WHERE id = 153238"
+    ).fetchone()
+    assert row is not None
+    track, artist, album, track_no, disc_no, year, created, src_day = row
+    assert track == 'Viva Las Vegas (12" Remix)'
+    assert "\\" not in track
+    assert artist == "ZZ Top"
+    # `&` und `,` gehen unveraendert durch — das Escaping betraf nur Backslashes.
+    assert album == "Chrome, Smoke & BBQ"
+    assert (track_no, disc_no, year) == (14, 4, 2003)
+    assert created is not None and created.year == 2011
+    assert src_day == date(2011, 8, 19)
+
+    # Und keine einzige Zeile des Tages traegt noch einen Backslash aus dem
+    # COPY-Escaping (die Datei enthaelt keine echten Backslashes in Werten).
+    assert (
+        count(
+            db,
+            "meta",
+            "track LIKE '%\\\\%' OR artist LIKE '%\\\\%' "
+            "OR album LIKE '%\\\\%' OR album_artist LIKE '%\\\\%'",
+        )
+        == 0
+    )
+
+
 # --- Upsert-Semantik ueber zwei Tage ---------------------------------------
 
 
