@@ -68,6 +68,7 @@ from acoustid_watchdog.admin import ensure_admin_user
 from acoustid_watchdog.auth import ApiKeyAuthenticator
 from acoustid_watchdog.cache import LookupCache
 from acoustid_watchdog.config_store import ConfigStore
+from acoustid_watchdog.control import ProcessGroupController
 from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel, log_event
 from acoustid_watchdog.lifecycle import (
@@ -82,7 +83,6 @@ from acoustid_watchdog.reload import ReloadMarker
 from acoustid_watchdog.state import StackStateTracker, StackStatus
 from acoustid_watchdog.store import Database
 from acoustid_watchdog.wake import (
-    API_BASE_URL,
     ReadinessProbe,
     StackController,
     WakeCoordinator,
@@ -162,15 +162,22 @@ class WatchdogService:
         self.state.on_transition = self._log_transition
 
         self.docker = docker if docker is not None else DockerClient()
-        self.probe = probe if probe is not None else ReadinessProbe()
-        self.proxy = proxy if proxy is not None else ReverseProxy(API_BASE_URL)
+        # Beide Adressen kommen aus den Bootstrap-Werten (``AOFF_API_*``)
+        # und nicht mehr aus Modulkonstanten: im Ein-Container-Betrieb ist
+        # der API-Dienst nicht mehr ``acoustid-api:8080``, sondern ein
+        # Loopback-Port — das ist ein Umgebungswert, keine Codekonstante.
+        self.probe = probe if probe is not None else ReadinessProbe(settings.api_health_url)
+        self.proxy = proxy if proxy is not None else ReverseProxy(settings.api_base_url)
         # Die beiden Waechter am Eingang (Phase 18). Beide leben im
         # Speicher bzw. auf der Zustandsdatenbank und beruehren den Stack
         # nie — deshalb duerfen sie vor dem Cache stehen (Invariante §8.2).
         self.auth = ApiKeyAuthenticator(self.db)
         self.ratelimit = IpRateLimiter()
 
-        self.stack = StackController(self.docker)
+        # Der einzige Ort, an dem die konkrete Steuerung gewaehlt wird —
+        # gehalten wird sie nur ueber ihr Protokoll. Der Ein-Container-Umbau
+        # tauscht damit genau diese eine Zeile (HANDOFF v2, M1b).
+        self.stack: ProcessGroupController = StackController(self.docker)
         self.wake = WakeCoordinator(
             self.stack,
             self.probe,

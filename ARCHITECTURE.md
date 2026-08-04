@@ -497,7 +497,7 @@ zurückgeschrieben und als Warnung geloggt.
 
 Laufzeit-Einstellungen in `config.yaml` (Cache-Volume des Wächters,
 editierbar über die Admin-UI). Env-Variablen (Prefix `AOFF_`) nur für
-Bootstrap (Pfade, Ports, DB-Zugänge).
+Bootstrap (Pfade, Ports, DB-/Index-/API-Adressen).
 
 | Schlüssel | Default | Bedeutung |
 |---|---|---|
@@ -531,6 +531,12 @@ Bootstrap (Pfade, Ports, DB-Zugänge).
   und Admin-UI unter `/admin`; Port per Env änderbar.
 - **Container-Namen:** `acoustid-watchdog`, `acoustid-api`,
   `acoustid-importer`, `acoustid-db`, `acoustid-index`.
+- **API-Adresse (seit M1a Bootstrap-Wert, nicht mehr Codekonstante):**
+  `AOFF_API_BASE_URL` (Default `http://acoustid-api:8080`) ist das Ziel
+  des Proxys, `AOFF_API_HEALTH_URL` die Bereitschaftsfrage des Weckens
+  (folgt der Basis-URL, wenn nicht gesetzt); `AOFF_API_PORT` (Default
+  `8080`) ist im Compose-Stack Dokumentation und wird erst im
+  Ein-Container-Betrieb bindend.
 - **Batch-Limit:** max. 100 Einträge pro `/v2/lookup/batch`-Request.
 - **Upstream-Retries:** nach 7 Fehlversuchen Notification + manueller
   Retry über die Admin-UI.

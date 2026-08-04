@@ -23,6 +23,9 @@ def test_defaults_without_any_environment() -> None:
     assert settings.db_name == "acoustid"
     assert settings.db_user == "acoustid"
     assert settings.db_password.get_secret_value() == ""
+    assert settings.api_base_url == "http://acoustid-api:8080"
+    assert settings.api_health_url == "http://acoustid-api:8080/_health"
+    assert settings.api_port == 8080
     assert settings.index_url == "http://acoustid-index:6081"
     assert settings.log_level == "INFO"
 
@@ -38,6 +41,9 @@ def test_every_variable_can_be_overridden() -> None:
         "AOFF_DB_NAME": "aoff",
         "AOFF_DB_USER": "aoff_user",
         "AOFF_DB_PASSWORD": "geheim",
+        "AOFF_API_BASE_URL": "http://127.0.0.1:8081",
+        "AOFF_API_HEALTH_URL": "http://127.0.0.1:8081/_health",
+        "AOFF_API_PORT": "8081",
         "AOFF_INDEX_URL": "http://index:6081",
         "AOFF_LOG_LEVEL": "debug",
     }
@@ -51,6 +57,9 @@ def test_every_variable_can_be_overridden() -> None:
     assert settings.db_name == "aoff"
     assert settings.db_user == "aoff_user"
     assert settings.db_password.get_secret_value() == "geheim"
+    assert settings.api_base_url == "http://127.0.0.1:8081"
+    assert settings.api_health_url == "http://127.0.0.1:8081/_health"
+    assert settings.api_port == 8081
     assert settings.index_url == "http://index:6081"
     assert settings.log_level == "DEBUG"
 
@@ -67,6 +76,28 @@ def test_explicit_paths_win_over_the_data_dir() -> None:
     )
     assert settings.config_path == Path("/etc/config.yaml")
     assert settings.dump_dir == Path("/srv/aoff/dumps")
+
+
+def test_the_health_url_follows_the_api_base_url() -> None:
+    """Wer die API umzieht, soll den Healthcheck nicht nachpflegen muessen.
+
+    Sonst entstuende die halb umgezogene Umgebung: der Proxy spraeche mit
+    dem neuen Dienst, die Bereitschaftsfrage noch mit dem alten.
+    """
+    settings = EnvSettings.from_env({"AOFF_API_BASE_URL": "http://127.0.0.1:8081"})
+    assert settings.api_health_url == "http://127.0.0.1:8081/_health"
+
+
+def test_a_trailing_slash_in_the_base_url_does_not_double_up() -> None:
+    settings = EnvSettings.from_env({"AOFF_API_BASE_URL": "http://api:8081/"})
+    assert settings.api_health_url == "http://api:8081/_health"
+
+
+def test_an_explicit_health_url_wins_over_the_base_url() -> None:
+    settings = EnvSettings.from_env(
+        {"AOFF_API_BASE_URL": "http://api:8081", "AOFF_API_HEALTH_URL": "http://api:9/gesund"}
+    )
+    assert settings.api_health_url == "http://api:9/gesund"
 
 
 def test_empty_values_count_as_unset() -> None:
@@ -99,6 +130,8 @@ def test_unknown_aoff_variable_warns_and_is_ignored(caplog: pytest.LogCaptureFix
         ("AOFF_PORT", "70000"),
         ("AOFF_PORT", "acht"),
         ("AOFF_DB_PORT", "-1"),
+        ("AOFF_API_PORT", "0"),
+        ("AOFF_API_PORT", "70000"),
         ("AOFF_LOG_LEVEL", "LAUT"),
     ],
 )

@@ -2,7 +2,7 @@
 
 Bewusst getrennt von der `config.yaml`: hier stehen nur Werte, die schon
 feststehen muessen, BEVOR die Laufzeit-Konfiguration gelesen werden kann —
-Pfade, Ports, DB-/Index-Zugaenge und der Log-Level. Alles andere (auth,
+Pfade, Ports, DB-/Index-/API-Adressen und der Log-Level. Alles andere (auth,
 submit, wake, idle, update, cache, ratelimit, metrics, notify, backup,
 mb.dsn, index.query_hashes) gehoert in die config.yaml und wird ueber die
 Admin-UI gepflegt.
@@ -44,6 +44,7 @@ _LOG = logging.getLogger(__name__)
 ENV_PREFIX = "AOFF_"
 
 _DEFAULT_DATA_DIR = Path("/data")
+_DEFAULT_API_BASE_URL = "http://acoustid-api:8080"
 _LEVEL_NAMES = frozenset(logging.getLevelNamesMapping())
 
 
@@ -98,6 +99,25 @@ class EnvSettings(BaseModel):
     #: meldet das Fehlen genau dann, wenn der Zugang gebraucht wird.
     db_password: SecretStr = SecretStr("")
 
+    #: AOFF_API_BASE_URL — Basis-URL des API-Dienstes; das Ziel des
+    #: Reverse-Proxys im Waechter (``/v2/*``). Bootstrap-Wert, weil der
+    #: Proxy steht, bevor die config.yaml gelesen ist.
+    api_base_url: str = _DEFAULT_API_BASE_URL
+    #: AOFF_API_HEALTH_URL — interner Healthcheck des API-Dienstes, die
+    #: Bereitschaftsfrage des Weckvorgangs (DECISIONS 2026-08-01). Kein Teil
+    #: des §7-Vertrags und nicht unter ``/v2/``: er beantwortet genau eine
+    #: Frage, die kein oeffentlicher Endpunkt zuverlaessig beantwortet —
+    #: „sind Datenbank und Index angebunden?". Ohne eigenen Wert folgt er
+    #: `api_base_url`.
+    api_health_url: str = f"{_DEFAULT_API_BASE_URL}/_health"
+    #: AOFF_API_PORT — Port, auf dem der API-Dienst lauscht. Heute ist er
+    #: reine Dokumentation: im Compose-Stack hat jeder Dienst seine eigene
+    #: Adresse, und die beiden URLs oben tragen den Port bereits. Er steht
+    #: schon jetzt im Schema, weil der Ein-Container-Umbau ihn braucht —
+    #: dort teilen Waechter und API einen Netzwerk-Namensraum, und der
+    #: Waechter belegt `port` (8080) bereits.
+    api_port: int = Field(default=8080, ge=1, le=65535)
+
     #: AOFF_INDEX_URL — acoustid-index, nur Compose-intern erreichbar.
     index_url: str = "http://acoustid-index:6081"
     #: AOFF_INDEX_NAME — Name des Suchindex im acoustid-index. Ein Server kann
@@ -112,8 +132,15 @@ class EnvSettings(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _derive_paths(cls, data: Any) -> Any:
-        """`config_path`/`dump_dir` folgen `data_dir`, wenn nicht gesetzt."""
+    def _derive_defaults(cls, data: Any) -> Any:
+        """Werte, die einem anderen folgen, solange sie nicht gesetzt sind.
+
+        `config_path`/`dump_dir` folgen `data_dir`, `api_health_url` folgt
+        `api_base_url`. Zweck ist in beiden Faellen derselbe: wer die
+        Wurzel umzieht, muss die abgeleiteten Werte nicht mitpflegen — und
+        eine halb umgezogene Umgebung (neue Basis-URL, alter Healthcheck)
+        kann gar nicht erst entstehen.
+        """
         if not isinstance(data, Mapping):
             return data
         values = dict(data)
@@ -122,6 +149,9 @@ class EnvSettings(BaseModel):
             values["config_path"] = data_dir / "config.yaml"
         if not values.get("dump_dir"):
             values["dump_dir"] = data_dir / "dumps"
+        if not values.get("api_health_url"):
+            base = str(values.get("api_base_url") or _DEFAULT_API_BASE_URL)
+            values["api_health_url"] = f"{base.rstrip('/')}/_health"
         return values
 
     @classmethod

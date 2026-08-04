@@ -25,7 +25,6 @@ from acoustid_watchdog.main import create_app
 from acoustid_watchdog.proxy import HOP_BY_HOP_HEADERS, ReverseProxy
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.store import Database
-from acoustid_watchdog.wake import API_BASE_URL
 from shared.env import EnvSettings
 from shared.models import StackState
 
@@ -47,7 +46,7 @@ def app_with(daemon: FakeDaemon, env_settings: EnvSettings, responder: Responder
         docker=docker_client(daemon),
         probe=probe(lambda request: httpx.Response(200 if daemon.all_running else 503)),
         proxy=ReverseProxy(
-            API_BASE_URL,
+            env_settings.api_base_url,
             client=httpx.AsyncClient(transport=httpx.MockTransport(responder)),
         ),
     ).open()
@@ -273,7 +272,7 @@ def test_wake_timeout_answers_503(daemon: FakeDaemon, env_settings: EnvSettings)
         # Antwortet nie mit 200 — der Stack wird also nie bereit.
         probe=probe(lambda request: httpx.Response(503)),
         proxy=ReverseProxy(
-            API_BASE_URL,
+            env_settings.api_base_url,
             client=httpx.AsyncClient(transport=httpx.MockTransport(responder)),
         ),
     ).open()
@@ -316,7 +315,7 @@ def test_start_failure_answers_503_without_naming_internals(
         docker=docker_client(daemon),
         probe=probe(lambda request: httpx.Response(200 if daemon.all_running else 503)),
         proxy=ReverseProxy(
-            API_BASE_URL,
+            env_settings.api_base_url,
             client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
         ),
     ).open()

@@ -33,7 +33,7 @@ from acoustid_watchdog.main import create_app
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.store import Database
-from acoustid_watchdog.wake import API_BASE_URL, STACK_CONTAINERS
+from acoustid_watchdog.wake import STACK_CONTAINERS
 from shared.env import EnvSettings
 
 
@@ -98,7 +98,7 @@ def service(
         docker=docker_client(daemon),
         probe=probe(health),
         proxy=ReverseProxy(
-            API_BASE_URL,
+            env_settings.api_base_url,
             client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
         ),
     )

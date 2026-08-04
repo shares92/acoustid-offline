@@ -22,6 +22,7 @@ import httpx
 
 from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.wake import ReadinessProbe
+from shared.env import EnvSettings
 
 __all__ = [
     "FakeDaemon",
@@ -142,8 +143,16 @@ class FakeProbe:
 
 
 def probe(handler: Callable[[httpx.Request], httpx.Response]) -> ReadinessProbe:
-    """Echte :class:`ReadinessProbe` auf einem Attrappen-Transport."""
-    return ReadinessProbe(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    """Echte :class:`ReadinessProbe` auf einem Attrappen-Transport.
+
+    Die Adresse ist der Bootstrap-Vorgabewert (``AOFF_API_HEALTH_URL``) —
+    der Transport ist ohnehin eine Attrappe, aber so steht im Test dieselbe
+    URL wie im Betrieb.
+    """
+    return ReadinessProbe(
+        EnvSettings().api_health_url,
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
 
 
 class RecordingProxyTransport:

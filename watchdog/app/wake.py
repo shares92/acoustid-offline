@@ -5,13 +5,19 @@ Der Kern des On-Demand-Betriebs. Drei Bausteine, bewusst getrennt:
 * :class:`StackController` — welche Container zum Stack gehoeren und in
   welcher Reihenfolge sie starten. Er kennt die Namen aus ARCHITECTURE §6
   („Feste Werte") und benutzt :mod:`acoustid_watchdog.docker`; sonst nichts.
+  Nach aussen ist er nur eine von mehreren moeglichen Steuerungen: der
+  Vertrag steht als :class:`~acoustid_watchdog.control.ProcessGroupController`
+  in :mod:`acoustid_watchdog.control`.
 * :class:`ReadinessProbe` — die Bereitschaftsfrage an den API-Dienst
   (interner Healthcheck, DECISIONS 2026-08-01). Sie ist der einzige
   verlaessliche Punkt, an dem „bereit" mehr heisst als „Prozess laeuft":
-  der Endpunkt prueft Datenbank **und** Suchindex.
+  der Endpunkt prueft Datenbank **und** Suchindex. Ihre Adresse ist ein
+  Bootstrap-Wert (``AOFF_API_HEALTH_URL``, :mod:`shared.env`) und keine
+  Modulkonstante mehr — im Ein-Container-Betrieb ist sie eine andere.
 * :class:`WakeCoordinator` — haelt Anfragen, waehrend gestartet wird,
   sorgt dafuer, dass gleichzeitige Anfragen **einen** Weckvorgang ausloesen,
-  legt den Stack wieder schlafen und erhebt seinen Zustand aus Docker.
+  legt den Stack wieder schlafen und erhebt seinen Zustand ueber die
+  Steuerung.
 
 **Warum genau ein Weckvorgang.** Ein zweiter, gleichzeitiger Start waere
 nicht nur Verschwendung: er wuerde `docker start` waehrend eines laufenden
@@ -50,14 +56,13 @@ from typing import Any, Final
 import httpx
 from starlette.concurrency import run_in_threadpool
 
-from acoustid_watchdog.docker import DockerClient, DockerError
+from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
+from acoustid_watchdog.docker import DockerClient
 from acoustid_watchdog.events import EventLevel
 from acoustid_watchdog.state import StackStateTracker
 from shared.models import StackState
 
 __all__ = [
-    "API_BASE_URL",
-    "API_HEALTH_URL",
     "DEFAULT_POLL_INTERVAL_S",
     "DEFAULT_RETRY_AFTER_S",
     "STACK_CONTAINERS",
@@ -80,17 +85,6 @@ STACK_CONTAINERS: Final[tuple[str, ...]] = (
     "acoustid-index",
     "acoustid-api",
 )
-
-#: Interner Healthcheck des API-Dienstes (DECISIONS 2026-08-01). Kein Teil
-#: des §7-Vertrags und nicht unter ``/v2/`` — er beantwortet genau eine
-#: Frage, die kein oeffentlicher Endpunkt zuverlaessig beantwortet: „sind
-#: Datenbank und Index angebunden?". Adresse und Port sind fest wie die
-#: Container-Namen (``docker-compose.yml``: ``expose: 8080``, kein
-#: veroeffentlichter Port).
-API_HEALTH_URL: Final = "http://acoustid-api:8080/_health"
-
-#: Basis-URL des API-Dienstes fuer den Proxy (:mod:`acoustid_watchdog.proxy`).
-API_BASE_URL: Final = "http://acoustid-api:8080"
 
 #: Abstand zwischen zwei Bereitschaftsfragen waehrend des Weckens. Der Stack
 #: braucht Sekunden bis Minuten (Postgres-Recovery, Index-mmap); haeufigeres
@@ -127,14 +121,19 @@ class ReadinessProbe:
 
     def __init__(
         self,
-        url: str = API_HEALTH_URL,
+        url: str,
         *,
         timeout_s: float = DEFAULT_PROBE_TIMEOUT_S,
         client: httpx.Client | None = None,
     ) -> None:
         """
         Args:
-            url: Adresse des internen Healthchecks.
+            url: Adresse des internen Healthchecks
+                (``AOFF_API_HEALTH_URL``). Bewusst ohne Vorgabewert — wie
+                bei :class:`~acoustid_watchdog.proxy.ReverseProxy`: eine
+                hier eingebaute Adresse waere ein zweiter Ort, an dem die
+                Umgebung steht, und wuerde bei einer Umstellung still die
+                falsche bleiben.
             timeout_s: Leseschranke einer Frage.
             client: Vorhandener ``httpx.Client`` (Tests). Wird dann **nicht**
                 von :meth:`close` geschlossen.
@@ -171,7 +170,12 @@ class ReadinessProbe:
 
 
 class StackController:
-    """Startet und stoppt die Stack-Container — mehr Wissen hat er nicht."""
+    """Startet und stoppt die Stack-Container — mehr Wissen hat er nicht.
+
+    Die Docker-Fassung des
+    :class:`~acoustid_watchdog.control.ProcessGroupController`; ein Test
+    haelt fest, dass sie das Protokoll erfuellt.
+    """
 
     def __init__(
         self,
@@ -220,7 +224,7 @@ class WakeCoordinator:
 
     def __init__(
         self,
-        controller: StackController,
+        controller: ProcessGroupController,
         probe: ReadinessProbe,
         state: StackStateTracker,
         *,
@@ -229,7 +233,9 @@ class WakeCoordinator:
     ) -> None:
         """
         Args:
-            controller: Steuerung der Stack-Container.
+            controller: Steuerung des Stacks. Bewusst nur ueber das
+                Protokoll getypt: der Koordinator kennt ``start``,
+                ``stop``, ``all_running`` — nicht die Technik dahinter.
             probe: Bereitschaftsfrage an den API-Dienst.
             state: Zustandsanzeige (``/status``, spaeter die Admin-UI).
             log_event: ``(level, message, extra)`` — Anschluss an das
@@ -378,7 +384,7 @@ class WakeCoordinator:
 
         try:
             started = await run_in_threadpool(self._controller.start)
-        except DockerError as exc:
+        except ProcessControlError as exc:
             detail = str(exc)
             self._state.to(StackState.ERROR, detail=detail)
             self._event(EventLevel.ERROR, "Stack-Start fehlgeschlagen", {"error": detail})
@@ -459,7 +465,7 @@ class WakeCoordinator:
         started_at = time.monotonic()
         try:
             stopped = await run_in_threadpool(self._controller.stop)
-        except DockerError as exc:
+        except ProcessControlError as exc:
             detail = str(exc)
             self._state.to(StackState.ERROR, detail=detail)
             self._event(
@@ -524,7 +530,7 @@ class WakeCoordinator:
         """
         try:
             running = self._controller.all_running()
-        except DockerError as exc:
+        except ProcessControlError as exc:
             self._docker_failures += 1
             # Nur der erste Fehlschlag einer Serie ist eine Warnung wert;
             # ein dauerhaft fehlender Socket wuerde sonst das Log fluten.

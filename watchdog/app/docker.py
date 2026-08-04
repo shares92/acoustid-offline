@@ -45,6 +45,8 @@ from urllib.parse import quote
 
 import httpx
 
+from acoustid_watchdog.control import ProcessControlError
+
 __all__ = [
     "DEFAULT_STOP_TIMEOUT_S",
     "DEFAULT_TIMEOUT_S",
@@ -80,8 +82,13 @@ DEFAULT_TIMEOUT_S: Final = 30.0
 DEFAULT_STOP_TIMEOUT_S: Final = 60
 
 
-class DockerError(Exception):
-    """Der Daemon konnte einen Auftrag nicht ausfuehren."""
+class DockerError(ProcessControlError):
+    """Der Daemon konnte einen Auftrag nicht ausfuehren.
+
+    Unterklasse der technikfreien Basis
+    :class:`~acoustid_watchdog.control.ProcessControlError`: die Weck-Logik
+    faengt nur die Basis, dieses Modul benennt den Grund genauer.
+    """
 
 
 class DockerUnavailableError(DockerError):

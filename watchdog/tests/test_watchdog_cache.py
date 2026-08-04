@@ -40,7 +40,6 @@ from acoustid_watchdog.main import create_app
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.service import WatchdogService
 from acoustid_watchdog.store import Database
-from acoustid_watchdog.wake import API_BASE_URL
 from shared.env import EnvSettings
 
 FINGERPRINT = "AQABz0qUkZK4oOfhL-CPc4e5C_wW2H2QH9uPLsdxHT2"
@@ -112,7 +111,7 @@ def build(
         ),
         probe=probe(health),
         proxy=ReverseProxy(
-            API_BASE_URL,
+            env_settings.api_base_url,
             client=httpx.AsyncClient(transport=httpx.MockTransport(tripwire.guard(upstream))),
         ),
     ).open()

@@ -16,7 +16,8 @@ import httpx
 import pytest
 from watchdog_stubs import FakeDaemon, FakeProbe, docker_client
 
-from acoustid_watchdog.docker import DockerClient
+from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
+from acoustid_watchdog.docker import DockerClient, DockerError
 from acoustid_watchdog.events import EventLevel
 from acoustid_watchdog.state import StackStateTracker
 from acoustid_watchdog.wake import (
@@ -26,7 +27,12 @@ from acoustid_watchdog.wake import (
     StackNotReadyError,
     WakeCoordinator,
 )
+from shared.env import EnvSettings
 from shared.models import StackState
+
+#: Adresse des internen Healthchecks — seit M1a ein Bootstrap-Wert
+#: (``AOFF_API_HEALTH_URL``) und keine Modulkonstante des Waechters mehr.
+HEALTH_URL = EnvSettings().api_health_url
 
 
 def _coordinator(
@@ -255,6 +261,92 @@ def test_the_next_attempt_leads_out_of_the_error_state() -> None:
     ]
 
 
+# --- Die Naht: Protokoll und Fehlerbasis (M1a) ------------------------------
+
+
+class _BrokenController:
+    """Eine Steuerung ohne jede Technik dahinter — sie scheitert nur.
+
+    Der Beleg dafuer, dass der Koordinator wirklich am Protokoll haengt und
+    nicht an :class:`StackController`: diese Klasse erbt von nichts.
+    """
+
+    def __init__(self, message: str = "Steuerung antwortet nicht") -> None:
+        self.message = message
+        self.calls: list[str] = []
+
+    def _fail(self, what: str) -> None:
+        self.calls.append(what)
+        raise ProcessControlError(self.message)
+
+    def start(self) -> list[str]:
+        self._fail("start")
+        return []
+
+    def stop(self) -> list[str]:
+        self._fail("stop")
+        return []
+
+    def all_running(self) -> bool:
+        self._fail("all_running")
+        return False
+
+
+def test_the_docker_controller_fulfils_the_protocol() -> None:
+    """Der Adapter-Tausch in M1b haengt genau an dieser Zusage."""
+    controller = StackController(docker_client(_sleeping()))
+    assert isinstance(controller, ProcessGroupController)
+    assert isinstance(_BrokenController(), ProcessGroupController)
+
+
+def test_docker_errors_are_process_control_errors() -> None:
+    """``DockerError`` ist die Docker-Auspraegung der gemeinsamen Basis."""
+    assert issubclass(DockerError, ProcessControlError)
+
+
+def test_a_start_failure_of_any_controller_becomes_an_error_state() -> None:
+    """Der Koordinator faengt die Basis, nicht den Docker-Fehler.
+
+    Gleiches Verhalten wie bei einem fehlenden Container
+    (:func:`test_start_failure_becomes_an_error_state`) — nur kommt der
+    Fehler hier aus einer Steuerung, die Docker nie gesehen hat.
+    """
+    controller = _BrokenController("Supervisor-Socket antwortet nicht")
+    state = StackStateTracker.sleeping()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator = WakeCoordinator(
+        controller,
+        FakeProbe(),  # type: ignore[arg-type]
+        state,
+        log_event=lambda level, message, extra=None: events.append((level, message)),
+        poll_interval_s=0.01,
+    )
+
+    async def scenario() -> None:
+        await coordinator.ensure_ready(timeout_s=5)
+
+    with pytest.raises(StackNotReadyError, match="konnte nicht gestartet werden"):
+        asyncio.run(scenario())
+
+    assert state.state is StackState.ERROR
+    assert state.status.detail == "Supervisor-Socket antwortet nicht"
+    assert (EventLevel.ERROR, "Stack-Start fehlgeschlagen") in events
+
+
+def test_a_failing_controller_leaves_the_display_alone_on_observe() -> None:
+    """Nachfragen scheitert lautlos — der Waechter muss weiterlaufen."""
+    controller = _BrokenController()
+    state = StackStateTracker(StackState.READY)
+    coordinator = WakeCoordinator(
+        controller,
+        FakeProbe(),  # type: ignore[arg-type]
+        state,
+    )
+
+    assert coordinator.observe() is StackState.READY
+    assert controller.calls == ["all_running"]
+
+
 def test_invalidate_forces_a_new_check() -> None:
     """Der Proxy verwirft die Bereitschaft, wenn die API wegbricht."""
     daemon = _sleeping()
@@ -315,7 +407,7 @@ def test_probe_accepts_only_http_200() -> None:
         client = httpx.Client(
             transport=httpx.MockTransport(lambda request, code=status: httpx.Response(code))
         )
-        assert ReadinessProbe(client=client).ready() is expected
+        assert ReadinessProbe(HEALTH_URL, client=client).ready() is expected
 
 
 def test_probe_treats_a_dead_connection_as_not_ready() -> None:
@@ -325,4 +417,4 @@ def test_probe_treats_a_dead_connection_as_not_ready() -> None:
         raise httpx.ConnectError("connection refused")
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    assert ReadinessProbe(client=client).ready() is False
+    assert ReadinessProbe(HEALTH_URL, client=client).ready() is False
