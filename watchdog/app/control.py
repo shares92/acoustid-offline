@@ -72,6 +72,17 @@ class GroupStatus:
 
     #: Laeuft alles, was zur Gruppe gehoert?
     running: bool
+    #: Steht wirklich alles, was gestoppt werden **kann**? Nur dann schlaeft
+    #: der Stack.
+    #:
+    #: Bewusst kein ``not running``: dazwischen liegt der ganze Bereich, in
+    #: dem etwas laeuft und etwas nicht — ein halb gestarteter Stack, ein von
+    #: Hand gestoppter Einzelprozess, ein Autorestart in ``STARTING``. Als
+    #: „schlafend" gelesen waere das die gefaehrlichste Fehlanzeige des
+    #: Projekts: eine laufende Postgres haelt das Array wach, waehrend die
+    #: Anzeige Ruhe meldet (R8). Die residenten Prozesse (E12) zaehlen hier
+    #: nicht mit — sie laufen ja gerade absichtlich weiter.
+    sleeping: bool = False
     #: Namen der Prozesse, die von selbst weg sind — leer ist der Normalfall.
     #: Ein gestoppter (schlafender) Prozess steht hier **nicht**.
     crashed: tuple[str, ...] = ()
@@ -83,6 +94,15 @@ class GroupStatus:
     def healthy(self) -> bool:
         """Laeuft alles und ist nichts abgestuerzt?"""
         return self.running and not self.crashed
+
+    @property
+    def partial(self) -> bool:
+        """Weder ganz wach noch ganz schlafend — und nichts abgestuerzt.
+
+        Der Zustand, den es unter Docker in dieser Form nicht gab und den
+        die Anzeige deshalb nie kannte.
+        """
+        return not self.running and not self.sleeping and not self.crashed
 
 
 @runtime_checkable

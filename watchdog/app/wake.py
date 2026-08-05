@@ -57,7 +57,7 @@ from typing import Any, Final
 import httpx
 from starlette.concurrency import run_in_threadpool
 
-from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
+from acoustid_watchdog.control import GroupStatus, ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel
 from acoustid_watchdog.state import StackStateTracker
 from shared.models import StackState
@@ -204,6 +204,9 @@ class WakeCoordinator:
         #: dauerhaft toter Prozess wuerde den Ringpuffer sonst an einem
         #: Nachmittag leeren (Muster von :attr:`_control_failures`).
         self._crashed: tuple[str, ...] = ()
+        #: Dasselbe fuer den Teilzustand „laeuft, aber nicht vollstaendig"
+        #: (:meth:`_observe_partial`).
+        self._partial: tuple[str, ...] = ()
 
     @property
     def wakes(self) -> int:
@@ -458,13 +461,18 @@ class WakeCoordinator:
           Prozess-Supervisor nicht mehr. ``STOPPED`` ist der Idle-Stopp,
           ``EXITED``/``FATAL``/``BACKOFF`` sind ein Absturz — und ein
           Absturz darf sich nie als Schlaf maskieren (R8).
-        * **Es laeuft nichts (und nichts ist abgestuerzt)** -> ``schlafend``.
+        * **Alle stoppbaren Prozesse stehen** -> ``schlafend``. Gemeint ist
+          wirklich ``STOPPED``, nicht „laeuft nicht": ein Prozess in
+          ``STARTING`` (Autorestart nach einem Absturz, E15) schlaeft nicht.
         * **Alles laeuft und der Healthcheck antwortet** -> ``bereit``.
-        * **Alles dazwischen** (halb gestartet, laeuft aber noch nicht
-          gesund) -> der gefuehrte Zustand bleibt stehen. Wer gerade
-          hochfaehrt, ist ``startet``; ein einzelner verpasster Healthcheck
-          macht aus ``bereit`` noch kein ``schlafend`` (dafuer gibt es den
-          Weg ueber :meth:`invalidate` im Proxy).
+        * **Alles dazwischen** — halb gestartet, ein einzelner Prozess von
+          Hand gestoppt, ein Start unterwegs -> der gefuehrte Zustand bleibt
+          stehen, die Bereitschaft wird verworfen
+          (:meth:`_observe_partial`). Nie ``schlafend``: eine laufende
+          Postgres haelt das Array wach, und genau das waere die Anzeige,
+          die niemand hinterfragt. Ein einzelner verpasster Healthcheck
+          macht aus ``bereit`` ebenfalls kein ``schlafend`` (dafuer gibt es
+          den Weg ueber :meth:`invalidate` im Proxy).
 
         Eine nicht erreichbare Steuerung ist kein Fehlerzustand des
         Stacks: der Waechter muss auch dann laufen (``/status``, Admin-UI),
@@ -501,7 +509,8 @@ class WakeCoordinator:
             _LOG.info("Kein Prozess mehr im Fehlerzustand", extra={"was": list(self._crashed)})
             self._crashed = ()
 
-        if not status.running:
+        if status.sleeping:
+            self._partial = ()
             self.invalidate()
             if previous is StackState.ERROR:
                 # Der Fehlerzustand bleibt stehen, bis ihn ein Weckversuch
@@ -514,6 +523,10 @@ class WakeCoordinator:
                 self._event(EventLevel.WARNING, "Stack wurde ausserhalb des Waechters gestoppt")
             return self._state.state
 
+        if not status.running:
+            return self._observe_partial(status, announce=announce)
+        self._partial = ()
+
         if not self._probe.ready():
             return self._state.state
 
@@ -521,6 +534,45 @@ class WakeCoordinator:
         changed = self._state.try_to(StackState.READY)
         if changed is not None and announce and previous is not StackState.STARTING:
             self._event(EventLevel.INFO, "Stack wurde ausserhalb des Waechters gestartet")
+        return self._state.state
+
+    def _observe_partial(self, status: GroupStatus, *, announce: bool) -> StackState:
+        """Weder ganz wach noch ganz schlafend — die Anzeige bleibt stehen.
+
+        Der Fall, den es unter Docker nicht gab und der die gefaehrlichste
+        Fehlanzeige des Projekts waere (R8): laeuft die Datenbank noch,
+        waehrend die API steht, haelt sie das Array wach — „schlafend" waere
+        dann eine Luege, die niemand bemerkt, weil sie wie der Gutzustand
+        aussieht.
+
+        Was hier passiert und was ausdruecklich **nicht**:
+
+        * Der gefuehrte Zustand bleibt, wie er ist. Ein laufender Weckvorgang
+          (``startet``) soll nicht ueberholt werden, und fuer „teilweise
+          wach" gibt es bewusst keinen eigenen Zustand — die naechste
+          Anfrage startet ohnehin nach, was fehlt (``start()`` ist
+          idempotent).
+        * Die **Bereitschaft wird verworfen**: was halb steht, beantwortet
+          keine Anfragen.
+        * Gemeldet wird nur die **Aenderung** — der Poller fragt alle 15 s,
+          und ein dauerhaft halb gestoppter Stack wuerde den Ringpuffer
+          sonst leerlaufen lassen (dasselbe Muster wie beim Absturz).
+        """
+        stopped = tuple(name for name, state in status.states if state != "RUNNING")
+        new = stopped != self._partial
+        self._partial = stopped
+        self.invalidate()
+        if new:
+            _LOG.warning(
+                "Stack ist nur teilweise wach — Anzeige bleibt stehen",
+                extra={"not_running": list(stopped), "stack_state": self._state.state.value},
+            )
+            if announce:
+                self._event(
+                    EventLevel.WARNING,
+                    "Stack ist nur teilweise wach",
+                    {"not_running": list(stopped), "stack_state": self._state.state.value},
+                )
         return self._state.state
 
     def _observe_crash(

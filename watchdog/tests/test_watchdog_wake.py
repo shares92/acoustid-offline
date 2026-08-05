@@ -395,6 +395,67 @@ def test_a_stopped_process_stays_a_sleeping_stack() -> None:
     assert state.status.detail is None
 
 
+def test_a_half_running_stack_is_never_reported_as_sleeping() -> None:
+    """Die gefaehrlichste Fehlanzeige des Projekts (R8).
+
+    Die API ist gestoppt, Postgres laeuft weiter — und haelt damit das
+    Array wach. „Schlafend" saehe aus wie der Gutzustand, und niemand
+    haette einen Grund nachzusehen. Der gefuehrte Zustand bleibt deshalb
+    stehen, und die Bereitschaft ist verworfen.
+    """
+    supervisor = running_stack()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = _coordinator(
+        supervisor,
+        FakeProbe(),
+        events=events,
+        state=StackStateTracker(StackState.READY),
+    )
+
+    supervisor.stopProcess("api")
+
+    assert coordinator.observe() is StackState.READY
+    assert state.state is not StackState.SLEEPING
+    assert coordinator.ready is False
+    assert (EventLevel.WARNING, "Stack ist nur teilweise wach") in events
+
+
+def test_a_restarting_process_is_not_reported_as_sleeping() -> None:
+    """Waehrend `autorestart=unexpected` greift, schlaeft nichts (E15).
+
+    supervisord hat den abgestuerzten Prozess neu gespawnt; er steht in
+    ``STARTING`` und ist damit weder „laeuft" noch „abgestuerzt". Genau
+    diese Luecke haette ihn als Schlaf gelesen.
+    """
+    supervisor = running_stack()
+    coordinator, state = _coordinator(
+        supervisor, FakeProbe(), state=StackStateTracker(StackState.READY)
+    )
+
+    supervisor.programs["db"] = ProcessState.STARTING
+
+    assert coordinator.observe() is not StackState.SLEEPING
+    assert state.state is StackState.READY
+
+
+def test_a_partial_state_is_reported_once() -> None:
+    """Auch hier gilt: gemeldet wird die Aenderung, nicht der Zustand."""
+    supervisor = running_stack()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, _state = _coordinator(
+        supervisor,
+        FakeProbe(),
+        events=events,
+        state=StackStateTracker(StackState.READY),
+    )
+
+    supervisor.stopProcess("api")
+    for _ in range(5):
+        coordinator.observe()
+
+    assert [message for _, message in events].count("Stack ist nur teilweise wach") == 1
+
+
 def test_a_crash_while_sleeping_is_reported_without_changing_the_state() -> None:
     """Aus ``schlafend`` gibt es keine Kante in den Fehler — gemeldet wird trotzdem.
 

@@ -382,7 +382,11 @@ def test_poller_notices_a_stack_stopped_by_hand() -> None:
     poller = StatePoller(coordinator)
 
     assert state.state is StackState.READY
-    supervisor.stopProcess("api")  # von Hand gestoppt (supervisorctl)
+    # Von Hand gestoppt (supervisorctl) — **beide** stoppbaren Prozesse:
+    # bliebe Postgres laufen, waere das kein Schlaf, sondern ein
+    # Teilzustand (der Test darunter).
+    supervisor.stopProcess("api")
+    supervisor.stopProcess("db")
 
     assert asyncio.run(poller.check()) is StackState.SLEEPING
     assert state.state is StackState.SLEEPING
@@ -408,6 +412,26 @@ def test_the_first_request_after_a_manual_stop_wakes() -> None:
     assert asyncio.run(scenario()) is True
     assert supervisor.all_running is True
     assert coordinator.wakes == 1
+
+
+def test_poller_never_reports_a_half_stopped_stack_as_sleeping() -> None:
+    """Nur die API gestoppt — Postgres haelt das Array wach (R8).
+
+    Der Poller ist die Stelle, an der diese Fehlanzeige entstanden waere:
+    er fragt alle 15 s und schreibt, was er sieht. „Schlafend" waere hier
+    die bequeme und falsche Antwort.
+    """
+    supervisor = running_stack()
+    events: list[tuple[EventLevel, str]] = []
+    coordinator, state = ready_coordinator(supervisor, events=events)
+    poller = StatePoller(coordinator)
+
+    supervisor.stopProcess("api")
+
+    assert asyncio.run(poller.check()) is not StackState.SLEEPING
+    assert state.state is StackState.READY
+    assert coordinator.ready is False
+    assert (EventLevel.WARNING, "Stack ist nur teilweise wach") in events
 
 
 def test_poller_notices_a_stack_started_by_hand() -> None:

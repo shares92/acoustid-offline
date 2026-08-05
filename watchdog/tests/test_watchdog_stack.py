@@ -121,6 +121,45 @@ def test_a_sleeping_stack_is_not_running_although_the_index_is() -> None:
 # --- Zustand erheben --------------------------------------------------------
 
 
+def test_sleeping_means_the_stoppable_processes_are_stopped() -> None:
+    """Schlafen ist nicht „laeuft nicht" — der Unterschied ist R8.
+
+    Der residente Index (E12) laeuft im Schlaf weiter; er darf die Anzeige
+    nicht verhindern. Ein laufender **stoppbarer** Prozess dagegen schon:
+    eine wache Postgres haelt das Array wach.
+    """
+    supervisor = running_stack()
+    stack = controller(supervisor)
+
+    assert stack.inspect().sleeping is False
+
+    supervisor.stopProcess("api")
+    # Postgres laeuft noch — das ist kein Schlaf, sondern ein Teilzustand.
+    status = stack.inspect()
+    assert status.sleeping is False
+    assert status.running is False
+    assert status.partial is True
+
+    supervisor.stopProcess("db")
+    status = stack.inspect()
+    assert status.sleeping is True
+    assert status.partial is False
+
+
+def test_a_starting_process_is_not_sleeping() -> None:
+    """``STARTING`` ist ein laufender Start (E15-Autorestart), kein Schlaf."""
+    supervisor = sleeping_stack()
+    supervisor.programs["db"] = ProcessState.STARTING
+    stack = controller(supervisor)
+
+    status = stack.inspect()
+
+    assert status.sleeping is False
+    assert status.running is False
+    assert status.crashed == ()
+    assert status.partial is True
+
+
 def test_inspect_reports_a_crash_but_not_a_stop() -> None:
     supervisor = running_stack()
     stack = controller(supervisor)
@@ -204,7 +243,48 @@ def test_a_soft_gate_that_expires_lets_the_start_continue() -> None:
     assert stack.start() == ["db", "index", "api"]
 
 
-def test_a_gate_is_skipped_for_a_process_that_was_already_running() -> None:
+def test_a_required_gate_is_stellt_also_for_a_process_that_was_already_running() -> None:
+    """„Laeuft" heisst nicht „nimmt Verbindungen an".
+
+    Der Fall, den ein `continue` bei ALREADY_STARTED verschluckt haette: die
+    Datenbank wurde von Hand gestartet (oder ein vorheriger Weckvorgang ist
+    an ihrem Gate abgelaufen und hat sie laufend zurueckgelassen) und steckt
+    noch in der Recovery. Ohne Gate startete die API dagegen und stuerbe
+    nach 30 s — dreimal, bis `startretries` verbraucht sind.
+    """
+    supervisor = sleeping_stack()
+    supervisor.programs["db"] = ProcessState.RUNNING  # laeuft schon
+    stack = controller(supervisor, gates=[_gate("db", [False] * 1000, required=True)])
+
+    with pytest.raises(ProcessControlError, match="nicht bereit"):
+        stack.start()
+
+    # Und vor allem: die API wurde nicht gestartet.
+    assert supervisor.count("startProcess", "api") == 0
+    assert supervisor.programs["api"] is ProcessState.STOPPED
+
+
+def test_a_required_gate_of_a_running_process_lets_the_start_continue() -> None:
+    """Antwortet die schon laufende Datenbank, geht es normal weiter."""
+    supervisor = sleeping_stack()
+    supervisor.programs["db"] = ProcessState.RUNNING
+    asked: list[str] = []
+
+    def db_check() -> bool:
+        asked.append("db")
+        return True
+
+    stack = controller(
+        supervisor,
+        gates=[ReadinessGate(name="db", check=db_check, timeout_s=5, required=True)],
+    )
+
+    # `db` steht nicht in der Liste — gestartet hat ihn dieser Aufruf nicht.
+    assert stack.start() == ["index", "api"]
+    assert asked == ["db"]
+
+
+def test_a_soft_gate_is_skipped_for_a_process_that_was_already_running() -> None:
     """Der residente Index laeuft seit dem Containerstart — vielleicht noch ladend.
 
     Auf ihn zu warten wuerde jeden Weckvorgang um Minuten verlaengern,

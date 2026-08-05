@@ -58,7 +58,7 @@ from typing import Final
 import httpx
 
 from acoustid_watchdog.control import GroupStatus, ProcessControlError
-from acoustid_watchdog.process import SupervisorClient
+from acoustid_watchdog.process import ProcessState, SupervisorClient
 from shared.env import EnvSettings
 
 __all__ = [
@@ -191,13 +191,19 @@ class ServiceGroupController:
 
         started: list[str] = []
         for name in self.processes:
-            if not self.supervisor.start(name):
-                # Lief schon — dann ist er auch bereit (oder er ist der
-                # residente Index mitten im MAP_POPULATE, und darauf zu
-                # warten waere falsch; Modul-Docstring).
-                continue
-            started.append(name)
-            self._gate(name)
+            if self.supervisor.start(name):
+                started.append(name)
+                self._gate(name)
+            else:
+                # Lief schon. Ein **zwingendes** Gate wird trotzdem gestellt:
+                # „laeuft" heisst nicht „nimmt Verbindungen an". Die Datenbank
+                # kann von Hand gestartet worden sein und noch in der Recovery
+                # stecken, oder ein vorheriger Weckvorgang ist genau an ihrem
+                # Gate abgelaufen und hat sie laufend zurueckgelassen —
+                # ohne diese Zeile startete die API dagegen und stuerbe nach
+                # 30 s (`api/app/service.py`), bis `startretries` verbraucht
+                # sind.
+                self._gate(name, only_required=True)
         return started
 
     def stop(self) -> list[str]:
@@ -221,12 +227,18 @@ class ServiceGroupController:
     def inspect(self) -> GroupStatus:
         """Erhebt den Zustand aller Stack-Prozesse in einem Aufruf.
 
+        Liefert **beide** Enden getrennt: „laeuft alles" und „steht alles,
+        was gestoppt werden kann". Dazwischen liegt der Teilzustand, und der
+        darf nie als Schlaf durchgehen (R8) — der Aufrufer sieht ihn an
+        :attr:`~acoustid_watchdog.control.GroupStatus.partial`.
+
         Ein Prozess, den es in supervisord gar nicht gibt, zaehlt als
         „laeuft nicht" **und** als abgestuerzt: das ist ein Image-Bug, und
-        er soll nicht als Schlaf durchgehen.
+        auch er soll nicht als Schlaf durchgehen.
         """
         infos = self.supervisor.states()
         running = True
+        sleeping = True
         crashed: list[str] = []
         states: list[tuple[str, str]] = []
         for name in self.processes:
@@ -241,14 +253,36 @@ class ServiceGroupController:
                 running = False
             if info.crashed:
                 crashed.append(name)
-        return GroupStatus(running=running, crashed=tuple(crashed), states=tuple(states))
+            # Schlafen heisst: die stoppbaren Prozesse sind **gestoppt**.
+            # `STARTING` ist es ausdruecklich nicht — dort laeuft gerade ein
+            # Start (womoeglich der Autorestart nach einem Absturz, E15).
+            if name not in self.resident and info.state is not ProcessState.STOPPED:
+                sleeping = False
+        return GroupStatus(
+            running=running,
+            sleeping=sleeping,
+            crashed=tuple(crashed),
+            states=tuple(states),
+        )
 
     # --- Innenleben ---------------------------------------------------------
 
-    def _gate(self, name: str) -> None:
-        """Wartet auf die Bereitschaft eines gerade gestarteten Prozesses."""
+    def _gate(self, name: str, *, only_required: bool = False) -> None:
+        """Wartet auf die Bereitschaft eines Prozesses.
+
+        Args:
+            name: Prozessname.
+            only_required: Nur zwingende Gates stellen. Den Weg nimmt ein
+                Prozess, der schon lief — beim residenten Index (E12) waere
+                das weiche Gate dann falsch: er kann seit dem Containerstart
+                im ``MAP_POPULATE`` stecken, und darauf zu warten verlaengerte
+                jeden Weckvorgang um Minuten.
+        """
         gate = self._gates.get(name)
         if gate is None:
+            return
+        if only_required and not gate.required:
+            _LOG.debug("Weiches Gate uebersprungen, Prozess lief bereits", extra={"program": name})
             return
         started_at = time.monotonic()
         if gate.wait():
