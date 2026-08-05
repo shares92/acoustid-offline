@@ -36,6 +36,12 @@ Antwortform (JSON)::
 Instanz vor dem Bootstrap) — ein leeres Objekt waere von „Stand unbekannt"
 nicht zu unterscheiden.
 
+``last_update_run`` ist seit M2.5 der letzte **AcoustID-Delta**-Lauf
+(``kind: "acoustid-delta"``, vorher ``"update"``; siehe
+:mod:`acoustid_watchdog.runs`). Der Feldname bleibt: er ist ein
+bestehender Vertrag, und die Frage dahinter — „wann war der letzte
+Datenabgleich?" — ist dieselbe geblieben.
+
 **Erweiterungen sind ausschliesslich additiv** (M0-Analyse §2.1): das Feld
 ``stack`` behaelt seinen Namen und seine Form, auch wenn im Ein-Container-
 Betrieb kein Stack mehr im Wortsinn existiert. Es ist ein bestehender
@@ -75,7 +81,7 @@ def build_status(db: Database, state: StackStateTracker, settings: EnvSettings) 
             Sie stehen schon im Speicher — die Zusage „weckt nie" bleibt
             damit baulich erfuellt, es kommt kein Zugriff hinzu.
     """
-    last_run = latest_run(db, RunKind.UPDATE)
+    last_run = latest_run(db, RunKind.ACOUSTID_DELTA)
     data_run = latest_data_sequence(db)
     return {
         "status": "ok",

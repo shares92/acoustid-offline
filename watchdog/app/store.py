@@ -141,6 +141,53 @@ MIGRATIONS: Final[tuple[tuple[str, ...], ...]] = (
         "CREATE INDEX event_log_level_idx ON event_log (level)",
         "CREATE INDEX event_log_source_idx ON event_log (source)",
     ),
+    # --- 2: Job-Typen der Scope-Erweiterung (M2.5) ---------------------------
+    #
+    # `kind` kannte bis hier genau zwei Werte (`update`, `backup`) — das war
+    # der Stand, als es genau zwei Jobs geben sollte. Mit dem Scheduler
+    # kommen die Job-Arten aus E10 dazu, und der taegliche Delta-Import
+    # bekommt dabei einen Namen, der die Quelle nennt: `acoustid-delta`
+    # statt `update`. Ab M3 stehen `discogs-dump`, `caa-crawl` und
+    # `nachzuegler` daneben, und „update" waere dann keine Auskunft mehr,
+    # sondern eine Frage.
+    #
+    # **SQLite kann keinen CHECK aendern** — die Tabelle wird neu gebaut und
+    # der Bestand kopiert (der empfohlene Weg der SQLite-Doku). Bestehende
+    # `update`-Zeilen wandern dabei auf den neuen Namen; in der Praxis gibt
+    # es keine (gefuellt wird die Tabelle erst ab M2.5), aber ein
+    # handgeschriebener Eintrag darf nicht am neuen CHECK haengen bleiben.
+    (
+        """
+        CREATE TABLE update_run_new (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind           TEXT    NOT NULL CHECK (kind IN (
+                               'acoustid-delta', 'discogs-dump', 'caa-crawl',
+                               'nachzuegler', 'backup', 'queue-send')),
+            started_at     TEXT    NOT NULL,
+            finished_at    TEXT,
+            result         TEXT    CHECK (result IN ('success', 'failed', 'aborted')),
+            files_imported INTEGER NOT NULL DEFAULT 0,
+            rows_imported  INTEGER NOT NULL DEFAULT 0,
+            last_sequence  TEXT,
+            error          TEXT,
+            report         TEXT
+        )
+        """,
+        """
+        INSERT INTO update_run_new
+            (id, kind, started_at, finished_at, result, files_imported,
+             rows_imported, last_sequence, error, report)
+        SELECT id,
+               CASE kind WHEN 'update' THEN 'acoustid-delta' ELSE kind END,
+               started_at, finished_at, result, files_imported,
+               rows_imported, last_sequence, error, report
+          FROM update_run
+        """,
+        "DROP TABLE update_run",
+        "ALTER TABLE update_run_new RENAME TO update_run",
+        # Der Index faellt mit der alten Tabelle und wird neu angelegt.
+        "CREATE INDEX update_run_kind_started_idx ON update_run (kind, started_at DESC)",
+    ),
 )
 
 #: Hoechste Schemaversion, die dieser Code kennt.

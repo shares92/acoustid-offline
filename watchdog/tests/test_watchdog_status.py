@@ -94,7 +94,7 @@ def test_status_reflects_the_current_stack_state(
 
 
 def test_status_shows_the_last_update_run(client: TestClient, service: WatchdogService) -> None:
-    run_id = start_run(service.db, RunKind.UPDATE)
+    run_id = start_run(service.db, RunKind.ACOUSTID_DELTA)
     finish_run(
         service.db,
         run_id,
@@ -120,7 +120,7 @@ def test_status_shows_the_last_update_run(client: TestClient, service: WatchdogS
 
 
 def test_status_shows_a_running_import(client: TestClient, service: WatchdogService) -> None:
-    run_id = start_run(service.db, RunKind.UPDATE)
+    run_id = start_run(service.db, RunKind.ACOUSTID_DELTA)
     last = client.get("/status").json()["last_update_run"]
     assert last["id"] == run_id
     assert last["running"] is True
@@ -132,9 +132,9 @@ def test_status_keeps_the_data_state_when_a_later_run_fails(
     client: TestClient, service: WatchdogService
 ) -> None:
     """Ein gescheiterter Lauf aendert den Datenstand nicht (Invariante §8.3/§8.4)."""
-    good = start_run(service.db, RunKind.UPDATE)
+    good = start_run(service.db, RunKind.ACOUSTID_DELTA)
     finish_run(service.db, good, RunResult.SUCCESS, last_sequence="2026-07-22")
-    bad = start_run(service.db, RunKind.UPDATE)
+    bad = start_run(service.db, RunKind.ACOUSTID_DELTA)
     finish_run(service.db, bad, RunResult.FAILED, error="Plattenplatz zu knapp")
 
     payload = client.get("/status").json()
@@ -146,7 +146,7 @@ def test_status_keeps_the_data_state_when_a_later_run_fails(
 def test_backup_runs_do_not_show_up_as_update_run(
     client: TestClient, service: WatchdogService
 ) -> None:
-    update = start_run(service.db, RunKind.UPDATE)
+    update = start_run(service.db, RunKind.ACOUSTID_DELTA)
     finish_run(service.db, update, RunResult.SUCCESS, last_sequence="2026-07-22")
     backup = start_run(service.db, RunKind.BACKUP)
     finish_run(service.db, backup, RunResult.SUCCESS)
@@ -178,7 +178,7 @@ def test_status_opens_no_network_connection(
     aufwachen. Also wird das Anlegen von Sockets fuer die Dauer der
     Anfrage schlicht verboten.
     """
-    run_id = start_run(service.db, RunKind.UPDATE)
+    run_id = start_run(service.db, RunKind.ACOUSTID_DELTA)
     finish_run(service.db, run_id, RunResult.SUCCESS, last_sequence="2026-07-22")
 
     def verboten(*args: object, **kwargs: object) -> None:

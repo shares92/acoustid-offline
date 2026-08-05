@@ -13,9 +13,20 @@ Statusabfrage nicht geweckt werden (Invariante §8.2). Der Waechter
 schreibt den Wert deshalb beim Abschluss jedes Laufs aus dem
 Importer-Report mit; `/status` liest ausschliesslich diese Kopie.
 
-Gefuellt wird die Tabelle ab Phase 19 (Update-Zyklus) und Phase 21
-(Backup). Phase 14 legt das Schema, die Zugriffe und ihre Semantik fest,
-damit `/status` seinen Vertrag schon jetzt vollstaendig bedienen kann.
+Gefuellt wird die Tabelle seit M2.5: der Scheduler
+(:mod:`acoustid_watchdog.scheduler`) legt vor jedem Job einen Lauf an und
+schliesst ihn mit dem Ergebnis des Subprozesses ab
+(:mod:`acoustid_watchdog.jobs`). Phase 14 legte das Schema, die Zugriffe
+und ihre Semantik fest, damit `/status` seinen Vertrag schon damals
+vollstaendig bedienen konnte.
+
+**Die Job-Arten sind mit M2.5 gewachsen** (E10, Schemaschritt 2 in
+:mod:`acoustid_watchdog.store`). Aus ``update`` wurde ``acoustid-delta``:
+solange es genau eine Quelle gab, war „Update" eindeutig — neben
+``discogs-dump``, ``caa-crawl`` und ``nachzuegler`` (M3-M5) waere es keine
+Auskunft mehr. Das Feld ``last_update_run`` in `/status` behaelt trotzdem
+seinen Namen (additive Erweiterung, E16); nur der Wert von ``kind`` darin
+nennt jetzt die Quelle.
 """
 
 from __future__ import annotations
@@ -23,6 +34,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -35,17 +47,43 @@ __all__ = [
     "finish_run",
     "latest_data_sequence",
     "latest_run",
+    "latest_run_since",
     "latest_successful_run",
+    "run_totals",
     "running_runs",
     "start_run",
 ]
 
 
 class RunKind(StrEnum):
-    """Art eines Laufs (Spalte ``kind``)."""
+    """Art eines Laufs (Spalte ``kind``) — die Job-Arten aus E10.
 
-    UPDATE = "update"
+    Vier davon gehoeren noch keiner gebauten Fachlogik: ``discogs-dump``
+    und ``caa-crawl`` kommen mit M3/M5, ``nachzuegler`` mit M5. Sie stehen
+    trotzdem schon hier und im CHECK des Schemas, weil ein spaeterer
+    Schemaschritt die Tabelle erneut neu bauen muesste — und weil die
+    Historie einer Instanz nichts davon merken soll, wann welcher Job
+    dazukam.
+
+    **Schreibweise ohne Umlaut** (``nachzuegler``): der Wert steht im
+    CHECK-Constraint, in Log-Feldern und als Prometheus-Label. Der
+    Anzeigename traegt den Umlaut, sobald ihn eine Oberflaeche zeigt
+    (Admin-UI, M8) — hier gilt dieselbe ASCII-Regel wie im uebrigen
+    Quelltext.
+    """
+
+    #: Taeglicher Delta-Import der AcoustID-Dumps (bis M2.5: ``update``).
+    ACOUSTID_DELTA = "acoustid-delta"
+    #: Monats-Dump von Discogs einspielen (M3).
+    DISCOGS_DUMP = "discogs-dump"
+    #: Voll-Spiegel-Crawl des Cover Art Archive (M5).
+    CAA_CRAWL = "caa-crawl"
+    #: Taeglicher Nachzuegler-Lauf nach dem AcoustID-Import (M5).
+    NACHZUEGLER = "nachzuegler"
+    #: Zeitgesteuerte Sicherung (K9).
     BACKUP = "backup"
+    #: Upstream-Warteschlange abarbeiten (§8.9, ``api/app/upstream.py``).
+    QUEUE_SEND = "queue-send"
 
     @property
     def display_name(self) -> str:
@@ -70,8 +108,12 @@ class RunResult(StrEnum):
 
 
 _KIND_DISPLAY: dict[RunKind, str] = {
-    RunKind.UPDATE: "Update",
+    RunKind.ACOUSTID_DELTA: "AcoustID-Delta",
+    RunKind.DISCOGS_DUMP: "Discogs-Dump",
+    RunKind.CAA_CRAWL: "CAA-Crawl",
+    RunKind.NACHZUEGLER: "Nachzuegler",
     RunKind.BACKUP: "Backup",
+    RunKind.QUEUE_SEND: "Queue-Versand",
 }
 
 _RESULT_DISPLAY: dict[RunResult, str] = {
@@ -100,6 +142,24 @@ class UpdateRun:
     def running(self) -> bool:
         """Laeuft noch — blockiert den Idle-Stopp (Invariante §8.5)."""
         return self.result is None
+
+    @property
+    def duration_s(self) -> float | None:
+        """Dauer in Sekunden; ``None``, solange der Lauf laeuft.
+
+        Gerechnet wird aus den beiden Zeitstempeln der Zeile und nicht aus
+        dem Importer-Report: ein Backup-Lauf hat gar keinen, und der
+        Report zaehlt ohnehin nur die Zeit **im** Subprozess. Gefragt ist
+        hier die Zeit, die der Job den Stack belegt hat.
+        """
+        if self.finished_at is None:
+            return None
+        try:
+            started = datetime.fromisoformat(self.started_at)
+            finished = datetime.fromisoformat(self.finished_at)
+        except ValueError:  # pragma: no cover - nur bei handgeschriebenen Zeilen
+            return None
+        return max((finished - started).total_seconds(), 0.0)
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> UpdateRun:
@@ -243,6 +303,47 @@ def running_runs(db: Database) -> list[UpdateRun]:
     return [UpdateRun.from_row(row) for row in rows]
 
 
+def latest_run_since(db: Database, kind: RunKind, since: str) -> UpdateRun | None:
+    """Der juengste Lauf dieser Art, der **seit** ``since`` begonnen hat.
+
+    Die Faelligkeitsfrage des Schedulers: „lief dieser Job heute schon?"
+    Verglichen wird auf der Zeichenkette, und das ist hier exakt — alle
+    Zeitstempel der Tabelle sind ISO-8601 in UTC mit fester Stellenzahl
+    (:func:`acoustid_watchdog.store.utc_now`), ihre lexikalische Ordnung
+    ist damit die chronologische.
+
+    Args:
+        db: Offene Zustandsdatenbank.
+        since: Untere Grenze als ISO-8601 in UTC (einschliesslich).
+
+    Returns:
+        Den Lauf, oder ``None`` — dann ist der Job faellig.
+    """
+    with db.transaction() as tx:
+        row = tx.execute(
+            f"SELECT {_COLUMNS} FROM update_run WHERE kind = ? AND started_at >= ?"
+            " ORDER BY id DESC LIMIT 1",
+            (kind.value, since),
+        ).fetchone()
+    return UpdateRun.from_row(row) if row else None
+
+
+def run_totals(db: Database) -> dict[tuple[str, str], int]:
+    """Wie viele Laeufe es je Art und Ausgang gab — die Zahlen von `/metrics`.
+
+    Returns:
+        ``(kind, result)`` -> Anzahl; ein laufender Eintrag zaehlt unter
+        dem Ausgang ``"running"``, damit die Summe ueber alle Ausgaenge
+        wirklich alle Zeilen erfasst.
+    """
+    with db.transaction() as tx:
+        rows = tx.execute(
+            "SELECT kind, COALESCE(result, 'running') AS outcome, COUNT(*) AS total"
+            " FROM update_run GROUP BY kind, outcome"
+        ).fetchall()
+    return {(str(row["kind"]), str(row["outcome"])): int(row["total"]) for row in rows}
+
+
 def latest_data_sequence(db: Database) -> UpdateRun | None:
     """Der juengste Lauf, der einen Datenstand hinterlassen hat.
 
@@ -255,6 +356,6 @@ def latest_data_sequence(db: Database) -> UpdateRun | None:
             f"SELECT {_COLUMNS} FROM update_run"
             " WHERE kind = ? AND result = ? AND last_sequence IS NOT NULL"
             " ORDER BY id DESC LIMIT 1",
-            (RunKind.UPDATE.value, RunResult.SUCCESS.value),
+            (RunKind.ACOUSTID_DELTA.value, RunResult.SUCCESS.value),
         ).fetchone()
     return UpdateRun.from_row(row) if row else None

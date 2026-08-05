@@ -144,8 +144,8 @@ def test_database_jobs_sees_running_runs(db: Database) -> None:
     jobs = DatabaseJobs(db)
     assert jobs.running_jobs() == []
 
-    run_id = start_run(db, RunKind.UPDATE)
-    assert jobs.running_jobs() == [f"Update #{run_id}"]
+    run_id = start_run(db, RunKind.ACOUSTID_DELTA)
+    assert jobs.running_jobs() == [f"AcoustID-Delta #{run_id}"]
 
     finish_run(db, run_id, RunResult.SUCCESS)
     assert jobs.running_jobs() == []
@@ -225,7 +225,7 @@ def test_a_running_job_blocks_the_stop(db: Database) -> None:
     coordinator, state = ready_coordinator(supervisor)
     clock = FakeClock()
     activity = ActivityTracker(clock=clock)
-    run_id = start_run(db, RunKind.UPDATE)
+    run_id = start_run(db, RunKind.ACOUSTID_DELTA)
     idle = IdleStopper(coordinator, state, activity, DatabaseJobs(db), Config)
 
     clock.advance(TIMEOUT_S)

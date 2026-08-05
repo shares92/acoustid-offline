@@ -163,3 +163,82 @@ def test_api_key_hash_is_unique(db: Database) -> None:
 
 def test_utc_now_is_iso_utc() -> None:
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z", utc_now())
+
+
+# --- Schemaschritt 2: die Job-Arten aus E10 (M2.5) --------------------------
+
+
+def _v1_database(path: Path) -> None:
+    """Legt eine Zustandsdatenbank auf dem Stand von Schemaschritt 1 an.
+
+    Bewusst mit dem **woertlichen** SQL aus :data:`MIGRATIONS`: so prueft
+    der Test wirklich den Weg von der ausgelieferten Vorversion aus und
+    nicht den einer nachgebauten Naeherung.
+    """
+    connection = sqlite3.connect(path, isolation_level=None)
+    try:
+        for statement in MIGRATIONS[0]:
+            connection.execute(statement)
+        connection.execute("PRAGMA user_version = 1")
+    finally:
+        connection.close()
+
+
+def test_the_old_update_kind_is_carried_over(data_dir: Path) -> None:
+    """Eine Bestandszeile ``update`` wird zu ``acoustid-delta``.
+
+    In der Praxis gibt es keine (gefuellt wird die Tabelle erst mit dem
+    Scheduler) — aber eine handgeschriebene Zeile darf nicht am neuen
+    CHECK haengen bleiben, und ihre ``id`` muss dieselbe bleiben: `/status`
+    verweist darauf.
+    """
+    path = data_dir / DB_FILENAME
+    _v1_database(path)
+    connection = sqlite3.connect(path, isolation_level=None)
+    try:
+        connection.execute(
+            "INSERT INTO update_run (id, kind, started_at, finished_at, result,"
+            " files_imported, rows_imported, last_sequence)"
+            " VALUES (7, 'update', ?, ?, 'success', 3, 120, '2026-07-22')",
+            (utc_now(), utc_now()),
+        )
+        connection.execute(
+            "INSERT INTO update_run (id, kind, started_at) VALUES (8, 'backup', ?)",
+            (utc_now(),),
+        )
+    finally:
+        connection.close()
+
+    with Database(path) as database:
+        assert database.schema_version == SCHEMA_VERSION
+        with database.transaction() as tx:
+            rows = tx.execute(
+                "SELECT id, kind, last_sequence FROM update_run ORDER BY id"
+            ).fetchall()
+    assert [(row["id"], row["kind"]) for row in rows] == [(7, "acoustid-delta"), (8, "backup")]
+    assert rows[0]["last_sequence"] == "2026-07-22"
+
+
+def test_the_index_survives_the_table_rebuild(data_dir: Path) -> None:
+    """``DROP TABLE`` nimmt den Index mit — er muss neu angelegt werden."""
+    path = data_dir / DB_FILENAME
+    _v1_database(path)
+    with Database(path) as database, database.transaction() as tx:
+        names = {
+            str(row["name"])
+            for row in tx.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'update_run'"
+            ).fetchall()
+        }
+    assert "update_run_kind_started_idx" in names
+
+
+def test_the_rebuilt_table_keeps_its_name(db: Database) -> None:
+    """Nach ``ALTER TABLE … RENAME`` darf keine ``update_run_new`` bleiben."""
+    assert _table_names(db) == EXPECTED_TABLES
+
+
+def test_unknown_job_kinds_are_refused(db: Database) -> None:
+    """Der neue CHECK zaehlt genau die Arten aus E10 auf."""
+    with pytest.raises(sqlite3.IntegrityError), db.transaction() as tx:
+        tx.execute("INSERT INTO update_run (kind, started_at) VALUES ('update', ?)", (utc_now(),))
