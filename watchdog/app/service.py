@@ -409,14 +409,20 @@ class WatchdogService:
         **Der** Weg, auf dem der Cache geleert wird — es gibt keinen
         zweiten. Drei Abnehmer teilen ihn sich:
 
-        ==================  ==================================================
-        ``submission``      Der Proxy-Pfad nach einer erfolgreichen lokalen
-                            Submission (:mod:`acoustid_watchdog.main`).
-        ``delta_import``    Der Update-Zyklus nach einem erfolgreichen
-                            Delta-Import (Phase 19).
-        ``manual``          „Cache jetzt leeren" aus `/admin/config`
-                            (Phase 25).
-        ==================  ==================================================
+        ==========================  ==========================================
+        ``submission``              Der Proxy-Pfad nach einer erfolgreichen
+                                    lokalen Submission
+                                    (:mod:`acoustid_watchdog.main`).
+        ``delta_import``            Der Update-Zyklus nach einem
+                                    erfolgreichen Delta-Import.
+        ``deferred_submissions``    Der Nachlauf danach, wenn er
+                                    zurueckgestellte Einreichungen
+                                    indexiert hat (§8.12) — die
+                                    Invalidierung des Imports lief
+                                    **davor** und kennt sie nicht.
+        ``manual``                  „Cache jetzt leeren" aus
+                                    `/admin/config` (M8).
+        ==========================  ==========================================
 
         Geleert wird **unabhaengig von ``cache.enabled``**: sonst haette ein
         zwischenzeitlich abgeschalteter Cache nach dem Wiedereinschalten

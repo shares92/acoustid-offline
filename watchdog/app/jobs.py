@@ -611,7 +611,19 @@ class JobCycle:
             # zweite Fehlermeldung erzeugen.
             _LOG.info("Kein Nachlauf — der Stack ist nicht mehr bereit")
             return
-        result.followups.append(await self._queue_send(reason))
+        followup = await self._queue_send(reason)
+        result.followups.append(followup)
+
+        # **Und danach noch einmal den Cache leeren** (K3): der Nachlauf hat
+        # eben Einreichungen indexiert, die waehrend des Imports
+        # zurueckgestellt waren (§8.12). Die Invalidierung oben lief davor —
+        # eine Antwort, die in dieser Luecke eingelagert wurde, kennt sie
+        # nicht und braeuchte bis zum naechsten Import, um es zu merken.
+        indexed = (
+            int((followup.outcome.report or {}).get("indexed") or 0) if followup.outcome else 0
+        )
+        if indexed:
+            await run_in_threadpool(service.invalidate_cache, "deferred_submissions")
 
     async def _close_open(
         self,

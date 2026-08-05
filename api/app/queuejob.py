@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from acoustid_api.service import ApiService
-from acoustid_api.submit import index_pending
+from acoustid_api.submit import MAX_INDEX_BATCH, index_pending
 from acoustid_api.upstream import (
     MAX_FORWARD_ATTEMPTS,
     ForwardReport,
@@ -66,6 +66,14 @@ REPORT_SCHEMA: Final = "musicmeta-offline/queue-send/1"
 
 #: ``--report -`` schreibt auf stdout.
 STDOUT: Final = "-"
+
+#: Hoechstzahl Runden des Nachlaufs (K4). ``index_pending`` arbeitet je
+#: Aufruf hoechstens :data:`~acoustid_api.submit.MAX_INDEX_BATCH` Eintraege
+#: ab; 500 Runden decken 100.000 zurueckgestellte Einreichungen ab — weit
+#: mehr, als ein Restore je nachzutragen hat. Der Deckel ist nur die
+#: Notbremse gegen eine Schleife, die aus einem unerwarteten Grund nicht
+#: schrumpft.
+MAX_CATCH_UP_ROUNDS: Final = 500
 
 #: Exit-Codes — die drei, die auch der Importer an diesen Stellen benutzt
 #: (docs/importer-job.md): der Waechter liest sie einheitlich.
@@ -105,8 +113,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _gave_up_details(connection: Any) -> dict[str, Any]:
-    """Die Gruppen, die die Grenze aus §8.9 erreicht haben.
+def _gave_up_rows(connection: Any) -> dict[int, tuple[int, str | None]]:
+    """Alle Gruppen, die die Grenze aus §8.9 erreicht haben — als Bestand.
 
     Bewusst hier und nicht in :mod:`acoustid_api.store`: es ist eine reine
     Diagnose-Abfrage fuer den Report und kein Teil des Submit-Vertrags.
@@ -119,14 +127,62 @@ def _gave_up_details(connection: Any) -> dict[str, Any]:
         " GROUP BY local_track_id ORDER BY local_track_id",
         (MAX_FORWARD_ATTEMPTS,),
     ).fetchall()
+    return {int(row[0]): (int(row[1]), row[2]) for row in rows}
+
+
+def _newly_gave_up(
+    before: dict[int, tuple[int, str | None]], after: dict[int, tuple[int, str | None]]
+) -> dict[str, Any]:
+    """Was **dieser Lauf** aufgegeben hat — die Differenz beider Bestaende.
+
+    Der Bestand allein waere die falsche Auskunft (K5): er enthaelt jede
+    jemals aufgegebene Gruppe, und die Benachrichtigung feuerte damit
+    **jede Nacht erneut** mit denselben IDs. Nach ein paar Wochen haette
+    der Betreiber gelernt, sie zu ignorieren — und genau dann kaeme die
+    erste echte durch.
+
+    Gemeldet wird deshalb nur, was vorher nicht dabei war.
+    """
+    new = {track_id: values for track_id, values in after.items() if track_id not in before}
     return {
-        "gave_up_track_ids": [int(row[0]) for row in rows],
-        "forward_attempts": max((int(row[1]) for row in rows), default=0),
+        "gave_up_track_ids": sorted(new),
+        "gave_up_total": len(after),
+        "forward_attempts": max((attempts for attempts, _ in new.values()), default=0),
         # Ein Fehlertext steht stellvertretend fuer alle: sie sind bei einem
         # ausgefallenen Upstream ohnehin derselbe, und der volle Satz stuende
         # in einer Benachrichtigung nur im Weg.
-        "forward_error": next((row[2] for row in rows if row[2]), None),
+        "forward_error": next((error for _, error in new.values() if error), None),
     }
+
+
+def _catch_up(connection: Any, service: ApiService) -> tuple[int, int]:
+    """Traegt **alle** zurueckgestellten Einreichungen nach (K4).
+
+    :func:`~acoustid_api.submit.index_pending` arbeitet hoechstens
+    ``MAX_INDEX_BATCH`` Eintraege je Aufruf — ein einzelner Aufruf liesse
+    den Rest still liegen. Nach einem Restore (docs/backup-restore.md)
+    sind das schnell Tausende: 200 waeren sichtbar, der Rest unauffindbar,
+    und der Lauf meldete trotzdem „ok".
+
+    Der Deckel :data:`MAX_CATCH_UP_ROUNDS` schuetzt gegen eine Endlos-
+    schleife, falls der Arbeitsvorrat aus einem anderen Grund nicht
+    schrumpft (ein dauerhaft unerreichbarer Index liefert 0 und beendet
+    die Schleife ohnehin).
+
+    Returns:
+        ``(nachgetragen, runden)``.
+    """
+    total = 0
+    for round_number in range(1, MAX_CATCH_UP_ROUNDS + 1):
+        handled = index_pending(connection, service)
+        total += handled
+        if handled < MAX_INDEX_BATCH:
+            return total, round_number
+    _LOG.warning(
+        "Nachlauf am Rundendeckel abgebrochen — der Rest kommt beim naechsten Lauf",
+        extra={"indexed": total, "rounds": MAX_CATCH_UP_ROUNDS},
+    )
+    return total, MAX_CATCH_UP_ROUNDS
 
 
 def _document(
@@ -152,11 +208,15 @@ def _document(
         "failed": report.failed if report else 0,
         "gave_up": report.gave_up if report else 0,
         "skipped": report.skipped if report else 0,
+        # Nur, was **dieser** Lauf aufgegeben hat (K5) …
         "gave_up_track_ids": [],
+        # … und wie viele es insgesamt sind (Bestand, fuer die Anzeige).
+        "gave_up_total": 0,
         "forward_attempts": 0,
         "forward_error": None,
         # Nachgetragene Einreichungen (Betreiber-Entscheid 2026-08-05).
         "indexed": 0,
+        "catch_up_rounds": 0,
         "error": None if error is None else {"type": type(error).__name__, "message": str(error)},
     }
     document.update(details or {})
@@ -221,7 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # ist jetzt weg, also werden sie hier nachgetragen — und zwar
             # **unabhaengig vom Submit-Modus**: sie waeren sonst
             # gespeichert, aber im Index unauffindbar.
-            indexed = index_pending(connection, service)
+            indexed, rounds = _catch_up(connection, service)
             if not upstream:
                 # Kein Fehler: der Modus ist eine Betreiber-Entscheidung,
                 # und der Zyklus soll deswegen nicht als gescheitert in der
@@ -238,17 +298,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                         result="disabled",
                         exit_code=EXIT_OK,
                         started_at=started_at,
-                        details={"indexed": indexed},
+                        details={"indexed": indexed, "catch_up_rounds": rounds},
                     ),
                     args.report,
                 )
                 return EXIT_OK
+            # **Vor** dem Lauf erfassen: gemeldet wird nur, was DIESER Lauf
+            # aufgibt — der Bestand allein feuerte jede Nacht dieselben IDs
+            # (K5).
+            gave_up_before = _gave_up_rows(connection)
             report = (
                 retry_forward(connection, service, **limit)
                 if args.retry
                 else drain_queue(connection, service, **limit)
             )
-            details = _gave_up_details(connection) | {"indexed": indexed}
+            details = _newly_gave_up(gave_up_before, _gave_up_rows(connection)) | {
+                "indexed": indexed,
+                "catch_up_rounds": rounds,
+            }
     except Exception as error:
         _LOG.exception("Warteschlangenlauf gescheitert")
         _emit(

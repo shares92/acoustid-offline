@@ -205,6 +205,41 @@ def _copy_config(source: Path, target: Path) -> dict[str, Any]:
     return {"file": target.name, "bytes": target.stat().st_size, "present": True}
 
 
+def _clear_leftovers(target_dir: Path) -> int:
+    """Raeumt **alle** halbfertigen Sicherungen weg, nicht nur die eigene.
+
+    Ein abgebrochener Lauf hinterlaesst ``backup-<stempel>.part``. Da der
+    Stempel die Sekunde traegt, traf ein ``rmtree`` auf den **eigenen**
+    Namen die Reste frueherer Laeufe nie — sie blieben liegen und sammelten
+    sich an. Das ist nicht nur unordentlich: ein solcher Rest enthaelt eine
+    ``config.yaml`` **mit Secrets im Klartext**, und niemand raeumt ihn je
+    weg. Deshalb wird hier breit aufgeraeumt und nicht eng.
+
+    Gefahrlos, weil nie zwei Sicherungen gleichzeitig laufen (der
+    Job-Manager haelt genau einen Job, §8.13). Ein Fehlschlag ist kein
+    Grund, die Sicherung zu verweigern: dann bleibt ein Rest liegen, aber
+    der Lauf selbst geht durch.
+
+    Returns:
+        Zahl der entfernten Reste.
+    """
+    removed = 0
+    for leftover in sorted(target_dir.glob("backup-*.part")):
+        if not leftover.is_dir():
+            continue
+        try:
+            shutil.rmtree(leftover)
+        except OSError as error:
+            _LOG.warning(
+                "Rest einer abgebrochenen Sicherung liess sich nicht entfernen",
+                extra={"path": str(leftover), "error": str(error)},
+            )
+            continue
+        removed += 1
+        _LOG.info("Rest einer abgebrochenen Sicherung entfernt", extra={"path": str(leftover)})
+    return removed
+
+
 # --- Der Lauf ---------------------------------------------------------------
 
 
@@ -237,11 +272,16 @@ def run_backup(
     stamp = started_at.strftime("%Y%m%d-%H%M%S")
     final_dir = target_dir / f"backup-{stamp}"
     work_dir = target_dir / f"backup-{stamp}.part"
-    if work_dir.exists():
-        shutil.rmtree(work_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    leftovers = _clear_leftovers(target_dir)
     work_dir.mkdir(parents=True)
 
     warnings: list[str] = []
+    if leftovers:
+        warnings.append(
+            f"{leftovers} Rest(e) abgebrochener Sicherungen entfernt — sie enthielten "
+            "eine config.yaml mit Zugaengen im Klartext"
+        )
     if include_covers:
         warnings.append(
             "backup.include_covers ist gesetzt, die Cover-Ablage entsteht aber erst mit M4 — "

@@ -608,6 +608,37 @@ def test_given_up_submissions_are_reported(service: WatchdogService) -> None:
     assert gave_up[0].fields["forward_error"] == "HTTP 500"
 
 
+def test_the_cache_is_emptied_again_after_the_catch_up(service: WatchdogService) -> None:
+    """K3: die Invalidierung des Imports lief **vor** dem Nachlauf.
+
+    Eine Antwort, die in dieser Luecke eingelagert wurde, kennt die eben
+    nachgetragenen Einreichungen nicht — und braeuchte bis zum naechsten
+    Import, um es zu merken.
+    """
+    reasons: list[str] = []
+    service.invalidate_cache = lambda reason: reasons.append(reason) or 0  # type: ignore[method-assign]
+    outcome = JobOutcome(returncode=0, report={"result": "ok", "indexed": 3})
+    cycle, _runner = _cycle(service, FakeRunner({"acoustid_api.queuejob": outcome}))
+
+    asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert reasons == ["delta_import", "deferred_submissions"]
+
+
+def test_a_catch_up_without_work_does_not_empty_the_cache_twice(
+    service: WatchdogService,
+) -> None:
+    """Sonst leerte jeder naechtliche Lauf den Cache ein zweites Mal umsonst."""
+    reasons: list[str] = []
+    service.invalidate_cache = lambda reason: reasons.append(reason) or 0  # type: ignore[method-assign]
+    outcome = JobOutcome(returncode=0, report={"result": "disabled", "indexed": 0})
+    cycle, _runner = _cycle(service, FakeRunner({"acoustid_api.queuejob": outcome}))
+
+    asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert reasons == ["delta_import"]
+
+
 def test_a_quiet_queue_run_reports_nothing(service: WatchdogService) -> None:
     notifications: list[Notification] = []
     cycle, _runner = _cycle(service, notifications=notifications)

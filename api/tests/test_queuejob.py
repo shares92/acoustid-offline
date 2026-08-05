@@ -17,7 +17,14 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from acoustid_api.queuejob import EXIT_OK, REPORT_SCHEMA, _gave_up_details, main
+from acoustid_api.queuejob import (
+    EXIT_OK,
+    MAX_CATCH_UP_ROUNDS,
+    REPORT_SCHEMA,
+    _gave_up_rows,
+    _newly_gave_up,
+    main,
+)
 from acoustid_api.upstream import MAX_FORWARD_ATTEMPTS
 
 
@@ -104,7 +111,7 @@ def test_a_broken_environment_is_a_usage_error(
 
 
 @pytest.mark.integration
-def test_given_up_groups_end_up_in_the_report(db: psycopg.Connection) -> None:
+def test_given_up_groups_are_found_in_the_database(db: psycopg.Connection) -> None:
     """Der Waechter sieht das Ereignis aus Phase 12 nur ueber diesen Weg.
 
     Es entsteht im API-Prozess und steht dort im Log; die Benachrichtigung
@@ -121,18 +128,98 @@ def test_given_up_groups_end_up_in_the_report(db: psycopg.Connection) -> None:
         (MAX_FORWARD_ATTEMPTS, "HTTP 500"),
     )
 
-    details = _gave_up_details(db)
+    rows = _gave_up_rows(db)
 
-    assert details["gave_up_track_ids"] == [2147483648]
-    assert details["forward_attempts"] == MAX_FORWARD_ATTEMPTS
-    assert details["forward_error"] == "HTTP 500"
+    assert list(rows) == [2147483648]
+    assert rows[2147483648] == (MAX_FORWARD_ATTEMPTS, "HTTP 500")
 
 
 @pytest.mark.integration
-def test_an_empty_queue_reports_nothing_given_up(db: psycopg.Connection) -> None:
-    details = _gave_up_details(db)
-    assert details == {
-        "gave_up_track_ids": [],
-        "forward_attempts": 0,
-        "forward_error": None,
-    }
+def test_an_empty_queue_has_nothing_given_up(db: psycopg.Connection) -> None:
+    assert _gave_up_rows(db) == {}
+
+
+# --- K5: gemeldet wird nur, was DIESER Lauf aufgibt --------------------------
+
+
+def test_only_the_new_ones_are_reported() -> None:
+    """Der Bestand allein feuerte jede Nacht dieselben IDs.
+
+    Nach ein paar Wochen haette der Betreiber gelernt, die Meldung zu
+    ignorieren — und genau dann kaeme die erste echte durch.
+    """
+    before = {17: (7, "HTTP 500")}
+    after = {17: (7, "HTTP 500"), 18: (7, "HTTP 502"), 19: (7, None)}
+
+    details = _newly_gave_up(before, after)
+
+    assert details["gave_up_track_ids"] == [18, 19]
+    assert details["gave_up_total"] == 3  # der Bestand steht daneben
+    assert details["forward_attempts"] == 7
+    assert details["forward_error"] == "HTTP 502"
+
+
+def test_a_quiet_run_reports_nothing_given_up() -> None:
+    """Derselbe Bestand vorher wie nachher — also keine Meldung."""
+    bestand = {17: (7, "HTTP 500")}
+
+    details = _newly_gave_up(bestand, bestand)
+
+    assert details["gave_up_track_ids"] == []
+    assert details["gave_up_total"] == 1
+    assert details["forward_attempts"] == 0
+    assert details["forward_error"] is None
+
+
+def test_the_very_first_give_up_is_reported() -> None:
+    details = _newly_gave_up({}, {17: (7, "HTTP 500")})
+    assert details["gave_up_track_ids"] == [17]
+
+
+# --- K4: der Nachlauf raeumt vollstaendig auf -------------------------------
+
+
+def test_the_catch_up_loops_until_the_backlog_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ein einzelner Aufruf liess bei >200 Eintraegen den Rest still liegen.
+
+    Nach einem Restore (docs/backup-restore.md) sind das schnell Tausende:
+    200 waeren sichtbar, der Rest unauffindbar — und der Lauf meldete
+    trotzdem „ok".
+    """
+    from acoustid_api import queuejob
+
+    batches = [200, 200, 137]
+    calls: list[int] = []
+
+    def fake_index_pending(connection: object, service: object) -> int:
+        handled = batches[len(calls)]
+        calls.append(handled)
+        return handled
+
+    monkeypatch.setattr(queuejob, "index_pending", fake_index_pending)
+
+    indexed, rounds = queuejob._catch_up(object(), object())  # type: ignore[arg-type]
+
+    assert indexed == 537
+    assert rounds == 3
+
+
+def test_the_catch_up_stops_when_nothing_is_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    from acoustid_api import queuejob
+
+    monkeypatch.setattr(queuejob, "index_pending", lambda *_args: 0)
+
+    assert queuejob._catch_up(object(), object()) == (0, 1)  # type: ignore[arg-type]
+
+
+def test_the_catch_up_has_a_safety_net(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ein Arbeitsvorrat, der nicht schrumpft, darf nicht endlos drehen."""
+    from acoustid_api import queuejob
+    from acoustid_api.submit import MAX_INDEX_BATCH
+
+    monkeypatch.setattr(queuejob, "index_pending", lambda *_args: MAX_INDEX_BATCH)
+
+    indexed, rounds = queuejob._catch_up(object(), object())  # type: ignore[arg-type]
+
+    assert rounds == MAX_CATCH_UP_ROUNDS
+    assert indexed == MAX_CATCH_UP_ROUNDS * MAX_INDEX_BATCH

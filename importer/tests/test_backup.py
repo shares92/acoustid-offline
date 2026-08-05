@@ -19,6 +19,7 @@ from acoustid_importer.backup import (
     EXCLUDED_FILENAMES,
     REPORT_SCHEMA,
     STATE_DB_FILENAME,
+    _clear_leftovers,
     _copy_config,
     _copy_sqlite,
     main,
@@ -75,6 +76,49 @@ def test_the_configuration_keeps_its_restrictive_mode(tmp_path: Path) -> None:
 
 def test_a_missing_configuration_is_not_an_error(tmp_path: Path) -> None:
     assert _copy_config(tmp_path / "weg.yaml", tmp_path / "kopie.yaml")["present"] is False
+
+
+def test_leftovers_of_earlier_runs_are_cleared(tmp_path: Path) -> None:
+    """K6: ein `.part`-Rest traegt eine config.yaml mit Secrets im Klartext.
+
+    Der Stempel traegt die Sekunde — ein ``rmtree`` auf den **eigenen**
+    Namen traf die Reste frueherer Laeufe nie; sie sammelten sich an, und
+    niemand raeumte sie je weg.
+    """
+    for stamp in ("20260801-044500", "20260802-044500"):
+        leftover = tmp_path / f"backup-{stamp}.part"
+        leftover.mkdir()
+        (leftover / "config.yaml").write_text("mb:\n  dsn: geheim\n", encoding="utf-8")
+    fertig = tmp_path / "backup-20260803-044500"
+    fertig.mkdir()
+
+    removed = _clear_leftovers(tmp_path)
+
+    assert removed == 2
+    assert list(tmp_path.glob("backup-*.part")) == []
+    # Fertige Sicherungen bleiben — sie sind der eigentliche Bestand.
+    assert fertig.is_dir()
+
+
+def test_clearing_leftovers_survives_an_unremovable_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ein Rest, der nicht weggeht, darf die Sicherung nicht verhindern."""
+    (tmp_path / "backup-20260801-044500.part").mkdir()
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise OSError("keine Rechte")
+
+    monkeypatch.setattr("acoustid_importer.backup.shutil.rmtree", broken)
+
+    assert _clear_leftovers(tmp_path) == 0
+
+
+def test_clearing_leftovers_ignores_files(tmp_path: Path) -> None:
+    """Eine Datei mit passendem Namen ist kein halbfertiges Verzeichnis."""
+    (tmp_path / "backup-20260801-044500.part").write_text("kein Verzeichnis", encoding="utf-8")
+
+    assert _clear_leftovers(tmp_path) == 0
 
 
 def test_the_lookup_cache_is_named_as_excluded() -> None:
