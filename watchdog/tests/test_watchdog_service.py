@@ -164,5 +164,6 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "poller",
         "job_manager",
         "scheduler",
+        "logrotate",
     }
     assert not {"pool", "index", "mb", "matcher"} & attributes

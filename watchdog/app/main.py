@@ -156,6 +156,9 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
             # Der dritte Dauerlaeufer (M2.5) — der einzige, der die Instanz
             # von selbst aufweckt.
             asyncio.create_task(running.scheduler.run(), name="scheduler"),
+            # Und der vierte: die Logdatei, die `tee` schreibt, haelt sonst
+            # niemand klein (:mod:`acoustid_watchdog.logrotate`).
+            asyncio.create_task(running.logrotate.run(), name="log-rotator"),
         ]
         try:
             yield

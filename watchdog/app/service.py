@@ -93,6 +93,7 @@ from acoustid_watchdog.lifecycle import (
     IdleStopper,
     StatePoller,
 )
+from acoustid_watchdog.logrotate import LogRotator
 from acoustid_watchdog.notify import EVENT_SOURCE as NOTIFY_EVENT_SOURCE
 from acoustid_watchdog.notify import Notifier, version_drift
 from acoustid_watchdog.process import SupervisorClient
@@ -253,6 +254,9 @@ class WatchdogService:
         # fragt im Takt, ob ein Termin faellig ist.
         self.job_manager = JobManager(JobCycle(self))
         self.scheduler = Scheduler(self.db, self.job_manager, lambda: self.config)
+        # Die Logdatei, die `tee` schreibt (supervisord.conf, E16), hat
+        # sonst niemanden, der sie klein haelt.
+        self.logrotate = LogRotator.for_data_dir(settings.data_dir)
 
     @classmethod
     def from_env(cls, env: EnvSettings | None = None) -> Self:
