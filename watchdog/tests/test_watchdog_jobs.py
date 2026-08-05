@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -535,14 +536,50 @@ def test_a_successful_import_is_followed_by_the_queue_run(service: WatchdogServi
     assert queue_run is not None and queue_run.result is RunResult.SUCCESS
 
 
-def test_a_failed_import_skips_the_queue_run(service: WatchdogService) -> None:
+def test_a_failed_import_still_runs_the_catch_up(service: WatchdogService) -> None:
+    """F9: die zurueckgestellten Submits haengen nicht am Ergebnis des Imports.
+
+    Waehrend des Laufs hat der API-Dienst die Indexierung eigener
+    Einreichungen zurueckgestellt (§8.12) — ohne Nachlauf blieben sie bis
+    zum naechsten Submit unsichtbar, und zwar ausgerechnet dann, wenn
+    ohnehin schon etwas schiefging.
+    """
     outcome = JobOutcome(returncode=6, report={"result": "import_failed"})
+    cycle, runner = _cycle(service, FakeRunner({"acoustid_importer": outcome}))
+
+    result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert result.ok is False
+    assert [item.kind for item in result.followups] == [RunKind.QUEUE_SEND]
+    queue_run = latest_run(service.db, RunKind.QUEUE_SEND)
+    assert queue_run is not None
+    modules = [command[command.index("-m") + 1] for command in runner.commands]
+    assert modules == ["acoustid_importer", "acoustid_api.queuejob"]
+
+
+def test_an_aborted_import_skips_the_catch_up(service: WatchdogService) -> None:
+    """Nach einem Abbruch nicht: dort wollte gerade jemand, dass nichts passiert."""
+    outcome = JobOutcome(returncode=8, report={"result": "aborted"})
     cycle, _runner = _cycle(service, FakeRunner({"acoustid_importer": outcome}))
 
     result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
 
     assert result.followups == []
     assert latest_run(service.db, RunKind.QUEUE_SEND) is None
+
+
+def test_a_dead_stack_skips_the_catch_up(service: WatchdogService) -> None:
+    """Ohne Datenbank erzeugte der Nachlauf nur eine zweite Fehlermeldung."""
+
+    class CrashingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            service.wake.invalidate()  # der Stack ist unter uns weggebrochen
+            return JobOutcome(returncode=6, report={"result": "import_failed"})
+
+    cycle, _runner = _cycle(service, CrashingRunner())
+    result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert result.followups == []
 
 
 def test_given_up_submissions_are_reported(service: WatchdogService) -> None:
@@ -662,12 +699,14 @@ def test_waiting_without_a_job_returns_nothing(service: WatchdogService) -> None
     assert asyncio.run(JobManager(cycle).wait()) is None
 
 
-def test_abandon_lets_the_subprocess_keep_its_signal(service: WatchdogService) -> None:
+def test_shutdown_waits_without_sending_a_second_signal(service: WatchdogService) -> None:
     """Beim Herunterfahren schickt der Waechter **kein** zweites SIGTERM.
 
     Das erste kommt von supervisord an die ganze Prozessgruppe
     (`stopasgroup=true`); ein zweites bedeutete im Importer „sofort
     beenden" — statt Exit-Code 8 gaebe es eine zurueckgerollte Transaktion.
+    Gewartet wird trotzdem: endete der Waechter zuerst, waere der Job ein
+    Waise unter `tini` (K2).
     """
     release = asyncio.Event()
 
@@ -683,12 +722,44 @@ def test_abandon_lets_the_subprocess_keep_its_signal(service: WatchdogService) -
     async def scenario() -> bool:
         manager.trigger(RunKind.ACOUSTID_DELTA)
         await asyncio.sleep(0)
-        abandoned = manager.abandon()
+        # Der Job laeuft noch — das Herunterfahren wartet auf ihn.
+        waiter = asyncio.create_task(manager.shutdown(timeout_s=5))
         await asyncio.sleep(0)
-        return abandoned
+        assert waiter.done() is False
+        release.set()
+        return await waiter
 
     assert asyncio.run(scenario()) is True
     assert slow.cancelled is False  # kein Signal an den Prozess
+    assert running_runs(service.db) == []  # und der Lauf ist sauber zu
+
+
+def test_shutdown_lets_go_after_its_deadline(service: WatchdogService) -> None:
+    """Nach der Frist wird losgelassen — den Rest erledigt `stop_grace_period`."""
+    release = asyncio.Event()
+
+    class EndlessRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            await release.wait()
+            return await super().run(command, report=report)
+
+    cycle, _runner = _cycle(service, EndlessRunner())
+    manager = JobManager(cycle)
+
+    async def scenario() -> bool:
+        manager.trigger(RunKind.ACOUSTID_DELTA)
+        await asyncio.sleep(0)
+        stopped = await manager.shutdown(timeout_s=0.05)
+        release.set()
+        await asyncio.sleep(0)
+        return stopped
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_shutdown_without_a_job_says_so(service: WatchdogService) -> None:
+    cycle, _runner = _cycle(service)
+    assert asyncio.run(JobManager(cycle).shutdown()) is False
 
 
 def test_cancel_stops_the_subprocess_first(service: WatchdogService) -> None:
@@ -720,5 +791,82 @@ def test_cancelling_nothing_says_so(service: WatchdogService) -> None:
     cycle, _runner = _cycle(service)
     manager = JobManager(cycle)
     assert asyncio.run(manager.cancel()) is False
-    assert manager.abandon() is False
     assert manager.current_kind is None
+
+
+def test_a_cancelled_cycle_closes_its_run(service: WatchdogService) -> None:
+    """K1: auch ein `CancelledError` laesst keine offene Zeile zurueck.
+
+    Eine offene Zeile heisst „laeuft noch" — daran haengt die Job-Sperre
+    des Idle-Stopps (§8.5), und die Instanz laege danach dauerhaft wach.
+    """
+    started = asyncio.Event()
+
+    class BlockingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            started.set()
+            await asyncio.Event().wait()  # kommt nie zurueck
+            raise AssertionError("unerreichbar")
+
+    cycle, _runner = _cycle(service, BlockingRunner())
+    manager = JobManager(cycle)
+
+    async def scenario() -> None:
+        manager.trigger(RunKind.ACOUSTID_DELTA)
+        await started.wait()
+        await manager.cancel()
+        with suppress(asyncio.CancelledError):
+            await manager.wait()
+        # Der Aufgabe Zeit geben, ihren `except`-Zweig zu Ende zu bringen.
+        for _ in range(200):
+            if not running_runs(service.db):
+                return
+            await asyncio.sleep(0.01)
+
+    asyncio.run(scenario())
+
+    assert running_runs(service.db) == []
+    run = latest_run(service.db, RunKind.ACOUSTID_DELTA)
+    assert run is not None and run.result is RunResult.ABORTED
+    assert "abgebrochen" in (run.error or "")
+
+
+def test_an_exploding_cycle_closes_its_run(service: WatchdogService) -> None:
+    """Dasselbe fuer jede andere Ausnahme — der Lauf wird `failed`."""
+
+    class ExplodingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            raise RuntimeError("Runner kaputt")
+
+    cycle, _runner = _cycle(service, ExplodingRunner())
+
+    with pytest.raises(RuntimeError, match="Runner kaputt"):
+        asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert running_runs(service.db) == []
+    run = latest_run(service.db, RunKind.ACOUSTID_DELTA)
+    assert run is not None and run.result is RunResult.FAILED
+    assert "RuntimeError" in (run.error or "")
+
+
+def test_an_unusable_report_directory_does_not_leak_an_open_run(
+    service: WatchdogService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """K1: die ungeschuetzten Dateizugriffe im Runner flogen am `start_run` vorbei."""
+
+    _configure(service, disk=DiskConfig(min_free_gb=0))
+    runner = JobRunner(cwd=service.settings.data_dir)
+    cycle = JobCycle(service, runner=runner)
+
+    def broken(*args: object, **kwargs: object) -> None:
+        raise OSError("kein Platz mehr")
+
+    # Erst jetzt patchen: `save_config` legt selbst Verzeichnisse an.
+    monkeypatch.setattr(Path, "mkdir", broken)
+
+    result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert result.ok is False
+    assert running_runs(service.db) == []
+    run = latest_run(service.db, RunKind.ACOUSTID_DELTA)
+    assert run is not None and "kein Platz mehr" in (run.error or "")

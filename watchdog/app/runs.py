@@ -44,11 +44,13 @@ __all__ = [
     "RunKind",
     "RunResult",
     "UpdateRun",
+    "abandon_stale_runs",
     "finish_run",
     "latest_data_sequence",
     "latest_run",
     "latest_run_since",
     "latest_successful_run",
+    "open_run",
     "run_totals",
     "running_runs",
     "start_run",
@@ -326,6 +328,63 @@ def latest_run_since(db: Database, kind: RunKind, since: str) -> UpdateRun | Non
             (kind.value, since),
         ).fetchone()
     return UpdateRun.from_row(row) if row else None
+
+
+def open_run(db: Database, run_id: int) -> UpdateRun | None:
+    """Dieser Lauf, **falls** er noch offen ist (``result IS NULL``).
+
+    Die Frage des Sicherheitsnetzes im Zyklus: „hat den hier schon jemand
+    abgeschlossen?" Ein zweites ``finish_run`` waere kein Fehler, aber es
+    ueberschriebe das echte Ergebnis mit dem des Abbruchs.
+    """
+    with db.transaction() as tx:
+        row = tx.execute(
+            f"SELECT {_COLUMNS} FROM update_run WHERE id = ? AND result IS NULL", (run_id,)
+        ).fetchone()
+    return UpdateRun.from_row(row) if row else None
+
+
+def abandon_stale_runs(db: Database, *, before: str, error: str) -> list[UpdateRun]:
+    """Schliesst offene Laeufe aus einem **frueheren** Prozessleben ab.
+
+    Ein Lauf ohne Ergebnis heisst „laeuft noch" (:func:`running_runs`) — und
+    genau daran haengt die Job-Sperre des Idle-Stopps (§8.5) und der
+    Phantom-Lauf in `/status`. Stirbt der Waechter hart (OOM, ``SIGKILL``,
+    Stromausfall), bleibt die Zeile fuer immer offen: der Prozess, der sie
+    schliessen wollte, gibt es nicht mehr. Die Instanz laege dann dauerhaft
+    wach, ohne dass irgendetwas liefe.
+
+    **Die Zeitgrenze ist der eigene Prozessstart.** Alles davor kann nur aus
+    einem frueheren Leben stammen — dieser Prozess hat noch keine Zeile
+    geschrieben, wenn die Rekonziliation laeuft. Damit ist der Aufruf
+    fail-safe: er kann keinen laufenden **eigenen** Job abschliessen.
+
+    Args:
+        db: Offene Zustandsdatenbank.
+        before: Zeitgrenze als ISO-8601 in UTC (ausschliesslich).
+        error: Fehlertext fuer die abgeschlossenen Zeilen.
+
+    Returns:
+        Die abgeschlossenen Laeufe — leere Liste ist der Normalfall.
+    """
+    with db.transaction() as tx:
+        rows = tx.execute(
+            f"SELECT {_COLUMNS} FROM update_run WHERE result IS NULL AND started_at < ?"
+            " ORDER BY id",
+            (before,),
+        ).fetchall()
+        if not rows:
+            return []
+        tx.execute(
+            "UPDATE update_run SET finished_at = ?, result = ?, error = ?"
+            " WHERE result IS NULL AND started_at < ?",
+            (utc_now(), RunResult.ABORTED.value, error, before),
+        )
+        closed = tx.execute(
+            f"SELECT {_COLUMNS} FROM update_run WHERE id IN ({','.join('?' * len(rows))})",
+            [row["id"] for row in rows],
+        ).fetchall()
+    return [UpdateRun.from_row(row) for row in closed]
 
 
 def run_totals(db: Database) -> dict[tuple[str, str], int]:

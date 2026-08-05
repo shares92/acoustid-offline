@@ -8,9 +8,12 @@ from pathlib import Path
 import pytest
 
 from acoustid_watchdog.admin import load_admin_user
+from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.events import EventLevel, recent_events
+from acoustid_watchdog.jobs import INDEX_BUSY_FILENAME
+from acoustid_watchdog.runs import RunKind, RunResult, latest_run, running_runs, start_run
 from acoustid_watchdog.service import WatchdogService
-from acoustid_watchdog.store import DB_FILENAME, SCHEMA_VERSION
+from acoustid_watchdog.store import DB_FILENAME, SCHEMA_VERSION, Database, utc_now
 from shared.env import EnvSettings
 from shared.models import StackState
 
@@ -167,3 +170,82 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "logrotate",
     }
     assert not {"pool", "index", "mb", "matcher"} & attributes
+
+
+# --- Rekonziliation nach einem harten Ende (K1, F7) -------------------------
+
+
+def test_an_open_run_from_a_former_life_is_closed_on_start(
+    env_settings: EnvSettings, service: WatchdogService
+) -> None:
+    """Stirbt der Waechter hart, bleibt die Zeile sonst fuer immer offen.
+
+    „Laeuft noch" ist die Job-Sperre des Idle-Stopps (§8.5) — die Instanz
+    laege danach dauerhaft wach und zeigte in `/status` einen Import an,
+    den es nicht gibt.
+    """
+    # Ein Lauf aus der Vergangenheit, wie ihn ein abgestuerzter Prozess
+    # hinterlaesst.
+    start_run(service.db, RunKind.ACOUSTID_DELTA, started_at="2020-01-01T00:00:00.000Z")
+    service.db.close()
+
+    with WatchdogService(
+        env_settings,
+        Database.for_data_dir(env_settings.data_dir),
+        ConfigStore.from_path(env_settings.config_path),
+        stack=service.stack,
+        probe=service.probe,
+    ) as restarted:
+        assert running_runs(restarted.db) == []
+        run = latest_run(restarted.db, RunKind.ACOUSTID_DELTA)
+        assert run is not None
+        assert run.result is RunResult.ABORTED
+        assert "Waechter wurde beendet" in (run.error or "")
+        assert restarted.jobs.running_jobs() == []
+
+
+def test_a_fresh_instance_reconciles_nothing(service: WatchdogService) -> None:
+    """Der Normalfall meldet sich nicht — sonst waere die Warnung wertlos."""
+    assert running_runs(service.db) == []
+
+
+def test_an_expired_index_marker_is_removed_on_start(
+    env_settings: EnvSettings, service: WatchdogService
+) -> None:
+    """F7: eine verwaiste Marke haelt eigene Einreichungen sonst dauerhaft zurueck."""
+    marker = env_settings.data_dir / INDEX_BUSY_FILENAME
+    marker.write_text("2020-01-01T00:00:00.000Z", encoding="utf-8")
+    start_run(service.db, RunKind.ACOUSTID_DELTA, started_at="2020-01-01T00:00:00.000Z")
+    service.db.close()
+
+    with WatchdogService(
+        env_settings,
+        Database.for_data_dir(env_settings.data_dir),
+        ConfigStore.from_path(env_settings.config_path),
+        stack=service.stack,
+        probe=service.probe,
+    ):
+        assert marker.exists() is False
+
+
+def test_a_fresh_index_marker_survives_the_restart(
+    env_settings: EnvSettings, service: WatchdogService
+) -> None:
+    """Sie kann zu einem Importer gehoeren, der den Waechter ueberlebt hat.
+
+    Blind zu loeschen oeffnete genau das Kollisionsfenster, das die Marke
+    schliessen soll — der Waise schreibt weiter in den Index (§8.12).
+    """
+    marker = env_settings.data_dir / INDEX_BUSY_FILENAME
+    marker.write_text(utc_now(), encoding="utf-8")
+    start_run(service.db, RunKind.ACOUSTID_DELTA, started_at="2020-01-01T00:00:00.000Z")
+    service.db.close()
+
+    with WatchdogService(
+        env_settings,
+        Database.for_data_dir(env_settings.data_dir),
+        ConfigStore.from_path(env_settings.config_path),
+        stack=service.stack,
+        probe=service.probe,
+    ):
+        assert marker.exists() is True

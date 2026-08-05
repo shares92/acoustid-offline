@@ -239,6 +239,68 @@ def test_the_published_port_falls_back_to_the_old_variable() -> None:
         assert "${MMO_PORT:-${AOFF_PORT:-8080}}" in entry
 
 
+# --- Die Fristen-Kette beim Herunterfahren (K2, M2.5) ----------------------
+#
+# Der Waechter startet Jobs als Subprozesse (E10) und laeuft unter
+# `stopasgroup=true`/`killasgroup=true`: sein Stopp-Signal erreicht die ganze
+# Gruppe, und nach `stopwaitsecs` folgt ein SIGKILL hinterher. Damit haengen
+# drei Fristen aneinander, und jede muss unter der naechstgroesseren liegen —
+# sonst ist sie wirkungslos. In der ersten M2.5-Fassung stand im Waechter
+# eine 900-Sekunden-Frist hinter einem `stopwaitsecs=30`: der Importer wurde
+# 30 s nach SIGTERM erschlagen, obwohl er erst nach der laufenden Tagesdatei
+# aufhoert (geordneter Exit-Code 8 statt zurueckgerollter Transaktion).
+
+_SUPERVISOR_CONF = (REPO_ROOT / "supervisor/supervisord.conf").read_text(encoding="utf-8")
+
+#: `stop_grace_period` als Sekunden (Compose schreibt `6m`).
+_GRACE_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def _stop_grace_period_s() -> float:
+    raw = str(APP_SERVICE["stop_grace_period"]).strip()
+    match = re.fullmatch(r"(\d+)([smh]?)", raw)
+    assert match, raw
+    return int(match[1]) * _GRACE_UNITS.get(match[2] or "s", 1)
+
+
+def _stopwaitsecs(program: str) -> int:
+    """`stopwaitsecs` eines `[program:*]`-Abschnitts."""
+    section = re.search(
+        rf"^\[program:{program}\]$(.*?)(?=^\[|\Z)", _SUPERVISOR_CONF, re.MULTILINE | re.DOTALL
+    )
+    assert section, program
+    value = re.search(r"^stopwaitsecs=(\d+)$", section[1], re.MULTILINE)
+    assert value, f"{program} hat kein stopwaitsecs"
+    return int(value[1])
+
+
+def test_the_shutdown_deadlines_form_a_chain() -> None:
+    """Jede Frist liegt unter der naechstgroesseren — sonst wirkt sie nicht."""
+    from acoustid_watchdog.jobs import SHUTDOWN_WAIT_S, SIGTERM_GRACE_S
+
+    grace = _stop_grace_period_s()
+    watchdog = _stopwaitsecs("watchdog")
+
+    assert watchdog >= SHUTDOWN_WAIT_S, "der Lifespan wartet laenger, als supervisord zusieht"
+    assert watchdog >= SIGTERM_GRACE_S, "der Abbruch-Knopf wartet laenger als supervisord"
+    assert watchdog <= grace, "supervisord wartet laenger, als Docker den Container leben laesst"
+
+
+def test_the_database_gets_its_checkpoint_within_the_grace_period() -> None:
+    """Postgres darf seinen Checkpoint schreiben — auch das muss unter den 6 min bleiben."""
+    assert _stopwaitsecs("db") <= _stop_grace_period_s()
+
+
+def test_the_watchdog_stops_its_whole_process_group() -> None:
+    """Ohne `stopasgroup` erreichte das Signal die Jobs nie (die Pipeline hat eine `sh`)."""
+    section = re.search(
+        r"^\[program:watchdog\]$(.*?)(?=^\[|\Z)", _SUPERVISOR_CONF, re.MULTILINE | re.DOTALL
+    )
+    assert section
+    assert "stopasgroup=true" in section[1]
+    assert "killasgroup=true" in section[1]
+
+
 _PORT_EXPR = re.compile(r"port\s*=\s*(os\.environ[^;]+)")
 
 

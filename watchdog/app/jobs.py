@@ -50,6 +50,7 @@ import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -63,6 +64,7 @@ from acoustid_watchdog.runs import (
     RunResult,
     UpdateRun,
     finish_run,
+    open_run,
     start_run,
 )
 from acoustid_watchdog.store import utc_now
@@ -74,14 +76,17 @@ if TYPE_CHECKING:  # nur fuer die Typannotation — sonst waere es ein Importzyk
 __all__ = [
     "EVENT_SOURCE",
     "INDEX_BUSY_FILENAME",
+    "INDEX_BUSY_MAX_AGE_S",
     "JOB_WAKE_TIMEOUT_S",
     "REPORT_DIRNAME",
+    "SHUTDOWN_WAIT_S",
     "SIGTERM_GRACE_S",
     "CycleResult",
     "JobCycle",
     "JobManager",
     "JobOutcome",
     "JobRunner",
+    "index_marker_expired",
     "job_command",
 ]
 
@@ -99,12 +104,39 @@ EVENT_SOURCE: Final = "scheduler"
 #: keinen Grund, daran zu drehen (Muster aus DECISIONS 2026-08-01, Punkt 2).
 JOB_WAKE_TIMEOUT_S: Final = 600.0
 
-#: Frist zwischen ``SIGTERM`` und ``SIGKILL`` beim Abbruch. In Minuten und
-#: nicht in Sekunden: der Importer beendet sich erst nach der laufenden
-#: Tagesdatei, und eine Fingerprint-Datei kann mehrere GB gross sein
-#: (docs/importer-job.md „Signale"). Wer hier knausert, tauscht den
-#: geordneten Exit-Code 8 gegen eine zurueckgerollte Transaktion.
-SIGTERM_GRACE_S: Final = 900.0
+#: Frist zwischen ``SIGTERM`` und ``SIGKILL`` beim **manuellen** Abbruch
+#: (Knopf „Abbrechen", M8). In Minuten und nicht in Sekunden: der Importer
+#: beendet sich erst nach der laufenden Tagesdatei, und eine
+#: Fingerprint-Datei kann mehrere GB gross sein (docs/importer-job.md
+#: „Signale"). Wer hier knausert, tauscht den geordneten Exit-Code 8 gegen
+#: eine zurueckgerollte Transaktion.
+#:
+#: **Die Zahl gehoert in eine Kette** (DECISIONS 2026-08-05, K2). Jede
+#: Frist muss unter der naechstgroesseren liegen, sonst ist sie wirkungslos:
+#:
+#: ==========================================  =======  ======================
+#: ``stop_grace_period`` (docker-compose.yml)   360 s   Deckel ueber allem
+#: ``stopwaitsecs`` (``[program:watchdog]``)    300 s   danach SIGKILL an die
+#:                                                      ganze Prozessgruppe
+#: :data:`SIGTERM_GRACE_S` / :data:`SHUTDOWN_WAIT_S`  240 s   unsere beiden Wege
+#: ==========================================  =======  ======================
+#:
+#: Ein Test haelt die Kette fest (``tests/test_repo_layout.py``); ohne ihn
+#: hoben sich die Werte gegenseitig lautlos auf.
+SIGTERM_GRACE_S: Final = 240.0
+
+#: Wie lange der Lifespan beim Herunterfahren auf einen laufenden Job
+#: wartet — **ohne** ihm selbst ein Signal zu schicken.
+#:
+#: Das Signal kommt von supervisord an die ganze Prozessgruppe
+#: (``stopasgroup=true``); ein zweites bedeutete im Importer „sofort
+#: beenden" (``acoustid_importer.__main__``). Warten muss der Waechter
+#: trotzdem: endet **er** zuerst, wird der Job zum Waisen unter ``tini``
+#: — supervisord sieht seinen Hauptprozess weg, raeumt die Gruppe nicht
+#: mehr auf, und erst Docker killt nach ``stop_grace_period`` alles. Genau
+#: dieser Waise haelt dann eine Busy-Marke und eine offene ``update_run``-
+#: Zeile (F7/K1).
+SHUTDOWN_WAIT_S: Final = 240.0
 
 #: Unterverzeichnis im Datenverzeichnis, in dem die Reports der Jobs
 #: liegen. Je Art eine Datei, beim naechsten Lauf ueberschrieben — der
@@ -124,6 +156,59 @@ REPORT_DIRNAME: Final = "jobs"
 #: ein Test haelt beide aneinander. Bewusst kein Import: der Waechter
 #: haengt nicht vom API-Paket ab (er brauchte sonst psycopg).
 INDEX_BUSY_FILENAME: Final = "index-feed.busy"
+
+#: Hoechstalter der Busy-Marke — danach gilt sie als **verwaist** (F7).
+#:
+#: Sie traegt ihren Setzzeitpunkt als Inhalt, und genau das rettet den Fall,
+#: den ein ``finally`` nicht abdecken kann: stirbt der Waechter mit
+#: ``SIGKILL``, laeuft kein ``finally``, und die Marke bliebe fuer immer
+#: liegen — eigene Einreichungen waeren dauerhaft gespeichert, aber im
+#: Index unauffindbar (und die Upstream-Quese staende mit still).
+#:
+#: **24 Stunden und nicht weniger:** ein Bootstrap-Feed laeuft Stunden bis
+#: Tage (414 GB gz, §5.1). Ein knapperer Wert erklaerte einen ehrlich
+#: laufenden Import fuer tot und oeffnete genau das Kollisionsfenster, das
+#: die Marke schliessen soll. Ein taeglicher Delta-Lauf ist nach Minuten
+#: fertig; wer laenger braucht, hat ohnehin ein Problem, das eine
+#: Benachrichtigung wert ist.
+INDEX_BUSY_MAX_AGE_S: Final = 24 * 3600.0
+
+
+def index_marker_expired(marker: Path, *, max_age_s: float = INDEX_BUSY_MAX_AGE_S) -> bool:
+    """Ist die Busy-Marke aelter als ihr Hoechstalter?
+
+    Gelesen wird der **Inhalt** (der Setzzeitpunkt), nicht die mtime: die
+    Datei liegt auf einem gemounteten Dateisystem, und eine Kopie oder ein
+    ``touch`` waere dort keine Aussage ueber den Lauf. Ist der Inhalt
+    unlesbar oder unverstaendlich, faellt die Antwort auf die mtime
+    zurueck — und im Zweifel auf „nicht abgelaufen": eine faelschlich als
+    tot erklaerte Marke ist der teurere Fehler.
+
+    Returns:
+        ``False``, wenn es die Marke gar nicht gibt.
+    """
+    try:
+        raw = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    age_s = _marker_age_s(raw, marker)
+    if age_s is None:
+        return False
+    return age_s > max_age_s
+
+
+def _marker_age_s(raw: str, marker: Path) -> float | None:
+    """Alter der Marke in Sekunden — ``None``, wenn nicht bestimmbar."""
+    try:
+        written = datetime.fromisoformat(raw)
+    except ValueError:
+        try:
+            written = datetime.fromtimestamp(marker.stat().st_mtime, tz=UTC)
+        except OSError:  # pragma: no cover - die Datei war eben noch da
+            return None
+    if written.tzinfo is None:  # pragma: no cover - `utc_now` schreibt immer eine Zone
+        written = written.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - written).total_seconds()
 
 
 @dataclass(frozen=True, slots=True)
@@ -263,8 +348,15 @@ class JobRunner:
                 vorher entfernt, damit ein alter Report nicht als der
                 dieses Laufs gelesen wird.
         """
-        report.parent.mkdir(parents=True, exist_ok=True)
-        report.unlink(missing_ok=True)
+        try:
+            # Beides kann scheitern (schreibgeschuetztes oder volles
+            # `/config`) — ungeschuetzt flog die Ausnahme am Aufrufer vorbei,
+            # und der eben angelegte Lauf blieb fuer immer offen.
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.unlink(missing_ok=True)
+        except OSError as error:
+            _LOG.exception("Report-Verzeichnis nicht nutzbar", extra={"report_path": str(report)})
+            return JobOutcome(returncode=-1, start_error=f"{type(error).__name__}: {error}")
 
         _LOG.info("Job wird gestartet", extra={"job_command": list(command), "cwd": str(self.cwd)})
         try:
@@ -372,7 +464,17 @@ class JobCycle:
         return self._service.settings.data_dir / REPORT_DIRNAME
 
     async def run(self, kind: RunKind, *, reason: str = "scheduler") -> CycleResult:
-        """Faehrt einen ganzen Zyklus und liefert sein Ergebnis."""
+        """Faehrt einen ganzen Zyklus und liefert sein Ergebnis.
+
+        **Jedes ``start_run`` bekommt garantiert sein ``finish_run``** — der
+        Rumpf steht in einem ``try``, dessen ``finally`` einen noch offenen
+        Lauf abschliesst. Eine offene Zeile heisst „laeuft noch"
+        (:func:`~acoustid_watchdog.runs.running_runs`), und daran haengt die
+        Job-Sperre des Idle-Stopps (§8.5): bliebe sie stehen, laege die
+        Instanz dauerhaft wach, und `/status` zeigte einen Lauf, den es
+        nicht gibt. Auch ein ``CancelledError`` (Abbruch-Knopf,
+        Herunterfahren) kommt hier durch.
+        """
         service = self._service
         result = CycleResult(kind=kind)
         config = service.config
@@ -383,15 +485,57 @@ class JobCycle:
             {"run_id": run_id, "reason": reason},
             source=EVENT_SOURCE,
         )
+        try:
+            await self._run_guarded(kind, reason, run_id, config, result)
+        except asyncio.CancelledError:
+            await self._close_open(
+                run_id,
+                kind,
+                RunResult.ABORTED,
+                "Lauf abgebrochen (Waechter beendet den Vorgang)",
+                result,
+            )
+            raise
+        except BaseException as error:
+            await self._close_open(
+                run_id, kind, RunResult.FAILED, f"{type(error).__name__}: {error}", result
+            )
+            raise
+        else:
+            # Der Regelfall hat den Lauf laengst abgeschlossen; das hier ist
+            # das Netz fuer jeden Pfad, der es kuenftig vergisst.
+            await self._close_open(
+                run_id, kind, RunResult.FAILED, "Lauf ohne Ergebnis beendet", result
+            )
+        return result
+
+    async def _run_guarded(
+        self,
+        kind: RunKind,
+        reason: str,
+        run_id: int,
+        config: Any,
+        result: CycleResult,
+    ) -> None:
+        """Der Rumpf des Zyklus — Schritte 2-6 des Modul-Docstrings."""
+        service = self._service
 
         # --- Plattenplatz (E11) --------------------------------------------
         too_full = await run_in_threadpool(self._check_disk, config)
         if too_full:
             result.run = await self._abort_for_disk(run_id, kind, too_full)
-            return result
+            return
 
         # --- Wecken ---------------------------------------------------------
-        was_sleeping = not service.wake.ready
+        # **Vor** dem Weckvorgang gemessen: eine Anfrage, die waehrend des
+        # Weckens eintrifft, gehoert zum Nutzungsfenster — sie war sonst
+        # unsichtbar (der Zaehler wurde erst danach gelesen).
+        requests_before = service.activity.requests
+        # Der Zaehler der **begonnenen** Weckvorgaenge ist die verlaessliche
+        # Auskunft „haben wir ihn geweckt?": `wake.ready` waere es nicht —
+        # ein Betreiberstart oder eine verworfene Bereitschaft
+        # (`invalidate()`) verfaelschen es in beide Richtungen.
+        wakes_before = service.wake.wakes
         try:
             await service.wake.ensure_ready(timeout_s=self.wake_timeout_s)
         except StackNotReadyError as error:
@@ -403,20 +547,16 @@ class JobCycle:
                     kind.display_name, result="stack_not_ready", error=str(error), run_id=run_id
                 )
             )
-            return result
-        result.woke_stack = was_sleeping
-        requests_before = service.activity.requests
+            return
+        result.woke_stack = service.wake.wakes > wakes_before
 
         # --- Der Job selbst -------------------------------------------------
         outcome = await self._execute(kind, config)
         result.outcome = outcome
         result.run = await self._finish_from_outcome(run_id, kind, outcome)
 
-        if outcome.ok and kind is RunKind.ACOUSTID_DELTA:
-            # Invariante §8.6: nach jedem erfolgreichen Delta-Import ist der
-            # Lookup-Cache veraltet.
-            await run_in_threadpool(service.invalidate_cache, "delta_import")
-            result.followups.append(await self._queue_send(reason))
+        if kind is RunKind.ACOUSTID_DELTA:
+            await self._after_delta(reason, run_id, kind, outcome, result)
         elif not outcome.ok:
             service.notify.send_background(
                 import_failed(
@@ -429,7 +569,76 @@ class JobCycle:
 
         # --- Schlafen legen -------------------------------------------------
         result.slept = await self._sleep_again(result.woke_stack, requests_before)
-        return result
+
+    async def _after_delta(
+        self,
+        reason: str,
+        run_id: int,
+        kind: RunKind,
+        outcome: JobOutcome,
+        result: CycleResult,
+    ) -> None:
+        """Was nach dem Delta-Import folgt: Cache, Nachlauf, Meldung.
+
+        **Der Nachlauf laeuft auch nach einem gescheiterten Import** (F9):
+        die waehrend des Laufs zurueckgestellten Einreichungen
+        (§8.12) haengen nicht am Ergebnis des Imports, und ohne den
+        Nachlauf blieben sie bis zum naechsten Submit unsichtbar. Nicht
+        nachgelaufen wird nach einem **Abbruch** — dort ist der Stack
+        entweder gar nicht wach (Plattenplatz-Guard) oder der Betreiber
+        wollte gerade, dass nichts mehr passiert.
+        """
+        service = self._service
+        if outcome.ok:
+            # Invariante §8.6: nach jedem erfolgreichen Delta-Import ist der
+            # Lookup-Cache veraltet.
+            await run_in_threadpool(service.invalidate_cache, "delta_import")
+        else:
+            service.notify.send_background(
+                import_failed(
+                    kind.display_name,
+                    result=outcome.report_result or outcome.result.value,
+                    error=outcome.error_message,
+                    run_id=run_id,
+                )
+            )
+        if outcome.result is RunResult.ABORTED:
+            _LOG.info("Kein Nachlauf nach einem abgebrochenen Delta-Lauf")
+            return
+        if not service.wake.ready:
+            # Nach einem Absturz des Stacks braucht der Nachlauf eine
+            # Datenbank, die es gerade nicht gibt — er wuerde nur eine
+            # zweite Fehlermeldung erzeugen.
+            _LOG.info("Kein Nachlauf — der Stack ist nicht mehr bereit")
+            return
+        result.followups.append(await self._queue_send(reason))
+
+    async def _close_open(
+        self,
+        run_id: int,
+        kind: RunKind,
+        outcome: RunResult,
+        error: str,
+        result: CycleResult,
+    ) -> None:
+        """Schliesst den Lauf ab, **falls** er noch offen ist.
+
+        Der Regelweg hat ihn laengst abgeschlossen — dann passiert hier
+        nichts, und das schon eingetragene Ergebnis bleibt stehen. Dieser
+        Aufruf ist das Netz fuer Ausnahmen und Abbrueche; er darf selbst
+        nichts werfen, denn eine Ausnahme hier verdeckte die eigentliche.
+        """
+        try:
+            still_open = await run_in_threadpool(open_run, self._service.db, run_id)
+            if still_open is None:
+                return
+            _LOG.warning(
+                "Lauf ohne Ergebnis wird geschlossen",
+                extra={"run_id": run_id, "job_kind": kind.value, "error": error},
+            )
+            result.run = await self._finish(run_id, kind, outcome, error=error)
+        except Exception:  # pragma: no cover - defensiv
+            _LOG.exception("Offener Lauf liess sich nicht schliessen", extra={"run_id": run_id})
 
     # --- Schritte -----------------------------------------------------------
 
@@ -695,25 +904,46 @@ class JobManager:
             task.cancel()
         return stopped
 
-    def abandon(self) -> bool:
-        """Laesst den Lauf los, **ohne** dem Subprozess ein Signal zu schicken.
+    async def shutdown(self, *, timeout_s: float = SHUTDOWN_WAIT_S) -> bool:
+        """Wartet beim Herunterfahren auf den Job — **ohne** eigenes Signal.
 
-        Der Weg beim Herunterfahren des Waechters — und der Grund, warum er
-        sich von :meth:`cancel` unterscheidet: der Waechter laeuft unter
-        ``stopasgroup=true``/``killasgroup=true`` (supervisord.conf), sein
-        ``SIGTERM`` erreicht also **die ganze Prozessgruppe** und damit auch
-        den Job. Wuerde der Waechter zusaetzlich selbst terminieren,
-        bekaeme der Importer **zwei** Signale — und das zweite bedeutet
-        dort „sofort beenden" (``acoustid_importer.__main__``): aus dem
-        geordneten Exit-Code 8 wuerde eine zurueckgerollte Transaktion.
+        Der Weg beim Herunterfahren des Waechters, und er unterscheidet
+        sich von :meth:`cancel` in beide Richtungen:
+
+        * **Kein zweites Signal.** Der Waechter laeuft unter
+          ``stopasgroup=true``/``killasgroup=true`` (supervisord.conf), sein
+          ``SIGTERM`` erreicht also die ganze Prozessgruppe und damit auch
+          den Job. Ein zweites bedeutet im Importer „sofort beenden"
+          (``acoustid_importer.__main__``) — aus dem geordneten Exit-Code 8
+          wuerde eine zurueckgerollte Transaktion.
+        * **Aber warten.** Endet der Waechter zuerst, wird der Job zum
+          Waisen unter ``tini``: supervisord sieht seinen Hauptprozess weg
+          und raeumt die Gruppe nicht mehr auf. Der Waise haelt dann eine
+          Busy-Marke und eine offene ``update_run``-Zeile — genau die
+          beiden Reste, die K1 und F7 beschreiben.
+
+        Nach ``timeout_s`` wird die Aufgabe trotzdem losgelassen; den Rest
+        erledigt Docker mit ``stop_grace_period``.
 
         Returns:
-            ``True``, wenn eine laufende Aufgabe losgelassen wurde.
+            ``True``, wenn eine laufende Aufgabe abgewartet oder
+            losgelassen wurde.
         """
         task = self._task
         if task is None or task.done():
             return False
-        task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=timeout_s)
+        except TimeoutError:
+            _LOG.warning(
+                "Job laeuft beim Herunterfahren noch — er wird losgelassen",
+                extra={"job_kind": self._kind.value if self._kind else None},
+            )
+            task.cancel()
+        except Exception:
+            # Der Zyklus hat sich beschwert; das steht laengst im Log und
+            # in der Lauf-Historie.
+            _LOG.debug("Job endete beim Herunterfahren mit einer Ausnahme")
         return True
 
 

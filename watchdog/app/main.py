@@ -165,14 +165,14 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
         finally:
             for task in tasks:
                 task.cancel()
-            # Einen laufenden Job **loslassen**, nicht abbrechen: der
-            # Waechter laeuft unter `stopasgroup=true` (supervisord.conf),
-            # sein SIGTERM erreicht den Subprozess also ohnehin. Ein
-            # zweites Signal von hier bedeutete im Importer „sofort
-            # beenden" — statt des geordneten Exit-Codes 8 gaebe es eine
-            # zurueckgerollte Transaktion (`JobManager.abandon`).
-            running.job_manager.abandon()
-            # Auf das Ende warten, sonst meldet asyncio beim Herunterfahren
+            # Auf einen laufenden Job **warten**, ihm aber kein eigenes
+            # Signal schicken (`JobManager.shutdown`): das SIGTERM kommt
+            # von supervisord an die ganze Prozessgruppe, und ein zweites
+            # bedeutete im Importer „sofort beenden". Wer hier nicht
+            # wartet, hinterlaesst einen Waisen unter `tini` — mit
+            # Busy-Marke und offener `update_run`-Zeile.
+            await running.job_manager.shutdown()
+            # Auf das Ende der Dauerlaeufer warten, sonst meldet asyncio
             # „Task was destroyed but it is pending".
             await asyncio.gather(*tasks, return_exceptions=True)
             if owns_service:

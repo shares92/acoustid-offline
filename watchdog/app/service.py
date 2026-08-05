@@ -86,7 +86,15 @@ from acoustid_watchdog.cache import LookupCache
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel, log_event
-from acoustid_watchdog.jobs import JobCycle, JobManager
+from acoustid_watchdog.jobs import (
+    EVENT_SOURCE as JOB_EVENT_SOURCE,
+)
+from acoustid_watchdog.jobs import (
+    INDEX_BUSY_FILENAME,
+    JobCycle,
+    JobManager,
+    index_marker_expired,
+)
 from acoustid_watchdog.lifecycle import (
     ActivityTracker,
     DatabaseJobs,
@@ -100,6 +108,7 @@ from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.ratelimit import IpRateLimiter
 from acoustid_watchdog.reload import ReloadMarker
+from acoustid_watchdog.runs import abandon_stale_runs
 from acoustid_watchdog.scheduler import Scheduler
 from acoustid_watchdog.stack import (
     ServiceGroupController,
@@ -107,7 +116,7 @@ from acoustid_watchdog.stack import (
     default_gates,
 )
 from acoustid_watchdog.state import StackStateTracker, StackStatus
-from acoustid_watchdog.store import Database
+from acoustid_watchdog.store import Database, utc_now
 from acoustid_watchdog.wake import (
     ReadinessProbe,
     WakeCoordinator,
@@ -278,6 +287,10 @@ class WatchdogService:
 
     def open(self) -> Self:
         """Erststart und Normalstart — beides derselbe, idempotente Weg."""
+        # **Vor** allem anderen: der Zeitpunkt, ab dem dieser Prozess lebt.
+        # Er ist die Grenze der Rekonziliation weiter unten — alles davor
+        # kann nur aus einem frueheren Prozessleben stammen.
+        started_at = utc_now()
         self.db.open()
         # Der Cache scheitert nie nach aussen: eine unbrauchbare Datei wird
         # weggeworfen, ein weiterhin unbrauchbarer Cache schaltet sich still
@@ -310,6 +323,8 @@ class WatchdogService:
                 EventLevel.WARNING,
                 "Erststart: Admin-Passwort erzeugt und ins Containerlog geschrieben",
             )
+        self._reconcile_open_runs(started_at)
+
         # Der Versions-Drift-Guard (E14) meldet sich beim Start **einmal**
         # laut — und danach bei jedem Weckversuch (`version_guard` der
         # Steuerung). Der Waechter laeuft trotzdem weiter: nur so sieht der
@@ -427,6 +442,79 @@ class WatchdogService:
                 source=CACHE_EVENT_SOURCE,
             )
         return removed
+
+    # --- Rekonziliation nach einem harten Ende ------------------------------
+
+    def _reconcile_open_runs(self, started_at: str) -> None:
+        """Schliesst Laeufe ab, die ein frueheres Prozessleben offen liess.
+
+        Stirbt der Waechter hart (OOM, ``SIGKILL``, Stromausfall), bleibt
+        die Zeile des laufenden Jobs ohne Ergebnis stehen. Ein Lauf ohne
+        Ergebnis heisst „laeuft noch" — daran haengen die Job-Sperre des
+        Idle-Stopps (§8.5) und der letzte Lauf in `/status`. Ohne diese
+        Rekonziliation laege die Instanz **dauerhaft wach** und zeigte
+        einen Import an, den es nicht gibt.
+
+        Die Grenze ist der eigene Prozessstart: dieser Prozess hat noch
+        keine Zeile geschrieben, also kann er hier keinen eigenen Job
+        treffen.
+
+        **Die Busy-Marke wird dabei nur geraeumt, wenn sie abgelaufen ist**
+        (:func:`_expired_index_marker`). Sie blind zu loeschen waere
+        gefaehrlich: ueberlebt der **Importer** den Waechter (er wird zum
+        Kind von ``tini``, waehrend supervisord den Waechter neu startet),
+        laeuft sein Index-Feed weiter — und das Loeschen oeffnete das
+        Kollisionsfenster in voller Breite (§8.12).
+        """
+        try:
+            closed = abandon_stale_runs(
+                self.db,
+                before=started_at,
+                error=(
+                    "Der Waechter wurde beendet, waehrend dieser Lauf lief — "
+                    "der Stand ist resumierbar, der naechste Zyklus wiederholt ihn (§8.4)"
+                ),
+            )
+        except Exception:
+            # Ein Fehler hier darf den Start nicht verhindern: der Waechter
+            # muss laufen, damit der Betreiber ueberhaupt etwas sieht.
+            _LOG.exception("Offene Laeufe liessen sich nicht rekonziliieren")
+            return
+        if not closed:
+            return
+        _LOG.warning(
+            "Offene Laeufe aus einem frueheren Prozessleben geschlossen",
+            extra={"run_ids": [run.id for run in closed]},
+        )
+        self.log_event(
+            EventLevel.WARNING,
+            "Offene Laeufe nach einem harten Ende abgeschlossen",
+            {
+                "run_ids": [run.id for run in closed],
+                "kinds": sorted({run.kind.value for run in closed}),
+            },
+            source=JOB_EVENT_SOURCE,
+        )
+        self._clear_expired_index_marker()
+
+    def _clear_expired_index_marker(self) -> None:
+        """Raeumt eine **abgelaufene** Busy-Marke weg (F7, §8.12).
+
+        Nur die abgelaufene: eine frische kann zu einem Importer gehoeren,
+        der den Waechter ueberlebt hat.
+        """
+        marker = self.settings.data_dir / INDEX_BUSY_FILENAME
+        if not index_marker_expired(marker):
+            return
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            _LOG.exception("Abgelaufene Import-Marke liess sich nicht entfernen")
+            return
+        _LOG.warning(
+            "Abgelaufene Import-Marke entfernt — eigene Einreichungen werden wieder indexiert",
+            extra={"marker_path": str(marker)},
+        )
 
     # --- Versions-Drift der Datenbank (E14) ---------------------------------
 

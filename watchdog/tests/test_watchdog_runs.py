@@ -7,16 +7,18 @@ import pytest
 from acoustid_watchdog.runs import (
     RunKind,
     RunResult,
+    abandon_stale_runs,
     finish_run,
     latest_data_sequence,
     latest_run,
     latest_run_since,
     latest_successful_run,
+    open_run,
     run_totals,
     running_runs,
     start_run,
 )
-from acoustid_watchdog.store import Database
+from acoustid_watchdog.store import Database, utc_now
 
 
 def test_started_run_is_running_and_has_no_result(db: Database) -> None:
@@ -195,6 +197,56 @@ def test_run_totals_count_by_kind_and_outcome(db: Database) -> None:
         ("acoustid-delta", "failed"): 1,
         ("backup", "running"): 1,
     }
+
+
+def test_abandon_stale_runs_closes_only_the_older_ones(db: Database) -> None:
+    """K1: die Grenze ist der eigene Prozessstart — Eigenes bleibt unangetastet."""
+    old = start_run(db, RunKind.ACOUSTID_DELTA, started_at="2026-08-05T04:00:00.000Z")
+    mine = start_run(db, RunKind.BACKUP, started_at="2026-08-05T06:00:00.000Z")
+
+    closed = abandon_stale_runs(db, before="2026-08-05T05:00:00.000Z", error="hart beendet")
+
+    assert [run.id for run in closed] == [old]
+    assert closed[0].result is RunResult.ABORTED
+    assert closed[0].error == "hart beendet"
+    assert closed[0].finished_at is not None
+    # Der eigene Lauf laeuft weiter.
+    assert [run.id for run in running_runs(db)] == [mine]
+
+
+def test_abandon_stale_runs_leaves_finished_rows_alone(db: Database) -> None:
+    run_id = start_run(db, RunKind.ACOUSTID_DELTA, started_at="2026-08-05T04:00:00.000Z")
+    finish_run(db, run_id, RunResult.SUCCESS, files_imported=3)
+
+    assert abandon_stale_runs(db, before="2026-08-05T05:00:00.000Z", error="x") == []
+    run = latest_run(db, RunKind.ACOUSTID_DELTA)
+    assert run is not None and run.result is RunResult.SUCCESS and run.files_imported == 3
+
+
+def test_abandon_stale_runs_on_an_empty_table_is_a_no_op(db: Database) -> None:
+    assert abandon_stale_runs(db, before=utc_now(), error="x") == []
+
+
+def test_the_idle_stop_is_free_again_after_reconciliation(db: Database) -> None:
+    """Der eigentliche Gewinn: die Job-Sperre des Idle-Stopps faellt weg (§8.5)."""
+    from acoustid_watchdog.lifecycle import DatabaseJobs
+
+    start_run(db, RunKind.ACOUSTID_DELTA, started_at="2026-08-05T04:00:00.000Z")
+    jobs = DatabaseJobs(db)
+    assert jobs.running_jobs() != []
+
+    abandon_stale_runs(db, before="2026-08-05T05:00:00.000Z", error="hart beendet")
+
+    assert jobs.running_jobs() == []
+
+
+def test_open_run_only_answers_for_unfinished_rows(db: Database) -> None:
+    run_id = start_run(db, RunKind.ACOUSTID_DELTA)
+    assert open_run(db, run_id) is not None
+
+    finish_run(db, run_id, RunResult.SUCCESS)
+    assert open_run(db, run_id) is None
+    assert open_run(db, 4711) is None
 
 
 def test_duration_is_none_while_a_run_is_open(db: Database) -> None:
