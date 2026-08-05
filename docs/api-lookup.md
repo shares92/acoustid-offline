@@ -49,7 +49,7 @@ Env-Variablen: `MMO_DB_*`, `MMO_INDEX_URL`, `MMO_INDEX_NAME`,
 
 | Schlüssel | Bedeutung |
 |---|---|
-| `index.query_hashes` | Muss mit dem Wert übereinstimmen, mit dem der Importer indexiert hat — sonst bildet die Suche einen anderen Query-Extrakt und findet nichts. |
+| `acoustid.index.query_hashes` | Muss mit dem Wert übereinstimmen, mit dem der Importer indexiert hat — sonst bildet die Suche einen anderen Query-Extrakt und findet nichts. |
 | `mb.dsn` | Read-only-DSN der MusicBrainz-Spiegel-Datenbank. **Leer = keine Metadaten** (der Lookup antwortet dann dauerhaft wie im degradierten Betrieb). |
 | `mb.keep_submitted_mbid` | Default `false`. Bei aufgelösten Recording-Redirects trägt die Antwort die **kanonische** MBID; `true` reicht stattdessen die eingereichte durch. |
 
@@ -110,9 +110,9 @@ Konfiguration.
 
 | Schlüssel | Wirkt sofort? |
 |---|---|
-| `submit.mode`, `submit.upstream_app_key` | **Ja** — der Upstream-Weiterleiter wird dabei neu gebaut (er entsteht sonst nur beim Start und fehlte nach einem Wechsel auf `local+upstream`). |
+| `acoustid.submit.mode`, `acoustid.submit.upstream_app_key` | **Ja** — der Upstream-Weiterleiter wird dabei neu gebaut (er entsteht sonst nur beim Start und fehlte nach einem Wechsel auf `local+upstream`). |
 | `mb.keep_submitted_mbid` | **Ja** (wird je Anfrage gelesen). |
-| `index.query_hashes` | **Nein** — eine Änderung verlangt einen Index-Neuaufbau (§6). Der laufende Wert bleibt stehen, die Abweichung wird als Warnung geloggt. |
+| `acoustid.index.query_hashes` | **Nein** — eine Änderung verlangt einen Index-Neuaufbau (§6). Der laufende Wert bleibt stehen, die Abweichung wird als Warnung geloggt. |
 | `mb.dsn` | **Nein** — Pool und Schema-Selfcheck entstehen beim Start; Änderung erst nach Neustart des Containers. |
 
 Die beiden „Nein"-Fälle werden nicht halb übernommen: der laufende Wert
@@ -416,7 +416,7 @@ die MBIDs deshalb auch bei ausgefallenem Spiegel.
 ## Matching-Pipeline
 
 1. **Query-Extrakt** aus dem angefragten Vollvektor
-   (`shared.fpindex.extract_query`, `index.query_hashes` Hashes).
+   (`shared.fpindex.extract_query`, `acoustid.index.query_hashes` Hashes).
 2. **Kandidaten** vom acoustid-index: `POST /:index/_search`, `limit` 40,
    `timeout` 2000 ms.
 3. **Längenfilter** in Postgres: `length BETWEEN duration ± maxdurationdiff`;

@@ -15,13 +15,13 @@ Seit Phase 13 beantwortet
 [`/v2/submission_status`](#getpost-v2submission_status-phase-13) die vergebenen
 Submission-IDs.
 
-## Modi (`submit.mode`, ARCHITECTURE §6)
+## Modi (`acoustid.submit.mode`, ARCHITECTURE §6)
 
 | Modus | Verhalten |
 |---|---|
 | `off` | Der Endpunkt nimmt nichts an: **Fehler 12 „not allowed" / HTTP 400**, geprüft noch vor dem Lesen der Parameter. |
 | `local` (Default) | Speichern in `local_submission`, indexieren, Antwort `pending`. |
-| `local+upstream` | Wie `local`, **zusätzlich** Weiterleitung an api.acoustid.org. Braucht `submit.upstream_app_key` (die Config lehnt den Modus sonst ab). |
+| `local+upstream` | Wie `local`, **zusätzlich** Weiterleitung an api.acoustid.org. Braucht `acoustid.submit.upstream_app_key` (die Config lehnt den Modus sonst ab). |
 
 Warum **12** und nicht 13 („service currently unavailable"): der Zustand ist
 kein Ausfall, sondern eine Entscheidung des Betreibers. Ein 503 würde Picard
@@ -198,7 +198,7 @@ new ──(_update im Index)──> indexed ──(Upstream-Antwort)──> forw
 ## Upstream-Weiterleitung (`local+upstream`)
 
 Modul: `api/app/upstream.py`. Vertrag: ARCHITECTURE §7 („Upstream-Weiterleitung"),
-§6 (`submit.mode`, `submit.upstream_app_key`) und Invariante §8.9.
+§6 (`acoustid.submit.mode`, `acoustid.submit.upstream_app_key`) und Invariante §8.9.
 
 ### Was hinausgeht
 
@@ -207,7 +207,7 @@ Genau der Original-Submit, den auch Picard schickt — `POST` mit
 
 | Feld | Wert |
 |---|---|
-| `client` | **unser eigener** Application-Key (`submit.upstream_app_key`) |
+| `client` | **unser eigener** Application-Key (`acoustid.submit.upstream_app_key`) |
 | `user` | der `submitted_by`-Key des einreichenden Clients, **unverändert** |
 | `clientversion` | Version dieser Instanz |
 | `format` | `json` |
@@ -404,7 +404,7 @@ ein vermischter Bestand wäre nicht auseinanderzuhalten.
 | Reihenfolge und Wiederholungen | Antwort in Anfragereihenfolge, ein Eintrag **je angefragtem Wert** (auch doppelt) | Beantwortet wird, was gefragt wurde; das ist die vorhersagbarste Zuordnung für den Client. Die Datenbank wird trotzdem nur **einmal** befragt (entdoppelte ID-Liste, ein `SELECT`). |
 | Unlesbare oder nicht-positive `id` | still übersprungen | Die weiche Zahlenlesart dieser API (`duration=abc` gilt ebenfalls als „nicht angegeben"). Bleibt danach keine ID übrig, ist das derselbe Fall wie „gar keine geschickt": Fehler 2. |
 | `id.N`-Suffixe | **nicht** unterstützt | Der Phase-1-Bericht nennt für diesen Endpunkt ausdrücklich nur mehrfaches `id`; ein Suffixprotokoll hier zu erfinden wäre unbelegt. |
-| `submit.mode = off` | Der Endpunkt antwortet trotzdem | Er liest nur. Wer den Submit abschaltet, soll weiterhin erfahren, was aus früheren Einreichungen geworden ist. |
+| `acoustid.submit.mode = off` | Der Endpunkt antwortet trotzdem | Er liest nur. Wer den Submit abschaltet, soll weiterhin erfahren, was aus früheren Einreichungen geworden ist. |
 | `forward_failed` ⇒ `imported` | siehe Tabelle oben | Der Client fragt nach **seiner** Einreichung, nicht nach dem Betriebszustand der Upstream-Queue. |
 | Fehler 18 („fingerprint not found") | wird hier nie erzeugt | Unbekannte IDs bleiben `pending` — Vertrag des Originals. |
 
@@ -492,7 +492,7 @@ Zahlenreihe einklagbar, gewartet wird nie.
 |---|---|---|---|
 | Ablage der Einreichung | eigene Zeilen in `track`/`fingerprint`/`track_mbid` (der Server ist die Quelle) | eigene Tabelle `local_submission` + reservierter Dokument-ID-Bereich | Unser Bestand wird aus den Deltas nachgebaut; jede eigene Zeile in den Dump-Tabellen würde vom nächsten Delta überschrieben. |
 | `user`-Key | wird gegen den Benutzerbestand geprüft (Fehler 6) | wird verlangt, nie geprüft | Diese Instanz hat keinen Benutzerbestand. Auth ist Sache des Wächters (§7). |
-| `submit.mode` | existiert nicht | `off` ⇒ Fehler 12 / HTTP 400 | Projektentscheid ARCHITECTURE §6; Code 12 ist der einzige Code der Tabelle, der „vom Betreiber nicht erlaubt" trifft. |
+| `acoustid.submit.mode` | existiert nicht | `off` ⇒ Fehler 12 / HTTP 400 | Projektentscheid ARCHITECTURE §6; Code 12 ist der einzige Code der Tabelle, der „vom Betreiber nicht erlaubt" trifft. |
 | Suchindex beim Speichern nicht erreichbar | (asynchroner Worker, Frage stellt sich nicht) | HTTP 200 `pending`, Einreichung bleibt `new`, Nachtrag bei der nächsten Anfrage | Ein Fehlercode würde Clients zum erneuten Senden bringen ⇒ Dubletten. |
 | Verarbeitung | asynchrone Warteschlange (Import-Skript, Merge-Tasks, Track-Zuordnung) | synchrone Indexierung, keine Merges | Ohne Worker-Prozess und ohne Pflegeaufwand; die Antwort bleibt zeichengleich `pending`. |
 | Stille Verwerfung | MBID/PUID/Textmetadaten | zusätzlich zählt `foreignid` als Zuordnung | `foreignid` ist ein Identifikator wie `puid`; eine Einreichung damit zu verwerfen wäre Datenverlust. |

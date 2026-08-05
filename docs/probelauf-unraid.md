@@ -6,7 +6,7 @@ grob 12–13 h reine DB-Zeit für 414 GB):
 
 1. Wie lange dauert der Voll-Bootstrap wirklich — Stunden oder Tage?
 2. Wie groß werden Postgres und Suchindex (Grundlage der
-   Empfehlungstabelle für `index.query_hashes`)?
+   Empfehlungstabelle für `acoustid.index.query_hashes`)?
 3. Funktioniert die Kette Download → Import → Index-Feed auf Unraid
    end-to-end?
 
@@ -20,6 +20,12 @@ später einfach zum Voll-Bootstrap verlängert — nichts löschen.
 > darin (`docker compose exec`). Wer einen Probelauf aus der v1-Zeit auf
 > der Platte hat, zieht ihn nach [migration-v1-v2.md](migration-v1-v2.md)
 > um — der Bestand bleibt erhalten.
+>
+> **Seit M2 heißt das Projekt musicmeta-offline.** Die Host-Pfade unten
+> sind bloß Beispiele und tragen den neuen Namen; ein Probelauf, der schon
+> unter `…/appdata/acoustid-offline/…` liegt, muss **nicht** umziehen —
+> die Verzeichnisnamen sind Betreiber-Sache, bindend sind nur die
+> Mountpunkte *im* Container.
 
 ---
 
@@ -28,10 +34,10 @@ später einfach zum Voll-Bootstrap verlängert — nichts löschen.
 - Unraid (amd64 — das Image ist amd64-only, E3) mit
   Docker-Compose-Unterstützung (Plugin „Docker Compose Manager" oder
   `docker compose` im Terminal).
-- Das Repo auf dem Server, z. B. unter `/mnt/user/appdata/acoustid-offline/repo`:
+- Das Repo auf dem Server, z. B. unter `/mnt/user/appdata/musicmeta-offline/repo`:
 
   ```bash
-  git clone https://github.com/shares92/acoustid-offline.git
+  git clone https://github.com/shares92/musicmeta-offline.git
   ```
 
 - Plattenplatz für den Probelauf-Zuschnitt (siehe Schritt 4):
@@ -42,7 +48,7 @@ später einfach zum Voll-Bootstrap verlängert — nichts löschen.
 ## 2. .env anlegen und die Mounts auf Unraid-Pfade legen
 
 ```bash
-cd /mnt/user/appdata/acoustid-offline/repo
+cd /mnt/user/appdata/musicmeta-offline/repo
 cp .env.example .env
 ```
 
@@ -57,19 +63,19 @@ nur so misst der Lauf ehrlich. Dafür genügen fünf Zeilen in der `.env`:
 ```bash
 cat >> .env <<'EOF'
 # Cache-Pool
-MUSICMETA_CONFIG_DIR=/mnt/cache/appdata/acoustid-offline/config
-MUSICMETA_INDEX_DIR=/mnt/cache/appdata/acoustid-offline/index
+MUSICMETA_CONFIG_DIR=/mnt/cache/appdata/musicmeta-offline/config
+MUSICMETA_INDEX_DIR=/mnt/cache/appdata/musicmeta-offline/index
 # Array (Hinweis: /mnt/user/... läuft durch den FUSE-Layer shfs — für die
 # Postgres besser einen direkten Disk-/Pool-Pfad, sonst misst der
 # Probelauf den FUSE-Overhead mit)
-MUSICMETA_DB_DIR=/mnt/disk1/appdata/acoustid-offline/db
-MUSICMETA_IMPORT_DIR=/mnt/user/appdata/acoustid-offline/import
-MUSICMETA_BACKUP_DIR=/mnt/user/appdata/acoustid-offline/backup
+MUSICMETA_DB_DIR=/mnt/disk1/appdata/musicmeta-offline/db
+MUSICMETA_IMPORT_DIR=/mnt/user/appdata/musicmeta-offline/import
+MUSICMETA_BACKUP_DIR=/mnt/user/appdata/musicmeta-offline/backup
 EOF
 
-mkdir -p /mnt/cache/appdata/acoustid-offline/{config,index}
-mkdir -p /mnt/disk1/appdata/acoustid-offline/db
-mkdir -p /mnt/user/appdata/acoustid-offline/{import,backup}
+mkdir -p /mnt/cache/appdata/musicmeta-offline/{config,index}
+mkdir -p /mnt/disk1/appdata/musicmeta-offline/db
+mkdir -p /mnt/user/appdata/musicmeta-offline/{import,backup}
 ```
 
 Die Pfade sind Beispiele — Pool-/Disk-Namen an das eigene System
@@ -78,7 +84,7 @@ anpassen. Die Mountpunkte **im** Container (`/config`, `/index`,
 Entrypoint selbst (Postgres 999, Index 6081) — **nicht** 99:100
 (nobody/users) verwenden.
 
-## 4. `index.query_hashes` VOR dem Lauf festlegen
+## 4. `acoustid.index.query_hashes` VOR dem Lauf festlegen
 
 Der Wert bestimmt die Index-Größe (Default 120 ⇒ ~40–55 GB beim
 Vollbestand; 80 ⇒ ~30–37 GB) und **eine spätere Änderung heißt
@@ -86,9 +92,13 @@ Index-Neuaufbau**. Wer nicht mit dem Default 120 laufen will, legt vor
 dem Start eine minimale `config.yaml` ins Konfigurationsverzeichnis:
 
 ```bash
-printf 'index:\n  query_hashes: 120\n' \
-  > /mnt/cache/appdata/acoustid-offline/config/config.yaml
+printf 'acoustid:\n  index:\n    query_hashes: 120\n' \
+  > /mnt/cache/appdata/musicmeta-offline/config/config.yaml
 ```
+
+Der Schlüssel hieß bis M2 `index.query_hashes`; eine Datei mit dem alten
+Pfad wird noch eine Release-Runde gelesen (mit Warnung) und beim
+Wächter-Start einmalig umgeschrieben.
 
 Fehlt die Datei, gelten die Defaults aus ARCHITECTURE §6 — für den
 Probelauf mit 120 völlig in Ordnung.
@@ -182,8 +192,8 @@ realistische Zeitangabe fürs README (Phase 29) und die
   supervisorctl -c /etc/supervisor/supervisord.conf status` zeigt die vier
   Prozesse.
 - **Exit-Code 3 (Plattenplatz-Guard):** gemessen wird das
-  Dump-Verzeichnis; Reserve ist `update.min_free_gb` (Default 50 GiB,
-  `--min-free-gb` überschreibt). Platz schaffen und denselben Befehl
+  Dump-Verzeichnis; Reserve ist `disk.min_free_gb` (Default 100 GiB seit
+  M2, `--min-free-gb` überschreibt). Platz schaffen und denselben Befehl
   erneut starten.
 - **Exit-Code 5 (`gaps`):** fehlende Tagesdatei in der Historie — nicht
   überbrückbar und absichtlich nicht per CLI übergehbar. Bitte melden;
@@ -195,5 +205,5 @@ realistische Zeitangabe fürs README (Phase 29) und die
 - Nach dem Probelauf **nichts wegräumen**: die Bind-Mounts und
   `import_state` sind der Anfang des echten Bootstraps. (`docker compose
   down -v` kann Bind-Mounts nicht löschen — das ist der Grund für E13.) Nur wenn die Auswertung ein
-  anderes `index.query_hashes` ergibt, braucht der Index einen
+  anderes `acoustid.index.query_hashes` ergibt, braucht der Index einen
   Neuaufbau (Vorgehen wird dann nachgereicht).

@@ -3,8 +3,8 @@
 Der Importer ist ein **One-Shot-Job**: Er läuft, spielt die offenen
 Tagesdeltas ein, gibt neue Fingerprints an den Suchindex, schreibt ein
 maschinenlesbares Ergebnis und beendet sich mit einem definierten Exit-Code.
-Er startet und stoppt nie Container und kennt keinen Zeitplan — das macht
-der Wächter (Phase 19), der genau die hier beschriebene Schnittstelle liest
+Er startet und stoppt nie Prozesse und kennt keinen Zeitplan — das macht
+der Wächter (ab M2.5), der genau die hier beschriebene Schnittstelle liest
 und daraus `update_run` füllt.
 
 Technische Grundlagen: ARCHITECTURE §5.1 (Datenquelle), §5.2 (Schema und
@@ -48,8 +48,11 @@ Entrypoints nicht erbt.
 
 Der Job liest seine Zugänge aus den `MMO_`-Variablen (ARCHITECTURE §6) und
 aus der `config.yaml` des Wächters — von dort genau zwei Werte:
-`update.min_free_gb` (Plattenplatz-Guard) und `index.query_hashes`
+`disk.min_free_gb` (Plattenplatz-Guard) und `acoustid.index.query_hashes`
 (Query-Extrakt für den Suchindex). Fehlt die Datei, gelten die Defaults.
+Beide Schlüssel hießen bis M2 `update.min_free_gb` bzw.
+`index.query_hashes`; die alten Pfade werden noch eine Release-Runde mit
+Warnung gelesen (ARCHITECTURE §6, E9).
 
 ### Betriebsarten
 
@@ -76,7 +79,7 @@ Ablauf im Bootstrap (Import-Regel 6, ARCHITECTURE §5.2):
 | `--end-date YYYY-MM-DD` | letzter einzuschließender Kalendertag — der Probelauf-Schalter |
 | `--max-days N` / `--max-files N` | Lauf zusätzlich begrenzen (`--max-days` schneidet an der Tagesgrenze) |
 | `--report PFAD` | Ergebnis-JSON in eine Datei statt auf stdout (`-`) |
-| `--min-free-gb N` | überschreibt `update.min_free_gb`; `0` schaltet den Guard ab |
+| `--min-free-gb N` | überschreibt `disk.min_free_gb`; `0` schaltet den Guard ab |
 | `--prefetch N` | wie viele Dateien im Voraus geladen werden (Default 2; kostet Plattenplatz) |
 | `--batch-rows N` | Zeilen je `executemany` (Default 1000; wirkt auf den Speicher, nicht auf den Durchsatz) |
 | `--keep-dumps` | eingespielte Tagesdateien behalten (Default: löschen) |
@@ -98,7 +101,7 @@ neuere Upsert-Stände überschreiben.
 | 0 | `ok` | Alles eingespielt (auch: nichts zu tun) | — |
 | 1 | `failed` | Unerwarteter Fehler | Log ansehen; Wiederholung meist zwecklos |
 | 2 | `usage_error` | Aufruf, `MMO_`-Umgebung oder `config.yaml` fehlerhaft | Konfiguration korrigieren |
-| 3 | `disk_guard` | Freier Platz unter `update.min_free_gb` (§8.8) | Platz schaffen, Lauf wiederholen; Benachrichtigung |
+| 3 | `disk_guard` | Freier Platz unter `disk.min_free_gb` (§8.8) | Platz schaffen, Lauf wiederholen; Benachrichtigung |
 | 4 | `download_failed` | Tagesdatei kam nicht sauber vom Server | Nächster Zyklus wiederholt automatisch (§8.4) |
 | 5 | `gaps` | Fehlende Tagesdatei in der Vergangenheit (Regel 5) | **Nicht** automatisch reparieren — Betreiber entscheidet |
 | 6 | `import_failed` | Postgres-Import gescheitert (inkl. Parse-Fehler) | Log ansehen; nächster Zyklus wiederholt |
@@ -153,8 +156,8 @@ also getrennt weiterverarbeiten. Die Datei wird atomar geschrieben
     "last_id": 123456789, "version": 3, "duration_s": 4.1, "exhausted": true
   },
   "measurements": {
-    "disk_before": {"path": "/data/dumps", "total_bytes": 0, "free_bytes": 0,
-                    "min_free_bytes": 53687091200, "ok": true},
+    "disk_before": {"path": "/import", "total_bytes": 0, "free_bytes": 0,
+                    "min_free_bytes": 107374182400, "ok": true},
     "disk_after": {"…": 0},
     "disk_checks": 1,
     "db_before": {"total_bytes": 8250000, "tables": {"fingerprint": 8192}},
@@ -224,15 +227,20 @@ Bezugsgröße wiederholen (die Historie wächst um ~58 MB/Tag).
 Geprüft wird das Arbeitsverzeichnis der Tagesdateien (`MMO_DUMP_DIR`) —
 einmal **vor** dem Lauf (vor der ersten Migration und dem ersten Byte) und
 danach in Abständen: nach je 25 Dateien oder 2 GiB, je nachdem was zuerst
-eintritt. `update.min_free_gb` wird als **GiB** gelesen (1024³ Byte), also
-die strengere Lesart; `0` schaltet den Guard ab.
+eintritt. `disk.min_free_gb` wird als **GiB** gelesen (1024³ Byte), also
+die strengere Lesart; `0` schaltet den Guard ab. Default seit M2: **100**
+(vorher 50 unter dem Namen `update.min_free_gb` — die Bestände wachsen von
+einem AcoustID-Spiegel auf vier Quellen, E11).
 
 Unterschreitet der freie Platz die Reserve, endet der Lauf zwischen zwei
 Tagesdateien mit Code 3. Der Stand bleibt vollständig resumierbar.
 
-Das Datenverzeichnis der Postgres liegt in einem anderen Container und ist
-von hier aus nicht messbar. Auf dem Referenz-Deployment (Unraid, beides auf
-dem Array) misst der Guard trotzdem denselben Pool.
+Gemessen wird bislang nur das Dump-Verzeichnis. Auf dem
+Referenz-Deployment (Unraid) liegt die Postgres im selben Array-Pool, der
+Guard trifft also denselben Bestand. Die Ausweitung auf **jeden**
+Schreib-/Staging-Pfad — `/data/db`, `/import`, ab M4 `/data/covers` — ist
+mit M2.5 vorgesehen (E11); die Mounts aus ARCHITECTURE §3 sind mehrere
+Dateisysteme, und ein freies `/import` sagt nichts über `/data/db`.
 
 ---
 
