@@ -37,7 +37,7 @@ name: musicmeta-offline
 services:
 
   app:
-    image: ${MUSICMETA_IMAGE:-ghcr.io/shares92/acoustid-offline:latest}
+    image: ${MUSICMETA_IMAGE:-ghcr.io/shares92/musicmeta-offline:latest}
     # Das Release ist amd64-only (E3); der aarch64-Spike steht vor M9 an.
     # Auf Apple Silicon laeuft es unter colima --vz-rosetta.
     platform: linux/amd64

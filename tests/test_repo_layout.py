@@ -56,6 +56,8 @@ REQUIRED_FILES = [
     # GPL-Pflichten des eingebackenen acoustid-index (E7).
     "THIRD-PARTY-NOTICES.md",
     ".github/workflows/ci.yml",
+    # Ein Release = ein Image = ein Tag (v2 §10.12, M2-DoD).
+    ".github/workflows/release.yml",
     "tests/fixtures/fetch_fixtures.py",
     "tests/fixtures/acoustid-dumps/README.md",
     # Volume-Migration v1 -> v2 (Risiko R3).

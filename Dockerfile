@@ -118,7 +118,7 @@ ARG PG_MAJOR=18
 LABEL org.opencontainers.image.title="musicmeta-offline" \
       org.opencontainers.image.description="Offline-Spiegel fuer AcoustID (ein Container: Waechter, API, Postgres, acoustid-index)" \
       org.opencontainers.image.licenses="MIT AND GPL-3.0-or-later" \
-      org.opencontainers.image.source="https://github.com/shares92/acoustid-offline"
+      org.opencontainers.image.source="https://github.com/shares92/musicmeta-offline"
 # Eingebackene Fremdkomponenten, sichtbar am Image (v2 §12) und Teil des
 # GPL-Quellangebots (E7).
 LABEL org.musicmeta.postgresql.major="18" \
