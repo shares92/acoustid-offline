@@ -356,5 +356,5 @@ def env_var_name(field_name: str) -> str:
 
 
 def legacy_env_var_name(field_name: str) -> str:
-    """Feldname -> alte Umgebungsvariable (`db_password` -> `MMO_DB_PASSWORD`)."""
+    """Feldname -> alte Umgebungsvariable (`db_password` -> `AOFF_DB_PASSWORD`)."""
     return f"{LEGACY_ENV_PREFIX}{field_name.upper()}"

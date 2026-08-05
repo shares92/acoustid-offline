@@ -833,7 +833,8 @@ def save_config(config: Config, path: str | os.PathLike[str]) -> Path:
 
     Ein abgebrochener Schreibvorgang laesst die bisherige Datei unveraendert;
     eine halb geschriebene config.yaml kann nicht entstehen. Die Datei
-    enthaelt Secrets im Klartext und bekommt Modus 0600.
+    enthaelt Secrets im Klartext und bekommt Modus 0640 (lesbar fuer die
+    Gruppe `musicmeta`, s. Modulkommentar oben und supervisor/entrypoint.sh).
     """
     config_path = Path(path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
