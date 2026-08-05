@@ -41,7 +41,12 @@ __all__ = [
 
 #: Name des von `setup_logging` installierten Handlers. Nur dieser wird bei
 #: einem erneuten Aufruf ersetzt — fremde Handler (pytest, uvicorn) bleiben.
-HANDLER_NAME = "acoustid-offline"
+#:
+#: Reine Prozess-Innensicht: der Name steht in keiner Logzeile und in keiner
+#: Datei, sondern dient allein dem Wiedererkennen des eigenen Handlers. Die
+#: Umbenennung in M2 ist deshalb folgenlos — anders als der
+#: `REPORT_SCHEMA`-String des Importers, der bewusst stabil bleibt (E16).
+HANDLER_NAME = "musicmeta-offline"
 
 # Standardattribute eines LogRecord; alles andere ist ein Extra-Feld.
 _RESERVED_RECORD_FIELDS = frozenset(

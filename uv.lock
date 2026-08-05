@@ -4,124 +4,11 @@ requires-python = ">=3.14"
 
 [manifest]
 members = [
-    "acoustid-offline",
-    "acoustid-offline-api",
-    "acoustid-offline-importer",
-    "acoustid-offline-shared",
-    "acoustid-offline-watchdog",
-]
-
-[[package]]
-name = "acoustid-offline"
-version = "0.0.1"
-source = { virtual = "." }
-dependencies = [
-    { name = "acoustid-offline-api" },
-    { name = "acoustid-offline-importer" },
-    { name = "acoustid-offline-shared" },
-    { name = "acoustid-offline-watchdog" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "ruff" },
-    { name = "supervisor" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "acoustid-offline-api", editable = "api" },
-    { name = "acoustid-offline-importer", editable = "importer" },
-    { name = "acoustid-offline-shared", editable = "shared" },
-    { name = "acoustid-offline-watchdog", editable = "watchdog" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "ruff", specifier = ">=0.16.0" },
-    { name = "supervisor", specifier = ">=4.3.0" },
-]
-
-[[package]]
-name = "acoustid-offline-api"
-version = "0.0.1"
-source = { editable = "api" }
-dependencies = [
-    { name = "acoustid-offline-shared" },
-    { name = "fastapi" },
-    { name = "psycopg-pool" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "acoustid-offline-shared", editable = "shared" },
-    { name = "fastapi", specifier = ">=0.121.2" },
-    { name = "psycopg-pool", specifier = ">=3.2.7" },
-    { name = "uvicorn", specifier = ">=0.40.0" },
-]
-
-[[package]]
-name = "acoustid-offline-importer"
-version = "0.0.1"
-source = { editable = "importer" }
-dependencies = [
-    { name = "acoustid-offline-shared" },
-    { name = "httpx" },
-    { name = "psycopg", extra = ["binary"] },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "acoustid-offline-shared", editable = "shared" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
-]
-
-[[package]]
-name = "acoustid-offline-shared"
-version = "0.0.1"
-source = { editable = "shared" }
-dependencies = [
-    { name = "httpx" },
-    { name = "msgpack" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "psycopg-pool" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "msgpack", specifier = ">=1.2.1" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
-    { name = "psycopg-pool", specifier = ">=3.2.7" },
-    { name = "pydantic", specifier = ">=2.13.4" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
-]
-
-[[package]]
-name = "acoustid-offline-watchdog"
-version = "0.0.1"
-source = { editable = "watchdog" }
-dependencies = [
-    { name = "acoustid-offline-shared" },
-    { name = "argon2-cffi" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "acoustid-offline-shared", editable = "shared" },
-    { name = "argon2-cffi", specifier = ">=25.1.0" },
-    { name = "fastapi", specifier = ">=0.121.2" },
-    { name = "httpx", specifier = ">=0.28.1" },
-    { name = "uvicorn", specifier = ">=0.40.0" },
+    "musicmeta-offline",
+    "musicmeta-offline-api",
+    "musicmeta-offline-importer",
+    "musicmeta-offline-shared",
+    "musicmeta-offline-watchdog",
 ]
 
 [[package]]
@@ -385,6 +272,119 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/e1/aab6c946570496b78e67804721f3d5e2d62a93081b9b37df77764ef56347/msgpack-1.2.1-cp314-cp314t-win32.whl", hash = "sha256:c1c79a604a2969a868a78b6ebd27a887e00c624f14f66b3038e0590cb23332d1", size = 70914, upload-time = "2026-06-18T16:13:49.385Z" },
     { url = "https://files.pythonhosted.org/packages/13/0a/e608956488a2af014cfe6e3d665e090b8ee42aa14b07f8f95b8880d66b09/msgpack-1.2.1-cp314-cp314t-win_amd64.whl", hash = "sha256:f12038a35fabd52e56a3547bab42401af49a45caa6dd00b34c44de235bc93ee2", size = 77999, upload-time = "2026-06-18T16:13:50.467Z" },
     { url = "https://files.pythonhosted.org/packages/d2/8a/27e2e57055176e366a46b85d02d68e7a5bcfbdd8474c9706375d965f24d3/msgpack-1.2.1-cp314-cp314t-win_arm64.whl", hash = "sha256:0adcf06ffde0777c0e1a9b771a2b1c4226ba1bbf748c8efcc02fcdeca3299107", size = 71160, upload-time = "2026-06-18T16:13:51.498Z" },
+]
+
+[[package]]
+name = "musicmeta-offline"
+version = "0.0.1"
+source = { virtual = "." }
+dependencies = [
+    { name = "musicmeta-offline-api" },
+    { name = "musicmeta-offline-importer" },
+    { name = "musicmeta-offline-shared" },
+    { name = "musicmeta-offline-watchdog" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "supervisor" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "musicmeta-offline-api", editable = "api" },
+    { name = "musicmeta-offline-importer", editable = "importer" },
+    { name = "musicmeta-offline-shared", editable = "shared" },
+    { name = "musicmeta-offline-watchdog", editable = "watchdog" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.16.0" },
+    { name = "supervisor", specifier = ">=4.3.0" },
+]
+
+[[package]]
+name = "musicmeta-offline-api"
+version = "0.0.1"
+source = { editable = "api" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "musicmeta-offline-shared" },
+    { name = "psycopg-pool" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.121.2" },
+    { name = "musicmeta-offline-shared", editable = "shared" },
+    { name = "psycopg-pool", specifier = ">=3.2.7" },
+    { name = "uvicorn", specifier = ">=0.40.0" },
+]
+
+[[package]]
+name = "musicmeta-offline-importer"
+version = "0.0.1"
+source = { editable = "importer" }
+dependencies = [
+    { name = "httpx" },
+    { name = "musicmeta-offline-shared" },
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "musicmeta-offline-shared", editable = "shared" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+]
+
+[[package]]
+name = "musicmeta-offline-shared"
+version = "0.0.1"
+source = { editable = "shared" }
+dependencies = [
+    { name = "httpx" },
+    { name = "msgpack" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "psycopg-pool" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "msgpack", specifier = ">=1.2.1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "psycopg-pool", specifier = ">=3.2.7" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
+]
+
+[[package]]
+name = "musicmeta-offline-watchdog"
+version = "0.0.1"
+source = { editable = "watchdog" }
+dependencies = [
+    { name = "argon2-cffi" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "musicmeta-offline-shared" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "argon2-cffi", specifier = ">=25.1.0" },
+    { name = "fastapi", specifier = ">=0.121.2" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "musicmeta-offline-shared", editable = "shared" },
+    { name = "uvicorn", specifier = ">=0.40.0" },
 ]
 
 [[package]]

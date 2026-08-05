@@ -7,13 +7,13 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "acoustid-offline-importer"
+name = "musicmeta-offline-importer"
 version = "0.0.1"
-description = "Delta-Importer und Index-Feed von acoustid-offline"
+description = "Delta-Importer und Index-Feed von musicmeta-offline"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
-    "acoustid-offline-shared",
+    "musicmeta-offline-shared",
     # Delta-Download (Phase 6): Streaming-GET mit Range-Resume und sauberen
     # Timeouts. Dieselbe Bibliothek wie im Index-Client des shared-Pakets.
     "httpx>=0.28.1",
@@ -31,4 +31,4 @@ packages = ["acoustid_importer"]
 acoustid_importer = "app"
 
 [tool.uv.sources]
-acoustid-offline-shared = { workspace = true }
+musicmeta-offline-shared = { workspace = true }

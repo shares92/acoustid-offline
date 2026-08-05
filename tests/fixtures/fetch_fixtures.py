@@ -27,7 +27,7 @@ BASE_URL = "https://data.acoustid.org/"
 
 DEFAULT_DEST = Path(__file__).resolve().parent / "acoustid-dumps"
 
-USER_AGENT = "acoustid-offline-fixture-fetch/1.0 (+https://data.acoustid.org)"
+USER_AGENT = "musicmeta-offline-fixture-fetch/1.0 (+https://data.acoustid.org)"
 
 TIMEOUT_S = 120
 

@@ -6,13 +6,13 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "acoustid-offline-api"
+name = "musicmeta-offline-api"
 version = "0.0.1"
-description = "AcoustID-kompatibler API-Service von acoustid-offline"
+description = "AcoustID-kompatibler API-Service von musicmeta-offline"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
-    "acoustid-offline-shared",
+    "musicmeta-offline-shared",
     # Web-Framework laut ARCHITECTURE §4. Die Routen sind async, die Arbeit
     # dahinter (psycopg, Index-Client, Rescoring) laeuft im Threadpool.
     "fastapi>=0.121.2",
@@ -31,4 +31,4 @@ packages = ["acoustid_api"]
 acoustid_api = "app"
 
 [tool.uv.sources]
-acoustid-offline-shared = { workspace = true }
+musicmeta-offline-shared = { workspace = true }

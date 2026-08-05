@@ -1,4 +1,4 @@
-"""Importer von acoustid-offline (Import-Name ``acoustid_importer``).
+"""Importer von musicmeta-offline (Import-Name ``acoustid_importer``).
 
 Module (Stand Phase 8 — vollstaendiger One-Shot-Job):
 

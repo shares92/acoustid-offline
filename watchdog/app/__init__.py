@@ -1,4 +1,4 @@
-"""Waechter von acoustid-offline (Import-Name ``acoustid_watchdog``).
+"""Waechter von musicmeta-offline (Import-Name ``acoustid_watchdog``).
 
 Der Dauerlaeufer auf dem SSD-Cache-Pool — der einzige Dienst, der immer an
 ist, und der einzige mit einem veroeffentlichten Port (ARCHITECTURE §3).

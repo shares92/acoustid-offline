@@ -6,9 +6,9 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "acoustid-offline-shared"
+name = "musicmeta-offline-shared"
 version = "0.0.1"
-description = "Gemeinsames Fundament (Config, Modelle, Logging) fuer acoustid-offline"
+description = "Gemeinsames Fundament (Config, Modelle, Logging) fuer musicmeta-offline"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [

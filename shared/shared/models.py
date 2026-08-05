@@ -1,4 +1,4 @@
-"""Gemeinsame Modelle und Typen von acoustid-offline.
+"""Gemeinsame Modelle und Typen von musicmeta-offline.
 
 Hier stehen ausschliesslich Typen, die schon jetzt verbindlich feststehen
 (ARCHITECTURE §6, §5.2, §9). Kein Vorgriff auf spaetere Phasen: Tabellen-

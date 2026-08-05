@@ -1,4 +1,4 @@
-"""Gemeinsames Fundament von acoustid-offline.
+"""Gemeinsames Fundament von musicmeta-offline.
 
 Inhalt ab Phase 3:
 

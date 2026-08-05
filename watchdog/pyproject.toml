@@ -7,13 +7,13 @@ requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "acoustid-offline-watchdog"
+name = "musicmeta-offline-watchdog"
 version = "0.0.1"
-description = "Waechter (Proxy, Scheduler, Admin-UI) von acoustid-offline"
+description = "Waechter (Proxy, Scheduler, Admin-UI) von musicmeta-offline"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
-    "acoustid-offline-shared",
+    "musicmeta-offline-shared",
     # Web-Framework laut ARCHITECTURE §4 — dieselbe Wahl wie im API-Dienst.
     # Ab Phase 14 traegt es `/status`, spaeter Proxy, Admin-UI und /metrics.
     "fastapi>=0.121.2",
@@ -45,4 +45,4 @@ acoustid_watchdog = "app"
 acoustid_watchdog = ["templates/**", "static/**"]
 
 [tool.uv.sources]
-acoustid-offline-shared = { workspace = true }
+musicmeta-offline-shared = { workspace = true }

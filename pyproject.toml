@@ -1,4 +1,4 @@
-# Workspace-Wurzel von acoustid-offline.
+# Workspace-Wurzel von musicmeta-offline.
 #
 # Der Repo-Root ist ein virtuelles uv-Projekt (kein eigenes Paket): er bindet
 # die vier Member-Pakete ein und traegt die zentrale Tooling-Konfiguration
@@ -14,17 +14,17 @@
 #   watchdog/app/    -> import acoustid_watchdog
 
 [project]
-name = "acoustid-offline"
+name = "musicmeta-offline"
 version = "0.0.1"
 description = "Selbst gehostete, offline-faehige AcoustID-Instanz (Workspace-Wurzel)"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
 dependencies = [
-    "acoustid-offline-shared",
-    "acoustid-offline-api",
-    "acoustid-offline-importer",
-    "acoustid-offline-watchdog",
+    "musicmeta-offline-shared",
+    "musicmeta-offline-api",
+    "musicmeta-offline-importer",
+    "musicmeta-offline-watchdog",
 ]
 
 [dependency-groups]
@@ -46,10 +46,10 @@ package = false
 members = ["shared", "api", "importer", "watchdog"]
 
 [tool.uv.sources]
-acoustid-offline-shared = { workspace = true }
-acoustid-offline-api = { workspace = true }
-acoustid-offline-importer = { workspace = true }
-acoustid-offline-watchdog = { workspace = true }
+musicmeta-offline-shared = { workspace = true }
+musicmeta-offline-api = { workspace = true }
+musicmeta-offline-importer = { workspace = true }
+musicmeta-offline-watchdog = { workspace = true }
 
 # --- Lint & Format (zentral fuer alle Pakete) ------------------------------
 # ruff sucht von jeder Datei aus die naechste pyproject.toml MIT [tool.ruff];

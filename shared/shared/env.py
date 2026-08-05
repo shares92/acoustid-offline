@@ -183,6 +183,13 @@ class EnvSettings(BaseModel):
     #: Healthcheck des Containers (`/<name>/_health`) ihn braucht — dort gibt
     #: es keine config.yaml.
     index_name: str = Field(default="main", pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+    #: MMO_INDEX_COMMIT — Commit-Stand des eingebackenen acoustid-index.
+    #: Wie `pg_major` keine Betreiber-Einstellung, sondern eine Beschreibung
+    #: des Artefakts: das Dockerfile setzt den Wert aus demselben
+    #: `ACOUSTID_INDEX_COMMIT`, aus dem es das Binary baut, und `/status`
+    #: weist ihn aus (v2 §12). Ausserhalb des Images leer — dort gibt es
+    #: kein eingebackenes Binary, ueber das man etwas aussagen koennte.
+    index_commit: str = ""
 
     #: MMO_LOG_LEVEL — Level fuer `shared.setup_logging`, noetig bevor die
     #: config.yaml gelesen ist (die kennt bewusst keinen Log-Level).

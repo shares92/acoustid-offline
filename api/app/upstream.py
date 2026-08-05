@@ -190,7 +190,7 @@ UPSTREAM_GAVE_UP_EVENT: Final = "upstream_forward_gave_up"
 
 #: Kennung gegenueber api.acoustid.org — hoeflich und zuordenbar.
 USER_AGENT: Final = (
-    f"acoustid-offline-api/{__version__} (+https://github.com/shares92/acoustid-offline)"
+    f"musicmeta-offline-api/{__version__} (+https://github.com/shares92/musicmeta-offline)"
 )
 
 _FORM_TYPE: Final = "application/x-www-form-urlencoded"

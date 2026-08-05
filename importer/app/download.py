@@ -79,7 +79,9 @@ CHUNK_BYTES: Final = 1 << 20
 
 #: Kennung gegenueber der Quelle — hoeflich und zuordenbar (§12, Punkt 9:
 #: Fair-Use gegenueber AcoustID OUe).
-USER_AGENT: Final = "acoustid-offline-importer/1.0 (+https://github.com/shares92/acoustid-offline)"
+USER_AGENT: Final = (
+    "musicmeta-offline-importer/1.0 (+https://github.com/shares92/musicmeta-offline)"
+)
 
 #: Leseschranke; grosszuegig, weil einzelne Dateien mehrere GB haben.
 _DEFAULT_READ_TIMEOUT_S: Final = 60.0

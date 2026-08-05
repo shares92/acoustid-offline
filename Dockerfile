@@ -127,9 +127,14 @@ LABEL org.musicmeta.postgresql.major="18" \
       org.musicmeta.acoustid-index.license="GPL-3.0-or-later" \
       org.musicmeta.acoustid-index.source-archive="/usr/share/musicmeta/acoustid-index-source.tar.gz"
 
+# `MMO_PG_MAJOR`/`MMO_INDEX_COMMIT` beschreiben das Artefakt, nicht den
+# Betrieb: der Waechter prueft damit den Versions-Drift (E14) und weist beide
+# in `/status` aus (v2 §12). Sie stehen als Env **und** als OCI-Label — das
+# Label ist von aussen lesbar, die Env von innen.
 ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:/opt/supervisor/bin:${PATH}" \
-    MMO_PG_MAJOR=18
+    MMO_PG_MAJOR=18 \
+    MMO_INDEX_COMMIT=${ACOUSTID_INDEX_COMMIT}
 
 # Feste UIDs, bevor Postgres installiert wird: Bind-Mounts auf Unraid-Shares
 # brauchen berechenbare Eigentuemer (R14). 6081 ist die UID des

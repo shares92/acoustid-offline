@@ -1,4 +1,4 @@
-"""API-Service von acoustid-offline (Import-Name ``acoustid_api``).
+"""API-Service von musicmeta-offline (Import-Name ``acoustid_api``).
 
 Stand Phase 9: ``GET/POST /v2/lookup`` gegen den eigenen Bestand — ohne
 ``meta``, ohne Auth und ohne Rate-Limit (beides macht der Waechter). Die

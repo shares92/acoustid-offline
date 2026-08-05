@@ -13,15 +13,60 @@ from acoustid_watchdog.service import WatchdogService
 from shared.models import StackState
 
 
-def test_status_answers_with_the_four_promised_parts(client: TestClient) -> None:
-    """ARCHITECTURE §7: Stack-Zustand, Datenstand, letzter Update-Lauf, Version."""
+def test_status_answers_with_the_promised_parts(client: TestClient) -> None:
+    """ARCHITECTURE §7: Stack-Zustand, Datenstand, letzter Update-Lauf, Version.
+
+    Seit M2 zusaetzlich ``components`` (v2 §12) — **additiv**: die vier
+    Felder von Phase 14 behalten Namen und Form.
+    """
     response = client.get("/status")
     assert response.status_code == 200
 
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["version"] == __version__
-    assert set(payload) == {"status", "version", "stack", "data", "last_update_run"}
+    assert set(payload) == {
+        "status",
+        "version",
+        "stack",
+        "data",
+        "last_update_run",
+        "components",
+    }
+
+
+def test_the_stack_field_keeps_its_name(client: TestClient) -> None:
+    """E16: `stack` bleibt, obwohl es keinen Stack mehr gibt.
+
+    Der Ein-Container-Umbau haette hier eine Umbenennung nahegelegt — aber
+    das Feld ist ein bestehender Vertrag: der Container-Healthcheck und
+    jedes Betreiber-Skript lesen es. Eine Umbenennung braechte niemandem
+    etwas und braeche alles, was danach greift.
+    """
+    payload = client.get("/status").json()
+
+    assert "stack" in payload
+    assert set(payload["stack"]) == {"state", "state_display", "since", "detail"}
+
+
+def test_status_reports_the_baked_in_component_versions(
+    client: TestClient, service: WatchdogService
+) -> None:
+    """v2 §12: die eingebackenen Versionen sind in `/status` sichtbar."""
+    payload = client.get("/status").json()
+
+    assert payload["components"]["postgresql_major"] == service.settings.pg_major
+
+
+def test_a_missing_index_commit_is_null_not_empty(client: TestClient) -> None:
+    """Ausserhalb des Images gibt es kein eingebackenes Binary.
+
+    „Kein Wert" und „leerer Commit-Name" sind verschiedene Aussagen; nur
+    `null` ist ehrlich.
+    """
+    payload = client.get("/status").json()
+
+    assert payload["components"]["acoustid_index_commit"] is None
 
 
 def test_fresh_instance_reports_sleeping_and_no_data(client: TestClient) -> None:

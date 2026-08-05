@@ -151,7 +151,7 @@ def create_app(service: ApiService | None = None) -> FastAPI:
                 app.state.service.close()
 
     app = FastAPI(
-        title="acoustid-offline API",
+        title="musicmeta-offline API",
         summary="AcoustID-kompatibler Lookup gegen den eigenen Bestand",
         docs_url=None,
         redoc_url=None,

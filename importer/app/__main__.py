@@ -57,7 +57,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m acoustid_importer",
         description=(
-            "Delta-Importer von acoustid-offline: laedt die Tagesdateien, "
+            "Delta-Importer von musicmeta-offline: laedt die Tagesdateien, "
             "spielt sie transaktional ein und uebergibt neue Fingerprints an "
             "den Suchindex. Ergebnis als JSON, Exit-Codes siehe docs/importer-job.md."
         ),

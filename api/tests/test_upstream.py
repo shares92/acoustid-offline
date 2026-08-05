@@ -220,7 +220,7 @@ def test_the_request_is_the_original_submit_format() -> None:
     assert request.method == "POST"
     assert str(request.url) == UPSTREAM_URL
     assert request.headers["content-type"] == "application/x-www-form-urlencoded"
-    assert "acoustid-offline" in request.headers["user-agent"]
+    assert "musicmeta-offline" in request.headers["user-agent"]
     assert upstream.field("format") == "json"
 
 

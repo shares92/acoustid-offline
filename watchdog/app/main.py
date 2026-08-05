@@ -158,7 +158,7 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
                 await app.state.service.aclose()
 
     app = FastAPI(
-        title="acoustid-offline Waechter",
+        title="musicmeta-offline Waechter",
         summary="Status, Proxy und Admin-UI der selbst gehosteten Instanz",
         docs_url=None,
         redoc_url=None,
@@ -212,7 +212,9 @@ async def _status(request: Request) -> JSONResponse:
     """
     service: WatchdogService = request.app.state.service
     try:
-        data: dict[str, Any] = await run_in_threadpool(build_status, service.db, service.state)
+        data: dict[str, Any] = await run_in_threadpool(
+            build_status, service.db, service.state, service.settings
+        )
     except Exception:
         _LOG.exception("Statusabfrage fehlgeschlagen")
         return JSONResponse(
