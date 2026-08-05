@@ -36,6 +36,7 @@ anhalten.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -59,6 +60,13 @@ _LOG = logging.getLogger(__name__)
 #: 1 „GB" im Sinne von ``disk.min_free_gb`` — bewusst binaer (GiB), wie in
 #: :data:`acoustid_importer.diskguard.BYTES_PER_GB`.
 BYTES_PER_GB: Final = 1 << 30
+
+#: Umgebungsvariable mit dem Datenverzeichnis des Suchindex. Bewusst
+#: **ohne** ``MMO_``-Praefix: sie steuert den Container, nicht die
+#: Anwendung, und steht deshalb nicht im Bootstrap-Schema
+#: (:mod:`shared.env`, .env.example). Der Entrypoint exportiert sie an
+#: jedes Kind — auch an den Waechter (``supervisor/entrypoint.sh``).
+INDEX_DIR_ENV: Final = "ACOUSTID_INDEX_DIR"
 
 #: Messfunktion in der Signatur von :func:`shutil.disk_usage`; Tests setzen
 #: eine Attrappe ein, damit die Randfaelle ohne volle Platte pruefbar sind.
@@ -113,20 +121,31 @@ class DiskSpace:
 def write_paths(settings: EnvSettings, config: Config) -> tuple[Path, ...]:
     """Alle Pfade, auf die ein Job schreibt (ARCHITECTURE §3).
 
-    ==============  =========  =================================================
-    ``/import``     Array      Dump-Downloads und Staging (``MMO_DUMP_DIR``)
-    ``/data/db``    Array      PostgreSQL (``MMO_DB_DATA_ROOT``)
-    ``/config``     Cache      Zustand, Lookup-Cache, Logs (``MMO_DATA_DIR``)
-    ``backup.dir``  Array      Sicherungen — nur wenn eingerichtet
-    ==============  =========  =================================================
+    ====================  =========  ===========================================
+    ``/import``           Array      Dump-Downloads und Staging (``MMO_DUMP_DIR``)
+    ``/data/db``          Array      PostgreSQL (``MMO_DB_DATA_ROOT``)
+    ``/config``           Cache      Zustand, Lookup-Cache, Logs (``MMO_DATA_DIR``)
+    ``/index``            Cache      Suchindex (``ACOUSTID_INDEX_DIR``)
+    ``backup.dir``        Array      Sicherungen — nur wenn eingerichtet
+    ====================  =========  ===========================================
 
-    Der Suchindex-Mount (``/index``) fehlt bewusst: er waechst nur ueber
-    den Index-Feed, und dessen Schreibvorgang gehoert dem residenten
-    ``fpindex``-Prozess — der Waechter kennt sein Datenverzeichnis nicht
-    (es ist ein Container-Wert ohne ``MMO_``-Praefix, .env.example).
+    **Der Suchindex-Mount gehoert dazu** (F11). Er waechst mit jedem
+    Index-Feed, und laeuft er voll, endet der Import ebenso wie bei einem
+    vollen ``/import`` — nur ohne Vorwarnung. Sein Pfad steht nicht im
+    Bootstrap-Schema (:mod:`shared.env`), aber sehr wohl in der Umgebung:
+    ``supervisor/entrypoint.sh`` exportiert ``ACOUSTID_INDEX_DIR`` an jedes
+    Kind, und der Waechter ist eines davon. Gelesen wird er deshalb aus
+    ``os.environ`` — und **nur gemessen, wenn es ihn wirklich gibt**: ohne
+    Container zeigt der Vorgabewert ``/index`` ins Leere, und
+    :func:`_nearest_existing` kletterte von dort auf ``/`` hoch und maesse
+    das Wurzeldateisystem des Entwicklerrechners.
+
     Ab M4 kommen ``/data/covers`` und ``/data/tadb`` dazu.
     """
     paths = [settings.dump_dir, settings.db_data_root, settings.data_dir]
+    index_dir = os.environ.get(INDEX_DIR_ENV, "").strip()
+    if index_dir and Path(index_dir).is_dir():
+        paths.append(Path(index_dir))
     backup_dir = config.backup.directory
     if backup_dir is not None:
         paths.append(backup_dir)

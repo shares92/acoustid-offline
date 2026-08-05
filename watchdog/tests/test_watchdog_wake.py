@@ -31,6 +31,7 @@ from acoustid_watchdog.process import SupervisorClient, SupervisorError
 from acoustid_watchdog.stack import STACK_PROCESSES, ServiceGroupController
 from acoustid_watchdog.state import StackStateTracker
 from acoustid_watchdog.wake import (
+    NOT_READY_NOTIFY_AFTER,
     ReadinessProbe,
     StackNotReadyError,
     WakeCoordinator,
@@ -63,6 +64,18 @@ def _coordinator(
         poll_interval_s=0.01,
     )
     return coordinator, tracker
+
+
+async def _settled(coordinator: WakeCoordinator, *, timeout_s: float = 5.0) -> None:
+    """Wartet, bis der laufende Weckvorgang wirklich durch ist.
+
+    Eine abgelaufene Anfrage beendet den Vorgang **nicht** (``shield``) —
+    er laeuft mit seiner eigenen Frist weiter. Wer den naechsten Versuch
+    als eigenen Vorgang zaehlen will, muss den vorigen abwarten.
+    """
+    deadline = time.monotonic() + timeout_s
+    while coordinator.busy and time.monotonic() < deadline:
+        await asyncio.sleep(0.005)
 
 
 # --- Wecken -----------------------------------------------------------------
@@ -374,6 +387,75 @@ def test_a_successful_wake_reports_nothing() -> None:
 
     asyncio.run(scenario())
     assert notifications == []
+
+
+def test_a_readiness_timeout_reports_once_at_the_transition() -> None:
+    """F12: die Prozesse **laufen** — sie werden nur nicht bereit.
+
+    Bisher meldete nur der Scheduler-Pfad; ein client-geweckter Stack, der
+    nie fertig wurde, blieb still. Gemeldet wird der **Uebergang**, nicht
+    der Zustand: ein Client, der brav seinem `Retry-After` folgt, erzeugte
+    sonst alle 30 s eine Benachrichtigung.
+    """
+    notifications: list[Notification] = []
+    coordinator, state = _coordinator(
+        sleeping_stack(), FakeProbe(ready_after=10_000), notifications=notifications
+    )
+
+    async def scenario() -> None:
+        for _ in range(4):
+            with pytest.raises(StackNotReadyError):
+                await coordinator.ensure_ready(timeout_s=0.02)
+            # Der Vorgang laeuft nach dem Abbruch der Anfrage weiter
+            # (``shield``) — erst wenn er durch ist, zaehlt der naechste
+            # Versuch als neuer.
+            await _settled(coordinator)
+
+    asyncio.run(scenario())
+
+    # Vier Fehlversuche, genau eine Meldung — und der Wortlaut sagt „wird
+    # nicht bereit", nicht „liess sich nicht starten": gestartet ist er.
+    assert len(notifications) == 1
+    assert notifications[0].event is NotifyEvent.STACK_START_FAILED
+    assert "nicht bereit" in notifications[0].title
+    assert notifications[0].fields["versuche"] == NOT_READY_NOTIFY_AFTER
+    assert state.state is StackState.STARTING  # kein Fehlerzustand
+
+
+def test_a_single_slow_start_reports_nothing() -> None:
+    """Ein kalter Start braucht Zeit — das ist kein Befund."""
+    notifications: list[Notification] = []
+    coordinator, _state = _coordinator(
+        sleeping_stack(), FakeProbe(ready_after=1), notifications=notifications
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(StackNotReadyError):
+            await coordinator.ensure_ready(timeout_s=0.001)
+        await coordinator.ensure_ready(timeout_s=5)
+
+    asyncio.run(scenario())
+    assert notifications == []
+
+
+def test_the_counter_resets_once_the_stack_is_ready() -> None:
+    """Sonst meldete die naechste Stoerung nie wieder."""
+    probe = FakeProbe(ready_after=2)
+    notifications: list[Notification] = []
+    coordinator, _state = _coordinator(sleeping_stack(), probe, notifications=notifications)
+
+    async def scenario() -> None:
+        for _ in range(2):
+            with pytest.raises(StackNotReadyError):
+                await coordinator.ensure_ready(timeout_s=0.001)
+            await _settled(coordinator)
+        await coordinator.ensure_ready(timeout_s=5)
+
+    asyncio.run(scenario())
+
+    assert len(notifications) == 1
+    # Nach der Bereitschaft steht der Zaehler wieder auf 0.
+    assert coordinator._not_ready_wakes == 0
 
 
 def test_a_broken_notify_hook_does_not_break_the_wake() -> None:

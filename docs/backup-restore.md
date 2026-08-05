@@ -129,6 +129,14 @@ docker compose exec -d app /app/.venv/bin/python -m acoustid_importer \
     --mode bootstrap
 ```
 
+> **Während des Bootstraps keine Submits annehmen.** Ein von Hand
+> gestarteter Lauf hat den Schutz nicht, den der Wächter seinen eigenen
+> Jobs gibt (`/config/index-feed.busy`, ARCHITECTURE §8.12): eine
+> Einreichung erhöht die Index-Version mitten im Feed. Vereinzelte
+> Konflikte heilt der Feed inzwischen selbst, aber der sichere Weg bei
+> einem tagelangen Bootstrap ist `acoustid.submit.mode: off` in der
+> `config.yaml` — danach wieder zurückstellen.
+
 ### 3.4 Eigene Einreichungen zurückspielen
 
 **Erst wenn das Schema steht** (Schritt 3.3 hat die Migrationsgruppe `core`

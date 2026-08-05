@@ -603,6 +603,32 @@ def stack_start_failed(detail: str) -> Notification:
     )
 
 
+def stack_not_ready(*, waited_s: float, attempts: int) -> Notification:
+    """Die Prozesse **laufen**, werden aber nicht bereit (F12).
+
+    Ein anderer Fall als :func:`stack_start_failed`, und deshalb ein
+    eigener Wortlaut: „liessen sich nicht starten" waere hier schlicht
+    falsch — gestartet sind sie, nur der Healthcheck antwortet nicht
+    (Postgres in einer langen Recovery, ein Index, der noch laedt, eine
+    kaputte Konfiguration).
+
+    Gemeldet wird **zustandsgetrieben**, einmal beim Uebergang: sonst
+    erzeugte jeder Client, der brav seinem ``Retry-After`` folgt, alle
+    30-90 Sekunden eine neue Meldung.
+    """
+    return Notification(
+        event=NotifyEvent.STACK_START_FAILED,
+        title="musicmeta-offline: Stack wird nicht bereit",
+        message=(
+            "Die Prozesse laufen, melden sich aber nicht bereit — Anfragen "
+            "werden mit HTTP 503 beantwortet. Haeufigste Ursachen: eine lange "
+            "Datenbank-Recovery, ein noch ladender Suchindex oder ein "
+            "Zugangsproblem. Das Prozesslog unter /config/logs sagt, welches."
+        ),
+        fields={"gewartet_s": round(waited_s), "versuche": attempts},
+    )
+
+
 def upstream_gave_up(
     *, local_track_ids: Sequence[int], forward_attempts: int, forward_error: str | None
 ) -> Notification:

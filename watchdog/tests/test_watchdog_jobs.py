@@ -24,6 +24,7 @@ from typing import Any
 import pytest
 from watchdog_stubs import FakeSupervisor
 
+from acoustid_watchdog.events import recent_events
 from acoustid_watchdog.jobs import (
     INDEX_BUSY_FILENAME,
     INDEX_BUSY_MAX_AGE_S,
@@ -172,6 +173,32 @@ def test_a_missing_report_is_not_an_exception(tmp_path: Path) -> None:
     assert outcome.report is None
     assert outcome.result is RunResult.FAILED
     assert outcome.error_message == "Exit-Code 1"
+
+
+def test_success_without_a_report_is_noted(service: WatchdogService) -> None:
+    """F10: sonst waeren die Null-Kennzahlen spaeter nicht erklaerbar.
+
+    Der Returncode bleibt der Vertrag (E10) — der Lauf gilt weiter als
+    erfolgreich. Aber „0 Dateien, 0 Zeilen, erfolgreich" braucht eine
+    Erklaerung, und die steht jetzt im Ereignis-Log.
+    """
+    outcome = JobOutcome(returncode=0, report=None)
+    cycle, _runner = _cycle(service, FakeRunner({"acoustid_importer": outcome}))
+
+    result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert result.ok is True  # ok-Semantik unveraendert
+    messages = [event.message for event in recent_events(service.db, limit=30)]
+    assert any("ohne Report" in message for message in messages)
+
+
+def test_a_normal_success_is_not_flagged(service: WatchdogService) -> None:
+    cycle, _runner = _cycle(service)
+
+    asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    messages = [event.message for event in recent_events(service.db, limit=30)]
+    assert not any("ohne Report" in message for message in messages)
 
 
 def test_a_stale_report_is_removed_before_the_run(tmp_path: Path) -> None:

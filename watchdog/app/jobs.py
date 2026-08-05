@@ -827,6 +827,19 @@ class JobCycle:
         Warteschlangenlauf hat sie nicht und laesst sie auf 0 bzw. ``None``.
         """
         report = outcome.report or {}
+        if outcome.ok and outcome.report is None:
+            # **Erfolg ohne Report** (F10): der Prozess endete mit 0, hat
+            # aber nichts hinterlassen — abgeschnittene Datei, ein
+            # Schreibfehler, ein fremdes Kommando. Der Lauf gilt weiterhin
+            # als erfolgreich (der Returncode ist der Vertrag, E10), aber
+            # alle Kennzahlen stehen auf 0. Ohne diesen Vermerk waere das
+            # spaeter nicht erklaerbar: „0 Dateien, 0 Zeilen, erfolgreich".
+            self._service.log_event(
+                EventLevel.WARNING,
+                f"{kind.display_name} endete erfolgreich, aber ohne Report",
+                {"run_id": run_id, "returncode": outcome.returncode},
+                source=EVENT_SOURCE,
+            )
         files = report.get("files") or {}
         days = report.get("days") or {}
         run = await run_in_threadpool(

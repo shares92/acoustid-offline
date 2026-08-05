@@ -93,6 +93,17 @@ Lücken in der Historie (Import-Regel 5) lassen sich bewusst **nicht** per
 Kommandozeile übergehen: ein nachträglich eingespielter alter Tag würde
 neuere Upsert-Stände überschreiben.
 
+> **Achtung bei Läufen von Hand.** Startet der Wächter den Job (Termin oder
+> Trigger-API), hält er für dessen Dauer die Marke `/config/index-feed.busy`
+> und stellt eingehende Submits zurück (ARCHITECTURE §8.12). Ein per
+> `docker compose exec` gestarteter Lauf hat diesen Schutz **nicht**: eine
+> lokale Einreichung erhöht dann die Index-Version mitten im Feed. Seit
+> M2.5 wird ein solcher Konflikt zweimal geheilt (frische Version, Batch
+> erneut — inhaltlich folgenlos, weil dieselben Dokument-IDs mit denselben
+> Hashes gehen); ein **dauerhafter** zweiter Schreiber bricht den Lauf
+> weiterhin hart ab. Wer sichergehen will, stellt für die Dauer eines
+> Bootstraps `acoustid.submit.mode` auf `off`.
+
 ---
 
 ## 2. Exit-Codes

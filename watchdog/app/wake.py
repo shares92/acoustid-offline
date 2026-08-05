@@ -59,7 +59,7 @@ from starlette.concurrency import run_in_threadpool
 
 from acoustid_watchdog.control import GroupStatus, ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel
-from acoustid_watchdog.notify import Notification, stack_start_failed
+from acoustid_watchdog.notify import Notification, stack_not_ready, stack_start_failed
 from acoustid_watchdog.state import StackStateTracker
 from shared.models import StackState
 
@@ -88,6 +88,21 @@ DEFAULT_RETRY_AFTER_S: Final = 30
 #: weniger Sekunden, ist sie nicht bereit — die Frage wird ohnehin gleich
 #: wiederholt.
 DEFAULT_PROBE_TIMEOUT_S: Final = 5.0
+
+#: Nach so vielen erfolglosen Weckvorgaengen in Folge geht **eine** Meldung
+#: hinaus (F12).
+#:
+#: **Zwei und nicht einer:** ein einzelner verpasster Healthcheck ist der
+#: Normalfall eines kalten Starts (Postgres-Recovery, Index-``MAP_POPULATE``)
+#: — die naechste Anfrage findet den Stack fertig vor. Erst der zweite
+#: Vorgang, der ohne Bereitschaft endet, ist ein Befund.
+#:
+#: **Und genau einmal:** gemeldet wird der *Uebergang*, nicht der Zustand.
+#: Ein Client, der brav seinem ``Retry-After`` (30 s) folgt, erzeugte sonst
+#: dauerhaft alle halbe Minute eine Benachrichtigung. Zurueckgesetzt wird
+#: der Zaehler, sobald der Stack bereit ist — dasselbe Muster wie bei
+#: :attr:`WakeCoordinator._control_failures`.
+NOT_READY_NOTIFY_AFTER: Final = 2
 
 
 class StackNotReadyError(Exception):
@@ -215,6 +230,10 @@ class WakeCoordinator:
         #: Dasselbe fuer den Teilzustand „laeuft, aber nicht vollstaendig"
         #: (:meth:`_observe_partial`).
         self._partial: tuple[str, ...] = ()
+        #: Aufeinanderfolgende Weckvorgaenge, die ohne Bereitschaft endeten
+        #: (F12). Er entscheidet, wann **einmal** gemeldet wird, und wird
+        #: bei der naechsten Bereitschaft zurueckgesetzt.
+        self._not_ready_wakes = 0
         #: Zuletzt erhobener Zustand je Prozess (``("db", "RUNNING")``, …).
         #: Der Poller fragt ihn ohnehin alle 15 s ab; gemerkt wird er, damit
         #: `/metrics` den Prozess-Zustand ausweisen kann, **ohne** selbst
@@ -367,6 +386,12 @@ class WakeCoordinator:
         while True:
             if await run_in_threadpool(self._probe.ready):
                 waited_s = round(time.monotonic() - started_at, 1)
+                if self._not_ready_wakes:
+                    _LOG.info(
+                        "Stack ist wieder bereit",
+                        extra={"failed_attempts": self._not_ready_wakes},
+                    )
+                    self._not_ready_wakes = 0
                 self._ready = True
                 self._state.to(StackState.READY)
                 self._event(
@@ -384,11 +409,21 @@ class WakeCoordinator:
         # laenger als eine Anfrage warten darf. `starting` bleibt stehen,
         # die naechste Anfrage haengt sich an einen neuen Vorgang.
         waited_s = round(time.monotonic() - started_at, 1)
+        self._not_ready_wakes += 1
         self._event(
             EventLevel.WARNING,
             "Stack war nicht rechtzeitig bereit",
-            {"waited_s": waited_s},
+            {"waited_s": waited_s, "attempts": self._not_ready_wakes},
         )
+        if self._not_ready_wakes == NOT_READY_NOTIFY_AFTER:
+            # **Einmal beim Uebergang**, nicht bei jedem Versuch (F12): ein
+            # Client, der brav seinem `Retry-After` folgt, erzeugte sonst
+            # alle 30-90 s eine Meldung. Zurueckgesetzt wird der Zaehler,
+            # sobald der Stack bereit ist — dasselbe Muster wie bei
+            # `_control_failures`.
+            self._send_notification(
+                stack_not_ready(waited_s=waited_s, attempts=self._not_ready_wakes)
+            )
         raise StackNotReadyError(f"Stack wurde nicht binnen {waited_s:g} s bereit")
 
     # --- Schlafen legen -----------------------------------------------------

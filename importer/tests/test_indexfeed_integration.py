@@ -32,7 +32,11 @@ import pytest
 
 from acoustid_importer.dbimport import import_file, import_files
 from acoustid_importer.errors import IndexFeedError
-from acoustid_importer.indexfeed import METADATA_LAST_ID, feed_index
+from acoustid_importer.indexfeed import (
+    METADATA_LAST_ID,
+    VERSION_MISMATCH_RETRIES,
+    feed_index,
+)
 from acoustid_importer.streams import DeltaFile, Stream
 from shared.env import EnvSettings
 from shared.fpindex import FpIndexClient, Insert, extract_query
@@ -328,10 +332,17 @@ def test_a_foreign_writer_between_two_batches_stops_the_feed(
     calls = 0
 
     def meddling_update(changes, **kwargs):  # type: ignore[no-untyped-def]
+        """Ein **dauerhafter** zweiter Schreiber: er stoert vor jedem Batch.
+
+        Seit M2.5 wiederholt der Feed einen Versionskonflikt begrenzt
+        (:data:`VERSION_MISMATCH_RETRIES`, F13) — eine einmalige Stoerung
+        wuerde also geheilt. Der harte Abbruch gilt weiterhin dem Fall, den
+        er beschreibt: einem zweiten Prozess, der laufend schreibt.
+        """
         nonlocal calls
         calls += 1
-        if calls == 2:
-            original_update([Insert(doc_id=999, hashes=[16, 32, 48])])
+        if calls >= 2:
+            original_update([Insert(doc_id=999 + calls, hashes=[16, 32, 48])])
         return original_update(changes, **kwargs)
 
     index.update = meddling_update  # type: ignore[method-assign]
@@ -341,12 +352,65 @@ def test_a_foreign_writer_between_two_batches_stops_the_feed(
     # Der erste Batch ist durch, der zweite gar nicht erst geschrieben.
     assert count(db, "indexed_at IS NOT NULL") == 1
     assert count(db, "indexed_at IS NULL") == 1
+    # Und es wurde wirklich wiederholt, bevor aufgegeben wurde.
+    assert calls >= 2 + VERSION_MISMATCH_RETRIES
 
     # Ohne die Sicherung laeuft der Rest durch — der Arbeitsvorrat ist intakt.
     index.update = original_update  # type: ignore[method-assign]
     report = feed_index(db, index, max_hashes=QUERY_HASHES, guard_version=False)
     assert report.documents == 1
     assert count(db, "indexed_at IS NULL") == 0
+
+
+def test_a_single_submission_does_not_kill_the_feed(
+    db: psycopg.Connection, index: FpIndexClient, write_delta: Callable[..., Path]
+) -> None:
+    """F13: eine lokale Einreichung mitten im Feed wird geheilt.
+
+    Der Guard erkennt jeden zweiten Schreiber — aber nicht jeder ist ein
+    zweiter *Importer*. Ein einzelnes ``/v2/submit`` erhoeht die Version
+    ebenfalls, und waehrend eines **von Hand** gestarteten Bootstraps
+    (docs/importer-job.md) schuetzt die Busy-Marke des Waechters nicht.
+    Ein Lauf ueber Stunden bis Tage darf daran nicht sterben: derselbe
+    Batch traegt dieselben Dokument-IDs mit denselben Hashes, ein zweiter
+    Versuch ist inhaltlich folgenlos.
+    """
+    import_file(
+        db,
+        write_delta(
+            DeltaFile(DAY, Stream.FINGERPRINT).name,
+            [
+                {
+                    "id": fp_id,
+                    "fingerprint": list(range(fp_id * 1000, fp_id * 1000 + 300)),
+                    "length": 30,
+                    "created": STAMP,
+                }
+                for fp_id in (1, 2)
+            ],
+        ),
+    )
+
+    original_update = index.update
+    calls = 0
+
+    def one_submission(changes, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            # Genau eine Einreichung, wie sie die API schreibt — mit einer
+            # Dokument-ID aus dem reservierten Bereich (§5.3).
+            original_update([Insert(doc_id=2**31 + 7, hashes=[16, 32, 48])])
+        return original_update(changes, **kwargs)
+
+    index.update = one_submission  # type: ignore[method-assign]
+    report = feed_index(db, index, max_hashes=QUERY_HASHES, batch_size=1)
+
+    # Beide Fingerprints sind drin — der Lauf lief durch.
+    assert report.documents == 2
+    assert count(db, "indexed_at IS NULL") == 0
+    # Und die Wiederholung hat wirklich stattgefunden.
+    assert calls == 3
 
 
 def test_the_feed_creates_the_index_if_it_is_missing(

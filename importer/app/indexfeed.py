@@ -47,6 +47,7 @@ from acoustid_importer.errors import IndexFeedError
 from shared.fpindex import (
     RECOMMENDED_BATCH_SIZE,
     FpIndexClient,
+    FpIndexError,
     FpIndexVersionMismatchError,
     Insert,
     extract_query,
@@ -55,6 +56,7 @@ from shared.fpindex import (
 __all__ = [
     "DEFAULT_BATCH_SIZE",
     "METADATA_LAST_ID",
+    "VERSION_MISMATCH_RETRIES",
     "IndexFeedReport",
     "feed_index",
 ]
@@ -69,6 +71,21 @@ DEFAULT_BATCH_SIZE: Final = RECOMMENDED_BATCH_SIZE
 #: ``fingerprint.id``. Rein informativ (fuer Diagnose und Admin-UI) — die
 #: verbindliche Buchfuehrung ist ``fingerprint.indexed_at`` in Postgres.
 METADATA_LAST_ID: Final = "last_fp_id"
+
+#: Wie oft ein Batch nach einem Versionskonflikt wiederholt wird (F13).
+#:
+#: Der ``expected_version``-Guard erkennt einen zweiten Schreiber — aber
+#: nicht jeder zweite Schreiber ist ein zweiter *Importer*: eine einzelne
+#: lokale Einreichung erhoeht die Version ebenfalls. Waehrend eines vom
+#: Waechter gesteuerten Laufs verhindert das die Busy-Marke (§8.12); ein
+#: **von Hand** gestarteter Bootstrap (docs/importer-job.md) hat diesen
+#: Schutz nicht — und laeuft Stunden bis Tage. Ein einziger Submit in
+#: diesem Fenster warf bisher den ganzen Lauf weg.
+#:
+#: **Zwei Wiederholungen**, dann harter Abbruch: eine vereinzelte
+#: Einreichung ist damit geheilt, ein echter zweiter Importer schreibt
+#: weiter und faellt weiterhin auf. Jeder Versuch ist eine laute Warnung.
+VERSION_MISMATCH_RETRIES: Final = 2
 
 _SELECT_FIRST: Final = """
 SELECT id, fingerprint
@@ -260,17 +277,56 @@ def _write_batch(
     version: int,
     *,
     guard_version: bool,
+    retries: int = VERSION_MISMATCH_RETRIES,
 ) -> int:
-    """Ein ``_update``; gibt die neue Indexversion zurueck."""
-    try:
-        return client.update(
-            changes,
-            metadata={METADATA_LAST_ID: str(changes[-1].doc_id)},
-            expected_version=version if guard_version else None,
-        )
-    except FpIndexVersionMismatchError as error:
-        raise IndexFeedError(
-            f"Der Index steht nicht mehr auf Version {version} — ein zweiter Schreiber "
-            "hat ihn waehrend des Feeds veraendert. Der Batch wurde nicht geschrieben; "
-            f"bitte nur einen Importer gleichzeitig laufen lassen ({error})"
-        ) from error
+    """Ein ``_update``; gibt die neue Indexversion zurueck.
+
+    **Ein Versionskonflikt wird begrenzt geheilt** (M2.5, Review-Fund F13).
+    Der Guard erkennt einen zweiten Schreiber — aber nicht jeder zweite
+    Schreiber ist ein zweiter *Importer*: eine einzelne lokale Einreichung
+    erhoeht die Version ebenfalls (``acoustid_api.submit``), und
+    waehrend eines **von Hand** gestarteten Laufs schuetzt die Busy-Marke
+    des Waechters nicht (docs/importer-job.md). Ein Bootstrap laeuft
+    Stunden bis Tage; ein einziger Submit in diesem Fenster warf bisher
+    den ganzen Lauf weg.
+
+    Wiederholt wird deshalb bis zu :data:`VERSION_MISMATCH_RETRIES` Mal
+    mit **frisch gelesener** Version — inhaltlich ist das folgenlos, weil
+    derselbe Batch dieselben Dokument-IDs mit denselben Hashes schickt.
+    Jeder Versuch ist eine laute Warnung, und danach bleibt es beim harten
+    Abbruch: ein echter zweiter Importer schreibt weiter und wird so
+    weiterhin erkannt.
+    """
+    attempt = 0
+    while True:
+        try:
+            return client.update(
+                changes,
+                metadata={METADATA_LAST_ID: str(changes[-1].doc_id)},
+                expected_version=version if guard_version else None,
+            )
+        except FpIndexVersionMismatchError as error:
+            attempt += 1
+            if attempt > retries:
+                raise IndexFeedError(
+                    f"Der Index steht nicht mehr auf Version {version} — ein zweiter "
+                    f"Schreiber veraendert ihn waehrend des Feeds (nach {retries} "
+                    "Wiederholungen aufgegeben). Der Batch wurde nicht geschrieben; "
+                    f"bitte nur einen Importer gleichzeitig laufen lassen ({error})"
+                ) from error
+            try:
+                version = client.index_info().version
+            except FpIndexError as read_error:  # pragma: no cover - Index eben noch da
+                raise IndexFeedError(
+                    f"Der Index steht nicht mehr auf Version {version}, und die neue "
+                    f"liess sich nicht lesen ({read_error})"
+                ) from error
+            _LOG.warning(
+                "Indexversion hat sich waehrend des Feeds geaendert — Batch wird wiederholt",
+                extra={
+                    "attempt": attempt,
+                    "max_attempts": retries,
+                    "new_version": version,
+                    "documents": len(changes),
+                },
+            )

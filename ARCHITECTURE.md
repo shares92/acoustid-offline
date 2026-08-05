@@ -911,11 +911,11 @@ Format-Schicht.
 8. **Plattenplatz-Guard.** Vor jedem Import-/Crawl-Segment: freier Platz ≥
    `disk.min_free_gb`, sonst Abbruch + Notification. Geprüft wird
    **jeder** Schreib-/Staging-Pfad, nicht nur einer (E11): der Wächter
-   misst vor jedem Job `/import`, `/data/db`, `/config` und `backup.dir`
-   (je Dateisystem einmal, `watchdog/app/diskspace.py`), der Importer
-   zusätzlich laufend sein Dump-Verzeichnis. Eine Unterschreitung bricht
-   den Lauf ab, **bevor** die Prozesse geweckt werden — er steht dann als
-   `aborted` in der Historie.
+   misst vor jedem Job `/import`, `/data/db`, `/config`, `/index` und
+   `backup.dir` (je Dateisystem einmal, `watchdog/app/diskspace.py`), der
+   Importer zusätzlich laufend sein Dump-Verzeichnis. Eine Unterschreitung
+   bricht den Lauf ab, **bevor** die Prozesse geweckt werden — er steht
+   dann als `aborted` in der Historie.
 9. **Upstream-Queue.** Fehlgeschlagene Upstream-Submits bleiben in
    `local_submission` (`forward_failed`) und werden beim nächsten
    Update-Lauf erneut versucht; nach 7 Fehlversuchen Notification und
@@ -936,6 +936,13 @@ Format-Schicht.
     sichtbar wird. Die Antwort bleibt `pending`, also unverändert.
     Umgesetzt über eine Marke auf `/config` (`index-feed.busy`);
     nachgetragen wird im `queue-send`-Job, unabhängig vom Submit-Modus.
+    Die Marke trägt ihren Setzzeitpunkt und **läuft nach 24 Stunden ab** —
+    nach einem harten Prozessende bliebe sie sonst für immer liegen. Sie
+    schützt nur wächtergesteuerte Läufe; ein von Hand gestarteter
+    Bootstrap hat sie nicht, deshalb heilt der Index-Feed einen
+    vereinzelten Versionskonflikt selbst (zwei Wiederholungen mit frischer
+    Version, danach harter Abbruch — ein echter zweiter Importer fällt
+    weiterhin auf).
 13. **Genau ein Job gleichzeitig.** Zwei Importer nebeneinander kämen sich
     in `import_state` ins Gehege, zwei Sicherungen schrieben in dasselbe
     Verzeichnis. Der Job-Manager des Wächters lehnt den zweiten ab; der

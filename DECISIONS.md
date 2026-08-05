@@ -5,6 +5,90 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-05: M2.5-Nacharbeit — Findings des blinden Doppel-Reviews
+
+Entscheidung (Nacharbeitsrunde nach Opus- und GPT-5.6-Review, alle
+Findings adversarial verifiziert):
+(a) **Jedes `start_run` bekommt garantiert sein `finish_run`** (K1). Drei
+Wege ließen eine Zeile offen: eine Ausnahme im Zyklus, ungeschützte
+Dateizugriffe im Runner und ein hartes Prozessende. Eine offene Zeile
+heißt „läuft noch" und ist die Job-Sperre des Idle-Stopps (§8.5) — die
+Instanz läge danach **dauerhaft wach** und zeigte in `/status` einen
+Import an, den es nicht gibt. Der Zyklus läuft jetzt in einem `try` (auch
+`CancelledError`), der Runner fängt `OSError`, und
+`WatchdogService.open()` rekonziliert offene Zeilen aus einem **früheren
+Prozessleben**. Grenze ist der eigene Prozessstart — dieser Prozess hat
+noch keine Zeile geschrieben, kann also keinen eigenen Job treffen.
+(b) **Fristen-Kette** (K2): `stop_grace_period` 360 s ≥
+`[program:watchdog] stopwaitsecs` 300 s ≥ `SHUTDOWN_WAIT_S` /
+`SIGTERM_GRACE_S` 240 s, testgekoppelt in `tests/test_repo_layout.py`.
+Vorher stand eine 900-s-Frist hinter einem `stopwaitsecs=30`: mit
+`killasgroup=true` wurde der Importer 30 s nach SIGTERM erschlagen,
+obwohl er erst nach der laufenden Tagesdatei aufhört. Der Lifespan
+**wartet** jetzt auf den Job (`JobManager.shutdown`), schickt ihm aber
+weiterhin kein zweites Signal — sonst würde aus dem geordneten Exit-Code 8
+eine zurückgerollte Transaktion. Ohne das Warten wäre der Job ein Waise
+unter `tini`, mit Busy-Marke und offener Zeile.
+(c) **Cache-Invalidierung auch nach dem Nachlauf** (K3): sie lief bisher
+**vor** `_queue_send`; dort indexierte Einreichungen blieben bis zu 24 h
+unsichtbar oder veraltet gecacht. Zweiter Aufruf mit Grund
+`deferred_submissions`, wenn der Nachlauf `indexed > 0` meldet.
+(d) **Der Nachlauf schleift** (K4): `index_pending` arbeitet 200 Einträge
+je Aufruf; ein einzelner Aufruf ließ im Restore-Szenario 4800 von 5000
+still liegen — und der Lauf meldete „ok". Rundendeckel 500 als Notbremse.
+(e) **Gemeldet wird nur, was DIESER Lauf aufgibt** (K5): der Bestand
+aller `forward_failed >= 7` feuerte jede Nacht dieselbe Meldung; nach
+Wochen hätte der Betreiber gelernt, sie zu ignorieren.
+(f) **Alle `backup-*.part`-Reste werden geräumt** (K6), nicht nur der
+eigene Sekunden-Stempel: jeder Rest enthält eine `config.yaml` mit
+Zugängen im Klartext, und niemand räumte ihn je weg.
+(g) **Die Busy-Marke läuft ab** (F7): 24 h, gelesen aus dem Zeitstempel in
+der Datei. Nach einem `SIGKILL` läuft kein `finally`, und eine ewige Marke
+hielte eigene Einreichungen dauerhaft unindexiert. **Blindes Löschen beim
+Start wurde ausdrücklich verworfen** — überlebt der Importer den Wächter
+(Kind von `tini`, während supervisord den Wächter neu startet), öffnete
+das Löschen das Kollisionsfenster in voller Feed-Breite; geräumt wird
+deshalb nur die abgelaufene Marke. Im Zweifel gilt sie als gültig.
+(h) **Idle- und Job-Zähler getrennt** (F8): `IdleStopper.check()` rief bei
+jedem offenen Lauf `activity.touch()` — denselben Zähler, den der Zyklus
+danach vergleicht. Jeder Job über 30 s sah damit „es kamen Anfragen", und
+der Stack schlief nach einem Import praktisch **nie** wieder ein (das
+Gegenteil der Definition of Done). Jetzt: `touch()` = echte Anfrage,
+`defer()` = Job-Aufschub. Dazu wird `requests_before` **vor** dem Wecken
+gelesen, und „haben wir geweckt?" kommt aus der Differenz des
+Weckvorgang-Zählers plus einem frischen `observe()` — `wake.ready` wird
+von Betreiberstart und `invalidate()` in beide Richtungen verfälscht.
+(i) **Nachlauf auch nach gescheitertem Delta-Lauf** (F9), aber nicht nach
+Abbruch und nicht bei totem Stack: die zurückgestellten Submits hängen
+nicht am Ergebnis des Imports.
+(j) **„Erfolg ohne Report" wird vermerkt** (F10) — sonst wäre „0 Dateien,
+0 Zeilen, erfolgreich" später nicht erklärbar. Die `ok`-Semantik bleibt
+unverändert: der Returncode ist der Vertrag (E10).
+(k) **`/index` gehört in den Plattenplatz-Guard** (F11); die frühere
+Begründung („der Wächter kennt ihn nicht") war schlicht falsch — der
+Entrypoint exportiert `ACOUSTID_INDEX_DIR` an jedes Kind. Gemessen wird
+nur, wenn der Pfad wirklich existiert: sonst kletterte die Messung auf
+`/` und hielte das Wurzeldateisystem für den Suchindex.
+(l) **Readiness-Timeout meldet zustandsgetrieben** (F12): einmal beim
+Übergang (nach zwei erfolglosen Weckvorgängen), zurückgesetzt bei
+Bereitschaft. Anfrage-getrieben hätte jeder Client, der seinem
+`Retry-After` folgt, alle 30 s eine Meldung erzeugt. Eigener Wortlaut —
+„ließen sich nicht starten" wäre falsch, die Prozesse **laufen**.
+(m) **Der Index-Feed heilt einen vereinzelten Versionskonflikt** (F13):
+zweimal mit frisch gelesener Version wiederholen, dann harter Abbruch.
+Nicht jeder zweite Schreiber ist ein zweiter Importer — eine lokale
+Einreichung erhöht die Version ebenfalls, und ein **von Hand** gestarteter
+Bootstrap läuft Stunden bis Tage ohne den Schutz der Busy-Marke. Die
+Erkennung eines echten zweiten Importers bleibt erhalten; dazu
+Warnhinweise in docs/importer-job.md und docs/backup-restore.md.
+Begründung: je Punkt oben.
+Alternativen (als schädlich verworfen): Busy-Marke beim Start blind
+löschen (g); `JobOutcome.ok` an einen verwertbaren Report binden — stufte
+legitimen Erfolg als Fehlschlag ein (j); Readiness-Meldung
+anfrage-getrieben (l); `kind='update'` erhalten oder doppelt schreiben —
+die Tabelle hatte nachweislich nie einen Produktions-Schreiber;
+SQLite-Migrationen in Dateien auslagern.
+
 ## 2026-08-05: Submits während des Update-Laufs werden zurückgestellt
 
 Entscheidung (Betreiber): Trifft ein `/v2/submit` ein, während der

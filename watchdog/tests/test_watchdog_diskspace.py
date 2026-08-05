@@ -5,8 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from acoustid_watchdog.diskspace import (
     BYTES_PER_GB,
+    INDEX_DIR_ENV,
     DiskSpace,
     measure,
     shortfalls,
@@ -95,16 +98,45 @@ def test_without_a_backup_directory_nothing_is_added(tmp_path: Path) -> None:
     assert len(write_paths(settings, Config())) == 3
 
 
-def test_the_search_index_mount_is_not_checked(tmp_path: Path) -> None:
-    """Der Index-Mount hat keinen `MMO_`-Wert — der Waechter kennt ihn nicht.
+def test_the_search_index_mount_is_checked_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F11: er waechst mit jedem Feed — laeuft er voll, endet der Import.
 
-    (Der Vorgabewert des Containers ist ``/index``; er kommt aus
-    ``ACOUSTID_INDEX_DIR`` und steht bewusst nicht im Bootstrap-Schema.)
+    Sein Pfad steht nicht im Bootstrap-Schema, aber sehr wohl in der
+    Umgebung: der Entrypoint exportiert ``ACOUSTID_INDEX_DIR`` an jedes
+    Kind, und der Waechter ist eines davon.
     """
+    index_dir = tmp_path / "index"
+    index_dir.mkdir()
+    monkeypatch.setenv(INDEX_DIR_ENV, str(index_dir))
     settings = EnvSettings(
         data_dir=tmp_path / "config", dump_dir=tmp_path / "import", db_data_root=tmp_path / "db"
     )
-    assert Path("/index") not in write_paths(settings, Config())
+
+    assert index_dir in write_paths(settings, Config())
+
+
+def test_a_missing_index_mount_is_left_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ohne Container zeigt der Vorgabewert ins Leere.
+
+    Ihn trotzdem zu messen hiesse, ueber `_nearest_existing` bis ``/``
+    hochzuklettern und das Wurzeldateisystem des Entwicklerrechners fuer
+    den Suchindex zu halten.
+    """
+    monkeypatch.setenv(INDEX_DIR_ENV, str(tmp_path / "gibt-es-nicht"))
+    settings = EnvSettings(data_dir=tmp_path / "config")
+
+    assert len(write_paths(settings, Config())) == 3
+
+
+def test_without_the_variable_nothing_is_added(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(INDEX_DIR_ENV, raising=False)
+    settings = EnvSettings(data_dir=tmp_path / "config")
+
+    assert len(write_paths(settings, Config())) == 3
 
 
 # --- Die Messung ------------------------------------------------------------
