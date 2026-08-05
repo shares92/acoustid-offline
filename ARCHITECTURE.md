@@ -28,25 +28,30 @@ Stand: 2026-08-05 (v2-Stand nach M0/M1a/M1b/M2; DB-Spaltenschema aus Phase 0).
 
 ## 1. Zielsetzung
 
-Selbst gehostete, offline-fähige AcoustID-Instanz als Docker-Stack:
+Selbst gehostete, offline-fähige AcoustID-Instanz in **einem** Docker-Container:
 Audio-Fingerprint-Lookup (Chromaprint → AcoustID-UUID → MusicBrainz-Recording
 inkl. Metadaten) ohne Abhängigkeit vom öffentlichen api.acoustid.org.
 
 **Erfolgskriterien:**
 1. Standard-Clients (primär DroppedNeedle, außerdem Picard/beets per
    URL-Umbiegung) bekommen auf `/v2/lookup` korrekte, API-kompatible Antworten.
-2. Der Stack schläft im Normalzustand vollständig (Array-Platten dürfen
-   herunterfahren); nur der Wächter läuft dauerhaft auf dem Cache.
+2. Im Normalzustand ruhen die Prozesse, die das Array brauchen — Postgres
+   und API-Dienst sind gestoppt, die Array-Platten dürfen herunterfahren.
+   Dauerhaft laufen nur der Wächter und der Suchindex, beide auf dem
+   Cache-Pool (der Index bleibt resident, weil sein Kaltstart den ganzen
+   Index liest — E12, §3).
 3. Der Datenbestand aktualisiert sich täglich automatisch per Delta-Import,
    inkl. Selbst-Wecken und Wieder-Einschlafen.
 4. Läuft auf jedem Docker-Host; Referenz-Deployment ist Unraid
-   (DB/Index auf dem Array, Wächter auf dem Cache-Pool).
+   (DB auf dem Array; Suchindex und Wächter-Daten auf dem Cache-Pool).
 
 ## 2. Constraints
 
-- **Host:** Unraid; Postgres + Index auf dem Array (Spindeln), Wächter +
-  Cache-Daten auf dem SSD-Cache-Pool. Cache zu klein für den Datenbestand
-  (dreistellige GB-Größe erwartet und akzeptiert).
+- **Host:** Unraid; Postgres auf dem Array (Spindeln), **Suchindex** und
+  Wächter-Daten auf dem SSD-Cache-Pool (Index-Entscheid 2026-07-25: sein
+  Kaltstart auf Spindeln endet im Timeout). Der Cache ist zu klein für den
+  Datenbestand (dreistellige GB-Größe erwartet und akzeptiert), für den
+  Index mit ~70 GB reicht er.
 - **API-Kompatibilität** zu api.acoustid.org ist Pflicht (Drittclients).
 - **MusicBrainz:** Lokaler Spiegel vorhanden (musicbrainz-docker-Stack,
   eigene Postgres). Direkter Read-only-DB-Zugriff wird genutzt.
@@ -106,10 +111,11 @@ Suchindex hat keine Auth und darf nie nach außen.
 **Schlaf-Logik (prozessintern):** „schlafend" heißt, dass `db` und `api`
 gestoppt sind; auf `/data/db` passiert kein I/O, die Array-Platten dürfen
 herunterfahren. Der Wächter beantwortet `/status` und die Admin-UI
-ausschließlich aus `/config`. Eine eingehende API-Anfrage oder ein fälliger
-Job lässt ihn die Prozesse der Reihe nach starten — sequenzieller Start mit
-Readiness-Gates, die Datenbank hart über `pg_isready`; die Anfrage wird
-währenddessen gehalten (§7).
+ausschließlich aus `/config`. Eine eingehende API-Anfrage lässt ihn die
+Prozesse der Reihe nach starten — sequenzieller Start mit Readiness-Gates,
+die Datenbank hart über `pg_isready`; die Anfrage wird währenddessen
+gehalten (§7). Dass auch ein **fälliger Job** weckt, kommt mit dem
+Scheduler in M2.5.
 
 **Datenflüsse:**
 - Client → Wächter (Rate-Limit → Auth → Lookup-Cache) → API-Prozess →
@@ -610,10 +616,11 @@ Risiko R7 der M0-Analyse. Dieselbe Regel gilt für den Env-Prefix
 | `mb.keep_submitted_mbid` | `false` | Redirect-Auflösung (§5.4): `false` = Antwort trägt die kanonische MBID, `true` = die eingereichte wird durchgereicht (Phase 10) |
 
 **Platzhalter der Scope-Erweiterung (v2 §7, seit M2 im Schema).** Diese
-Schlüssel stehen ab M2 in `config.yaml` und Admin-UI, damit ein Betreiber
-seine Zugänge schon hinterlegen kann; die auswertende Fachlogik kommt mit
-M3–M6. Bis dahin sind es reine Trägerwerte — alle so vorbelegt, dass die
-Quelle **aus** ist (v2 §2 „Repo-Defaults sind konservativ"):
+Schlüssel stehen ab M2 in der `config.yaml`, damit ein Betreiber seine
+Zugänge schon hinterlegen kann; die auswertende Fachlogik kommt mit M3–M6,
+die Eingabefelder dafür mit der Admin-UI in M8. Bis dahin sind es reine
+Trägerwerte — alle so vorbelegt, dass die Quelle **aus** ist (v2 §2
+„Repo-Defaults sind konservativ"):
 
 | Schlüssel | Default | Bedeutung |
 |---|---|---|
@@ -925,7 +932,7 @@ kommen die neuen Subsysteme als eigene Workspace-Member dazu
 Dump-Fixtures sind nicht committet —
 `tests/fixtures/fetch_fixtures.py` beschafft sie reproduzierbar.
 Repo: https://github.com/shares92/musicmeta-offline (Reihenfolge der
-Umbenennung: README „Repo-Umbenennung").
+Umbenennung: README „Umbenennung: acoustid-offline → musicmeta-offline").
 
 ## 11. Bewusst ausgeschlossen
 
@@ -975,9 +982,9 @@ Offene Punkte:
 14. Score-Parität mit acoustid.org (fpstore-Formel nicht öffentlich):
     optionaler empirischer Abgleich mit Test-Fingerprints gegen die
     öffentliche API.
-15. Config-Flag für MBID-Redirect-Durchreichung (§5.4) hat noch keinen
-    §6-Schlüssel — wird bei Bedarf in Phase 10 als Projekt-Ergänzung
-    definiert (dann §6 + DECISIONS + Schema nachziehen).
+15. ~~Config-Flag für MBID-Redirect-Durchreichung~~ — erledigt Phase 10:
+    `mb.keep_submitted_mbid` steht in §6, im Schema und in DECISIONS
+    (E16 bestätigt ihn für v2).
 16. Der pg_acoustid-Test-Container (CI-Bit-Verifikation, Phase 9) baut
     den Extension-Quelltext zur Bauzeit aus dem Upstream-Repo (letzter
     Commit 2021, per SHA gepinnt). Verschwindet das Repo, bricht der
@@ -992,6 +999,10 @@ Risiken (Priorität aus dem Handoff):
    nächtliches Zeitfenster.
 4. MB-Schema-Kopplung (niedrig) — mitigiert durch Query-Schicht +
    degradierten Betrieb.
-5. docker.sock im Wächter (akzeptiert) — minimaler Code, Passwort-Login,
-   Rate-Limit, LAN-Betrieb.
+5. ~~docker.sock im Wächter (akzeptiert)~~ — **entfallen mit M1b (E1):**
+   der Wächter steuert die Prozesse über den supervisord-Socket, es gibt
+   gar keinen Docker-Zugriff mehr aus dem Container (§8.1). Die alte
+   Mitigation („minimaler Codepfad") ist damit gegenstandslos;
+   `tests/test_repo_layout.py::test_no_docker_socket_anywhere_in_the_app`
+   hält fest, dass der Pfad nicht zurückkehrt.
 6. Lizenz CC BY-SA 3.0 (niedrig) — README-Hinweis bei Weitergabe.

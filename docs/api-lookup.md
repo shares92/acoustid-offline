@@ -1,6 +1,8 @@
 # API-Dienst: `/v2/lookup` und `/v2/lookup/batch` (Phasen 9, 10 und 13)
 
-Referenz zu den beiden Lookup-Endpunkten des Containers `acoustid-api`.
+Referenz zu den beiden Lookup-Endpunkten des **API-Prozesses** `api` — seit
+dem Ein-Container-Umbau (M1b) kein eigener Container mehr, sondern einer
+der vier supervisord-Prozesse im Container (ARCHITECTURE §3).
 Vertrag und Begründungen: ARCHITECTURE §5.3, §5.4, §6 („Batch-Limit") und §7
 sowie [docs/research/phase1-api-formate.md](research/phase1-api-formate.md),
 [docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md)
@@ -93,9 +95,20 @@ Die Antwort trägt **nicht** das AcoustID-Fehlerformat — dessen 19 Codes
 passen auf keinen der Fälle. Auch ein Fehler in der Prüfung selbst wird zu
 `503`: für den Wächter bedeuten alle Misserfolge dasselbe.
 
-Derselbe Endpunkt ist seit Phase 15 der **Container-Healthcheck** des
-Dienstes (`docker-compose.yml`), damit `docker ps` etwas Aussagekräftiges
-zeigt. Von außen erreichbar wird er dadurch nicht.
+Derselbe Endpunkt ist seit Phase 15 das **Readiness-Gate des Wächters**:
+beim Wecken fragt er nacheinander `pg_isready`, `/<name>/_health` des
+Suchindex und dann diese URL (`MMO_API_HEALTH_URL`,
+`watchdog/app/stack.py`) — erst danach gilt der Stack als `bereit` und die
+gehaltene Anfrage geht durch.
+
+**Nicht** zu verwechseln mit dem **Container**-Healthcheck: der fragt
+`GET /status` auf `MMO_PORT` beim Wächter (`docker-compose.yml`) und weckt
+garantiert nichts — `unhealthy` heißt „der Wächter ist tot", nicht „das
+System schläft".
+
+Von außen ist `/_health` nicht erreichbar: der Proxy hat den Pfad in seiner
+Sperrliste (`DENIED_PATHS`, `watchdog/app/main.py`) und antwortet mit 404,
+und der API-Prozess lauscht ohnehin nur auf dem containerinternen Loopback.
 
 ### Reload der `config.yaml` im laufenden Betrieb (Phase 15)
 

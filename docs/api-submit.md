@@ -1,7 +1,9 @@
 # API-Dienst: `/v2/submit` und `/v2/submission_status` (Phasen 11–13)
 
-Referenz zum Submit-Endpunkt des Containers `acoustid-api` und zu seiner
-Statusabfrage. Vertrag und Begründungen: ARCHITECTURE §5.2, §5.3, §6, §7 und
+Referenz zum Submit-Endpunkt des **API-Prozesses** `api` und zu seiner
+Statusabfrage — seit dem Ein-Container-Umbau (M1b) kein eigener Container
+mehr, sondern einer der vier supervisord-Prozesse im Container
+(ARCHITECTURE §3). Vertrag und Begründungen: ARCHITECTURE §5.2, §5.3, §6, §7 und
 §8.9 sowie
 [docs/research/phase1-api-formate.md](research/phase1-api-formate.md) und
 [docs/research/phase1-acoustid-index.md](research/phase1-acoustid-index.md).
