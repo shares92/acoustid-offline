@@ -1,9 +1,59 @@
-# DECISIONS.md — acoustid-offline
+# DECISIONS.md — musicmeta-offline (vormals acoustid-offline)
 
 Entscheidungslog. Neue Einträge oben anfügen. Format:
 `## YYYY-MM-DD: Titel` / Entscheidung / Begründung / Alternativen.
 
 ---
+
+## 2026-08-05: M2-Entscheide — Umbenennung, Übergangslesen, Release-Weg
+
+Entscheidung (Phase M2, Merge `1fc9f7f`; zwei sequenzielle Wellen —
+Betreiber-Entscheid: Kontextlast je Agent begrenzen, parallele
+Zerlegung beim Querschnitts-Rename verworfen, konfliktfreier
+Zuschnitt ≈ 1):
+(a) **E9-Umsetzung als deklarative `LEGACY_KEYS`-Tabelle statt
+pydantic-AliasChoices** — Aliase lösen nur innerhalb einer
+Mapping-Ebene auf; alle vier Key-Wechsel sind Sektionswechsel, und
+`update` zerfällt auf zwei Ziele (`acoustid.update.time`,
+`disk.min_free_gb`). Umschrift läuft VOR der Unbekannt-Meldung;
+Umschreiber-Fehlschlag bricht den Start nicht ab.
+(b) **Compose reicht BEIDE Namenssätze durch** (`MMO_*` + `AOFF_*`)
+statt host-seitigem Stumm-Mapping — die Deprecation-Warnung muss beim
+Betreiber ankommen, also entscheidet weiter `env.py` im Container;
+nur die host-seitig aufgelöste `ports:`-Zeile nutzt verschachtelte
+Interpolation `${MMO_PORT:-${AOFF_PORT:-8080}}` (gegen Compose 5.4.0
+verifiziert). Drei Pfad-Variablen (`DATA_DIR`, `DUMP_DIR`,
+`DB_DATA_ROOT`) bewusst OHNE Altnamen-Fallback: v1-Werte (`/data` als
+Wächter-Verzeichnis) wären genau der R1-Fehler. Layout-Tests klagen
+Gegenstück-Pflicht und Ausnahmenliste ein.
+(c) **`release.yml`:** `latest` über den `flavor`-Default
+`latest=auto` (die explizite raw-Regel hätte bei Nicht-SemVer-Tags
+wie `v2` ein `latest` ohne Versionstag erzeugt), Trigger verengt auf
+`v[0-9]+.[0-9]+.[0-9]+*`, Guard-Step erzwingt GitHub-Rename VOR dem
+ersten Tag. Der imagetools-inspect-Schritt bleibt unverändert — das
+Review-Finding dazu wurde adversarial widerlegt (bei 1 Plattform +
+Attestation löst das Template korrekt auf; die vorgeschlagenen Fixes
+hätten den Job gebrochen bzw. die SLSA-Provenance gekostet).
+(d) **GitHub-Rename ausgeführt 2026-08-05** (`shares92/
+musicmeta-offline`, Redirects aktiv, alter Name wird nie neu belegt);
+**erster v*-Release-Tag erst nach Messlauf-Auswertung + R3-Probe**
+(Betreiber). Alte `acoustid-offline-*`-GHCR-Pakete bleiben stehen und
+werden von Hand als „eingestellt" markiert (E16).
+(e) **Design-Lieferpaket `docs/design/` bleibt unter altem Namen**
+(Liefernachweis der Design-Session; wird zu M8 durch DESIGN_HANDOFF
+v2 ersetzt); ebenso stabil: `REPORT_SCHEMA`
+`acoustid-offline/importer-run/1` (E16) und der Testimage-Name
+`acoustid-offline-pg-acoustid` (hook-gekoppelt).
+Begründung: Übergangszusagen müssen den einzigen ausgelieferten
+Deployment-Weg erreichen (Konsens-HOCH-Finding beider blinder
+Reviewer: die reine Container-Logik war auf dem Compose-Weg toter
+Code); Warnbarkeit vor Bequemlichkeit; Release-Sicherheit vor
+Tag-Flexibilität.
+Alternativen: AliasChoices (verworfen, s. o.); host-seitiges
+Nested-Mapping für alles (verworfen — Warnung entfiele);
+`provenance: false` bzw. Format-Umbau im Release (verworfen —
+Verschlechterung, empirisch belegt); Release-Tag sofort (verworfen —
+Image-Veröffentlichung vor Messlauf-/Migrationsbeleg).
 
 ## 2026-08-05: M1b-Entscheide — Ein-Container-Betrieb, Rechte, Secrets
 

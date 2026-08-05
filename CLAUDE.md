@@ -62,6 +62,10 @@ anstossen.
   „cancelled" bei Push-auf-Push ist Abloesung, kein Bruch.
 - **Tests ohne Dienste:** `uv run pytest … --integration=off`
   (ruff/pytest liegen nur im venv — immer `uv run`).
-- **Massen-Renames** (M2: `AOFF_` → `MMO_`): Serena-Symboltools statt
-  Volltext-Edits nutzen — Ersetzen ueber alle Pakete hinweg, ohne
-  Doku-Zitate und Uebergangs-Aliase zu zerschiessen.
+- **Serena-Symboltools NIE in Git-Worktrees:** Serena ist auf das
+  Hauptverzeichnis indiziert — `replace_in_files` & Co. schreiben in
+  den Haupt-Checkout statt in den Worktree (M2-Befund, LEARNINGS).
+  Warnsignal: Dry-Run zeigt veralteten Inhalt. In Worktrees Skript-
+  Edits + Diff-Review; dabei Absichts-Altnamen schuetzen
+  (`REPORT_SCHEMA`, `acoustid-offline-pg-acoustid`, Uebergangs-
+  Tabellen wie `LEGACY_KEYS`, Alt-Zitate in migration-v1-v2.md).

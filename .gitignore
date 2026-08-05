@@ -50,3 +50,6 @@ Thumbs.db
 # Details: tests/fixtures/acoustid-dumps/README.md
 tests/fixtures/acoustid-dumps/*.jsonl.gz
 *.jsonl.gz.part
+
+# Serena-MCP-Arbeitsverzeichnis (lokaler Index, nie committen)
+.serena/

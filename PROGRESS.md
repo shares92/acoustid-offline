@@ -10,57 +10,62 @@ docs/archive/HANDOFF-v1.md) + docs/research/m0-impact-analyse.md;
 technische Referenz: ARCHITECTURE.md (beschreibt bis M1/M2 den
 gebauten v1-Stand, siehe Kopfvermerk dort).
 
-**Status (2026-08-05, früh): Phasen 0–18 (v1), M0, M1a und M1b
-abgeschlossen — das Projekt ist ein Ein-Container-System.** M1b
-(`6c4a184`, 9 Commits): supervisord 4.3.0 + tini (läuft verifiziert
-unter Py 3.14), ein Multi-Stage-Dockerfile (PGDG-PG 18.4 + fpindex
-aus Quelle mit Commit-Pin + THIRD-PARTY-NOTICES), `process.py`/
-`stack.py` ersetzen `docker.py` (docker.sock ersatzlos weg), Kante
-`ready→error`, sequenzieller Start mit Readiness-Gates, eine
-Compose-Datei (Bind-Mounts, Healthcheck `/status`), E2E portiert
-(8/8), CI-Job `image-tests` gegen das eigene Image, Migrationsrezept
-docs/migration-v1-v2.md (UNGEPROBT — R3). Doppel-Review: GPT 5.6
-blind fand 6 fixwürdige Findings (u. a. API lief als root; `observe()`
-maskierte Teilzustände als Schlaf — ein Alt-Test hatte den Fehler
-festgeschrieben), alle gefixt und verifiziert. **1754 Tests** (Unit
-1547 + Integration 199 gegen das eigene Image + E2E 8/8, je doppelt
-gefahren). **Recherche-Gates M3–M7 erledigt** (`a4c284e`, vier
-Berichte in docs/research/, R19 entkräftet). **Unraid-Probelauf:**
-Smoke ok (Projektion: Vollimport ~35,4 h, DB ~442 GB, Index ~48 GB;
-Report im Repo), Messlauf bis 2012-12-31 läuft auf Tower.
-**Warten auf Go für M2.**
+**Status (2026-08-05, mittag): Phasen 0–18 (v1), M0, M1a, M1b und M2
+abgeschlossen — das Projekt heißt überall musicmeta-offline und der
+GitHub-Rename ist ausgeführt.** M2 (`1fc9f7f`, 14 Commits in zwei
+sequenziellen Wellen + Kleinst-Posten): Env-Prefix `AOFF_`→`MMO_` und
+Config-Keys aufs v2-Schema (E9: deklarative `LEGACY_KEYS`-Tabelle +
+einmaliger Umschreiber beim Wächter-Start; Übergangslesen eine
+Release-Runde — auch über die **Compose-Grenze**: beide Namenssätze
+werden durchgereicht, `ports:` mit verschachtelter Interpolation,
+per Layout-Tests eingeklagt), `/status` additiv um `components`
+(PG-Major, Index-Commit), `release.yml` (v*-Tag → ein GHCR-Image,
+`latest=auto`, Guard erzwingt die Rename-Reihenfolge), ARCHITECTURE/
+README/Betriebs-Docs auf den gebauten v2-Stand (§5.1/§5.2
+byte-identisch). Doppel-Review blind (Opus 7 + GPT 3 Findings,
+Konsens-HOCH: Übergangslesen war auf dem Compose-Weg wirkungslos;
+ein Reviewer-Fixvorschlag durch adversariale Verifikation als
+schädlich widerlegt). Gates: Unit 1597, Integration 199 gegen das
+eigene Image, E2E 8/8, CI 2× grün (4 Jobs). **GitHub-Rename
+shares92/musicmeta-offline ausgeführt** (Redirects aktiv; Remotes
+lokal + Tower nachgezogen). Erster Release-Tag bewusst offen bis
+nach Messlauf-Auswertung + R3-Probe (Betreiber-Entscheid).
+**Messlauf läuft auf Tower** (mittags bei 2011-09-20, ~15 min je
+Delta-Tag der Anfangswelle, 0 Fehler). **Warten auf Go für M2.5.**
 
-## Session-Übergabe (2026-08-04/05, nach M0 + M1a + M1b + Recherche-Gates)
+## Session-Übergabe (2026-08-05, M2 komplett)
 
-**Kurzbeschreibung:** Marathon-Session 04./05.08.: (1) **M0** —
-HANDOFF v2 eingelesen, Impact-Analyse mit vier parallelen
-Opus-Analysen + Doppel-Review (25 verifizierte Findings) →
-docs/research/m0-impact-analyse.md; Betreiber entschied E1–E16;
-Doku-Sweep `5a38d2f`. (2) **M1a** (Naht) gebaut/reviewt/gemergt
-`ff018d1` (GPT-Review: 4 Findings gefixt). (3) **M1b**
-(Ein-Container) gebaut/reviewt/gemergt `6c4a184` (GPT-Review: 6
-Findings gefixt, s. Statuskopf). (4) **Recherche-Gates M3–M7**
-parallel erledigt (`a4c284e`): Discogs-Dumps (Referenztools veraltet,
-kein Range-Resume, 429/1h-Sperre; Bilder-ToS-Konflikt = offener
-Betreiber-Entscheid Ⓞ8), CAA (kein Bild-Bulk; direkte
-archive.org-URLs; 30–50 % Schein-500er der IA-Knoten; real 3,76 Mio.
-Cover ≈ 0,8 TB), MB-Spiegel-Empirie auf Tower (R19 entkräftet;
-Rolle `acoustid_ro` fehlt — GRANT-Skript im Bericht; MB-Netz ohne
-Host-Port → Container ins MB-Netz hängen), TADB (Cache laut ToS
-erlaubt; Empfehlung Single-Developer-Key 8 €/Mon.; Release-Group-
-MBID-Falle; Artwork muss mitgespiegelt werden). (5) **Tower:**
-Betreiber gab Server-Freigabe (`ssh Tower`); Probelauf aufgesetzt
-(PG direkt auf /mnt/disk11, Index NVMe-Cache chown 6081), Smoke ok
-(Report: docs/research/probelauf/probelauf-smoke.json), Messlauf
-läuft. **Vorfall:** Unraid-shfs (`/mnt/user`) stürzte in der Nacht
-ab (Ursache unklar, Instabilität schon vorher im Syslog); Betreiber
-hat Array neu gestartet; Messlauf danach mit Direktpfad-Dumps
-(`/mnt/cache/…`, an FUSE vorbei) neu gestartet — Resume griff.
-(6) **Parallel-Session** härtete die Repo-Hooks (`f1336d7`,
-`d4a0f30`): u. a. Pipe-Exit-Code-Wache und ask-Regeln für
-`pytest --compose/--network` — Rückfragen kann nur die Hauptsession
-beantworten, Bau-Agenten deshalb E2E-Läufe möglichst vom
-Orchestrator fahren lassen bzw. Muster `cmd > log; echo rc=$?`.
+**Kurzbeschreibung:** (1) **Messlauf-Kontrolle Tower:** läuft gesund
+(Resume nach shfs-Absturz griff; mittags bei 2011-09-20, ~15 min je
+Delta-Tag der ~4,4-GB-Anfangswelle, 0 Fehler, Dumps werden nach
+Import gelöscht, Platz unkritisch: DB 36 GB/disk11 793 GB frei).
+(2) **M2 in zwei sequenziellen Wellen** (Betreiber-Entscheid:
+Kontextlast pro Agent begrenzen; parallele Zerlegung bei einem
+Querschnitts-Rename bewusst verworfen — konfliktfreier Zuschnitt ≈ 1):
+Welle 1 Code-Kern (Opus-Agent, 6 Commits), Welle 2 Doku-Umschrift
+(frischer Opus-Agent, 6 Commits), dazu 2 Kleinst-Posten-Commits der
+Koordination. (3) **Doppel-Review + adversariale Verifikation:**
+Konsens-HOCH beider blinder Reviewer — das Übergangslesen war auf dem
+Compose-Weg wirkungslos (nur `MMO_*` interpoliert; der dokumentierte
+v1-Passwort-Übernahmeweg wäre ein No-Op gewesen, Zufallspasswort
+statt Bestand). Fix: beide Namenssätze durchreichen, Warnung bleibt
+beim Betreiber sichtbar; Layout-Tests klagen die Fehlerklasse ein.
+Bonus-Fund: Healthcheck bei leerer `MMO_PORT` → dauerhaft unhealthy.
+Ein GPT-Finding (`latest` durch Kurz-Tags wie `v2`) bestätigt und
+verschärft; ein Opus-Finding (imagetools/Attestations) **widerlegt**
+— der vorgeschlagene Fix hätte den Release-Job real gebrochen
+(empirisch gegen echte Manifeste + buildx-Quelltext entschieden).
+(4) **Gates doppelt:** Unit 1597 (eigener Lauf), Integration 199
+gegen das eigene Image (70 s), E2E 8/8 (105 s), Image verifiziert
+(PG 18.4, supervisord 4.3.0, Index-Commit-Label), CI 2× grün.
+(5) **GitHub-Rename ausgeführt** (`gh api`), Redirect verifiziert,
+`git remote set-url` lokal + Tower (Messlauf ungestört). GHCR: alte
+v1-Pakete von Hand als „eingestellt" markieren (Token ohne
+packages-Scope — UI-Schritt des Betreibers); neues Paket entsteht
+erst beim ersten v*-Tag. (6) Zwei Code-Nachzügler inline gefixt:
+Entrypoint-`chmod` toleriert read-only Docker-Secrets (EROFS brach
+sonst den Start unter `set -eu`), zwei Docstrings (Legacy-Beispiel,
+0640).
 
 **Aktueller Stand — funktioniert (getestet, CI grün, unverändert):**
 Alles aus dem v1-Stand bis Phase 18: Shared (Config/Env/Logging/
@@ -71,16 +76,16 @@ submission_status — bug-für-bug-dokumentiert), Wächter-Kern
 Zustandsmaschine/Idle-Stopp, Lookup-Cache, Auth & Rate-Limit).
 Ergebnistabelle unten.
 
-**Existiert noch nicht:** Umbenennung (M2), Scheduler/Notify/Backup/
-Metrics (M2.5 — die alten Phasen 19–22 wurden nie gebaut),
-Discogs/Cover/CAA/TADB/v1-API (M3–M7), Admin-UI (M8), E2E-Suite in
-CI ausgeweitet/Release (M9). Nie gelaufen: Voll-Bootstrap am echten
-Datenbestand, echter Upstream-Submit, Volume-Migration v1→v2 auf
-echter Hardware.
+**Existiert noch nicht:** Scheduler/Notify/Backup/Metrics (M2.5 —
+die alten Phasen 19–22 wurden nie gebaut), Discogs/Cover/CAA/TADB/
+v1-API (M3–M7), Admin-UI (M8), E2E-Suite in CI ausgeweitet/Release
+(M9). Nie gelaufen: Voll-Bootstrap am echten Datenbestand, echter
+Upstream-Submit, Volume-Migration v1→v2 auf echter Hardware, erster
+v*-Release-Tag (bewusst zurückgestellt).
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung M2** einholen (Umbenennung; Block unten. M1+M2
-   sollen als EIN Betreiber-Release ausgeliefert werden — E5).
+1. **Go-Entscheidung M2.5** einholen (Scheduler/Notify/Backup/
+   Metrics; Block unten). Nach M2.5: voller 5-Phasen-Doku-Sweep.
 2. **Messlauf auswerten** (läuft auf Tower): Report
    `/mnt/cache/appdata/acoustid-offline/dumps/probelauf.json`, Log
    `/mnt/cache/appdata/acoustid-offline/messlauf.log`; danach
@@ -105,16 +110,24 @@ echter Hardware.
 6. Log-Rotation für `/config/logs/watchdog.log` (tee-Datei) → M2.5.
 7. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
 8. **XFF-Betreiber-Entscheid**: spätestens M9.
+9. **Erster Release-Tag** (`v*` → GHCR-Image): erst nach
+   Messlauf-Auswertung + R3-Probe (Betreiber 2026-08-05). Danach
+   GHCR-Paket von Hand öffentlich stellen; alte
+   `acoustid-offline-*`-Pakete als „eingestellt" markieren
+   (UI-Schritt, Token ohne packages-Scope).
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung), dann
 Messlauf-Stand auf Tower prüfen (Pfade oben; `ssh Tower`,
-Betreiber-Freigabe 2026-08-04) und per AskUserQuestion das Go für
-**M2** einholen; bei Go einen Opus-Bau-Agenten mit dem M2-Block unten
-beauftragen — inklusive Stand-Vorprüfung und Sperrzonen-Vermerk.
-Achtung: Repo-Hooks verlangen `pytest`-Aufrufe ohne Pipe
-(`cmd > log; echo rc=$?`) und stellen bei `--compose/--network`
-Rückfragen — E2E-Läufe deshalb vom Orchestrator fahren.
+Betreiber-Freigabe 2026-08-04) — ist er fertig: Auswertung (Punkt 2)
+und R3-Probe (Punkt 3) vor M2.5 anbieten. Per AskUserQuestion das Go
+für **M2.5** einholen; bei Go einen Opus-Bau-Agenten mit dem
+M2.5-Block unten beauftragen — inklusive Stand-Vorprüfung und
+Sperrzonen-Vermerk. Achtung: Repo-Hooks verlangen `pytest`-Aufrufe
+ohne Pipe (`cmd > log; echo rc=$?`) und stellen bei
+`--compose/--network` Rückfragen — E2E-Läufe deshalb vom
+Orchestrator fahren. Serena-Symboltools NIE in Worktrees verwenden
+(schreiben ins Haupt-Repo — LEARNINGS).
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
@@ -199,39 +212,9 @@ DECISIONS.md; Berichte: docs/research/.
 | **M0** | **Impact-Analyse HANDOFF v2** | 5a38d2f | docs/research/m0-impact-analyse.md: Betroffenheit (~10 % Wächter-Code, 0 Zeilen API/Importer/Shared-Steuerung, ~26 % Wächter-Testzeilen, E2E/Repo-Layout-Tests), Korrekturen K1–K10 an v2, Phasenplan M1a–M9, Entscheide E1–E16 (Betreiber bestätigt); Doppel-Review Opus+GPT-5.6, alle 25 Findings verifiziert/eingearbeitet |
 | **M1a** | **Naht-Phase (weiter auf Docker)** | 51e3541…ff018d1 | `control.py` (ProcessGroupController-Protocol + ProcessControlError), Adressen/`api_port` in EnvSettings (Defaults exakt erhalten; Compose reicht `AOFF_API_*` durch, Leerstring = Ableitungs-Schalter), `FakeSupervisor` supervisord-treu (SPAWN_ERROR-Kette, EXITED-Absturzpfad, `start_failure()`, PID-Logik — 3 Treue-Fixes aus blindem GPT-5.6-Review), dbimport-Assertion 2011er-Meta (Task-Chip task_e5db0b72 erledigt); 1701 Tests, E2E 6/6 doppelt, kein Verhaltensunterschied |
 | **M1b** | **Ein-Container-Umbau** | 6c4a184 (9 Commits) | supervisord 4.3.0 + tini (Py-3.14 verifiziert; eigenes venv /opt/supervisor), ein Multi-Stage-Dockerfile (PGDG-PG 18.4, fpindex aus Quelle mit Commit-Pin + NOTICES, 462 MB), `process.py`+`stack.py` ersetzen `docker.py` (docker.sock weg), `GroupStatus` statt bool (Absturz ≠ Schlaf), Kante `ready→error`, sequenzieller Start mit Gates (DB hart via pg_isready — gilt auch für schon Laufendes), E15-Politik + Index resident (E12), initdb-Entrypoint (App-Rolle ohne Superuser: CREATEDB+pg_checkpoint; Passwort nur als Datei), API unprivilegiert (User `api`, /config setgid 0640-Entscheid), `/_health`-Deny, eine Compose (Bind-Mounts, stop_grace 6m, Healthcheck /status), Dev-Compose aus dem einen Image, E2E portiert 8/8 (eigener Projekt-Namespace), CI `image-tests`, Kontrakt-Tests gegen echtes supervisord (12), docs/migration-v1-v2.md (ungeprobt!); GPT-Review: 6 Findings gefixt (API-root, Passwort-Leaks inkl. psql-cmdline, Gate-Lücke, observe()-Teilzustand — Alt-Test hatte den Fehler festgeschrieben, E2E-Namespace, Rollback-Doku); 1547 Unit + 199 Integration + 8/8 E2E, alles doppelt |
+| **M2** | **Umbenennung musicmeta-offline** | 1fc9f7f (14 Commits, 2 Wellen) | Env-Prefix `AOFF_`→`MMO_` + Config-Keys aufs v2-Schema mit Übergangslesen (E9: `LEGACY_KEYS`-Tabelle statt AliasChoices — Aliase lösen nur je Mapping-Ebene; einmaliger Umschreiber beim Wächter-Start, v1-config-Test), Übergang wirkt auch über die **Compose-Grenze** (beide Namenssätze durchgereicht, `ports:` verschachtelt interpoliert, Layout-Tests; Konsens-HOCH-Finding des blinden Doppel-Reviews Opus+GPT 5.6), `/status` additiv `components` (PG-Major, `MMO_INDEX_COMMIT`), `release.yml` (v*-Tag→GHCR, `latest=auto`, Rename-Guard; imagetools-Finding adversarial **widerlegt** — Fix hätte den Job gebrochen), Entrypoint-Warn-Hygiene + read-only-Secret-Toleranz, ARCHITECTURE/README/4 Betriebs-Docs auf gebauten v2-Stand (§5.1/§5.2 byte-identisch, §12-Nummerierung erhalten — Code zitiert Punktnummern), Rename-Reihenfolge dokumentiert + **GitHub-Rename ausgeführt** (Redirects, Remotes lokal+Tower). Gates: Unit 1597, Integration 199 (eigenes Image), E2E 8/8, CI 2× grün |
 
 ---
-
-## M2: Umbenennung
-
-Ziel: musicmeta-offline überall; ein Betreiber-Release zusammen mit M1.
-
-Aufgaben:
-- [ ] Env-Prefix `AOFF_` → `MMO_` (env.py:44) mit Übergangslesen +
-      Deprecation-Warnung (eine Release-Runde)
-- [ ] Config-Keys: `submit.*` → `acoustid.submit.*`, `update.time` →
-      `acoustid.update.time`, `update.min_free_gb` → `disk.min_free_gb`
-      (Default 100), `index.query_hashes` →
-      `acoustid.index.query_hashes`; AliasChoices + einmaliger
-      Umschreiber beim Wächter-Start + Test mit v1-config.yaml (E9);
-      neue Keys als Platzhalter gemäß v2 §7 (Secrets als SecretStr)
-- [ ] `reload.py`-Pfade (`config.submit.*`) nachziehen;
-      `_FILE_HEADER`, Logging-`HANDLER_NAME`, User-Agent-Strings
-      (`importer/app/download.py:82`, `api/app/upstream.py:193`)
-- [ ] Repo-Umbenennung in dokumentierter Reihenfolge: erst alle
-      Repo-Inhalte (pyproject-Name, LICENSE-Zeile, Doku, .env.example,
-      Badges), dann GitHub-Rename shares92/acoustid-offline →
-      shares92/musicmeta-offline (alten Namen nie neu belegen; lokale
-      Klone `git remote set-url`), GHCR-Paket beim ersten Push auf
-      öffentlich stellen, alte Pakete als „eingestellt" markieren
-- [ ] /status: nur additive Erweiterungen (Feld `stack` bleibt);
-      eingebackene PG-/Index-Versionen ausweisen (§12)
-- [ ] Doku-Umschrift ARCHITECTURE §3/§4/§6/§10 auf v2-Stand
-      (Sperrzonen §5.1/§5.2 unangetastet)
-
-Definition of Done: Suite/CI grün unter neuem Namen; v1-config.yaml
-und AOFF_-Env werden mit Warnung korrekt migriert (Tests); ein
-Release-Tag baut das eine Image.
 
 ## M2.5: Scheduler, Notifications, Backup, Metrics (alte Phasen 19–22)
 
@@ -402,8 +385,12 @@ Upstream-Lauf (Application-Key registrieren, mit EINER Einreichung
 beginnen; unbestätigt: Fehlerantwort bei ungültigem Key, Verhalten
 > 3 req/s), Batch-Kosten jenseits der 100er-Grenze auf Zielhardware
 messen, arm64-Spike (E3: fpindex für aarch64 + 198 Integrationstests
-— erst bei Grün ins Release), `release.yml` (ein Image → GHCR, Tag +
-`latest`, Versionen im Label), README final (Unraid Cache/Array inkl.
+— erst bei Grün ins Release; Achtung: der imagetools-inspect-Schritt
+in release.yml gibt bei >1 Plattform still `null` aus — beim
+Mehr-Plattform-Umbau anpassen, Verifikationsbefund 2026-08-05),
+`release.yml` existiert seit M2 (ein Image → GHCR, `latest=auto`,
+Rename-Guard) — hier nur noch Mehr-Plattform + Finalisierung,
+README final (Unraid Cache/Array inkl.
 „Image + /config auf den Cache", Bootstrap-Zeiten aus den Messungen,
 Restore, Lizenzen inkl. GPL-NOTICES, TLS/apikey-Hinweis),
 Unraid-Community-App-Template (ein Container, Mounts inkl. /backup,

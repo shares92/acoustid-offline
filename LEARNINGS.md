@@ -1,4 +1,4 @@
-# LEARNINGS.md — acoustid-offline
+# LEARNINGS.md — musicmeta-offline (vormals acoustid-offline)
 
 Erkenntnisse aus diesem Projekt, damit künftige Projekte besser laufen:
 weniger Fehler, weniger Recherche, bessere Standards. Hier landet alles
@@ -551,6 +551,67 @@ wie ein kaputter Supervisor aus.
 Anwenden: Unix-Sockets immer unter kurze, feste Pfade (`/run`, tmpfs)
 legen, nie unter konfigurierbare Datenverzeichnisse; die Pfadlänge
 testen.
+
+## [Bug] Übergangs-Kompatibilität endet an jeder Interpolationsgrenze
+
+Was: Das M2-Übergangslesen (`AOFF_` wird weiter gelesen + warnt) war
+korrekt in `env.py` UND im Entrypoint gebaut — und trotzdem auf dem
+einzigen ausgelieferten Deployment-Weg toter Code: docker-compose
+interpoliert Variablen HOST-seitig, und die neue Compose-Datei
+referenzierte nur noch `MMO_*`. Eine Bestands-`.env` mit `AOFF_*`
+erreichte den Container nie; der dokumentierte v1-Passwort-
+Übernahmeweg hätte still ein Zufallspasswort erzeugt. Beide blinden
+Reviewer fanden es unabhängig (Konsens-HOCH).
+Warum: Kompatibilitätslogik im Prozess nützt nichts, wenn eine
+äußere Schicht (Compose-Interpolation, Orchestrator-Templates, CI-
+Env-Maps) die alten Namen vorher aussiebt — und der Bruch ist
+lautlos, weil überall Defaults greifen.
+Anwenden: Übergangszusagen End-to-End über den realen
+Auslieferungsweg testen (hier: `docker compose config` mit einer
+AOFF_-only-`.env` + gerenderte Umgebung durch `EnvSettings`); jede
+Schicht auflisten, die Variablen auflöst; die Fehlerklasse als
+statischen Layout-Test einklagen (jede durchgereichte Variable
+braucht ihr Altnamen-Gegenstück, Ausnahmen sind eine geschlossene,
+begründete Liste).
+
+## [Prozess] Serena-Symboltools schreiben ins indizierte Haupt-Repo — nie in Worktrees verwenden
+
+Was: Der M2-Bau-Agent sollte den Massen-Rename mit Serena fahren
+(CLAUDE-Regel für M2); Serena war aber auf das Hauptverzeichnis
+indiziert — `replace_in_files` hätte in den Haupt-Checkout
+geschrieben statt in den Agent-Worktree. Erkannt am Dry-Run, der
+veralteten (Haupt-Repo-)Inhalt zeigte. Ersatz: Skript-Renames +
+Diff-Review — der zweimal bewusste Alt-Namen rettete (u. a. die
+`LEGACY_KEYS`-Tabelle, deren „Rename" die Migration still
+deaktiviert hätte).
+Warum: Pfad-gebundene Werkzeuge (Sprachserver, Indexer) folgen ihrem
+Index, nicht dem CWD des Aufrufers — in Worktree-Setups ist das ein
+Schreibzugriff auf den falschen Baum, der wie Erfolg aussieht.
+Anwenden: In Git-Worktrees keine Serena-Schreibtools (bzw. erst den
+Worktree neu indizieren); Massen-Edits dort per Skript und danach
+IMMER den Diff auf zerschossene Absichts-Altnamen lesen; die Regel
+steht jetzt in CLAUDE.md und im PROGRESS-Nächster-Schritt.
+
+## [Prozess] Auch Reviewer-Fixvorschläge sind Prüf-Kandidaten — adversarial verifizieren lohnt messbar
+
+Was: Ein plausibles, technisch detailliert begründetes MITTEL-Finding
+(„imagetools inspect bricht am Attestation-Index, `provenance: false`
+oder Format-Umbau nötig") wurde in der adversarialen Verifikation
+WIDERLEGT — buildx verzweigt auf die Plattform-ANZAHL, nicht den
+MediaType; Attestations landen nicht in `platforms`. Entscheidend:
+Die Prämisse des Findings stimmte, nur die Schlussfolgerung nicht —
+und beide vorgeschlagenen Fixes wären Verschlechterungen gewesen
+(Format-Umbau = der einzige real brechende Fall; `provenance: false`
+= SLSA-Provenance weg). Entschieden wurde empirisch gegen echte
+Registry-Manifeste + verbatim Quelltext, nicht nach Doku-Lage.
+Warum: „Finder, nicht Entscheider" gilt auch für die Fix-Empfehlung
+im Finding; wer bestätigte Findings samt Fix ungeprüft übernimmt,
+baut mit Reviewer-Autorität Fehler ein.
+Anwenden: Verifikation immer auf Befund UND Fixvorschlag richten;
+bei Infrastruktur-Behauptungen (Registry, CI, Toolchain) gegen das
+echte System oder den Quelltext entscheiden; Verdikt „PLAUSIBEL"
+zulassen, wenn Empirie fehlt — nie aus Plausibilität „BESTÄTIGT"
+machen.
 
 ---
 
