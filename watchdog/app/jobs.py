@@ -531,10 +531,17 @@ class JobCycle:
         # Weckens eintrifft, gehoert zum Nutzungsfenster — sie war sonst
         # unsichtbar (der Zaehler wurde erst danach gelesen).
         requests_before = service.activity.requests
+        # Erst den Zustand frisch erheben: der Poller fragt nur alle 15 s,
+        # und eine verworfene Bereitschaft (`invalidate()`) laesst einen
+        # **laufenden** Stack wie einen schlafenden aussehen. Ohne diesen
+        # Abgleich zaehlte der naechste `ensure_ready` als „wir haben ihn
+        # geweckt" — und der Zyklus stoppte hinterher einen Stack, der dem
+        # Betreiber gehoert.
+        await run_in_threadpool(service.wake.observe)
         # Der Zaehler der **begonnenen** Weckvorgaenge ist die verlaessliche
         # Auskunft „haben wir ihn geweckt?": `wake.ready` waere es nicht —
         # ein Betreiberstart oder eine verworfene Bereitschaft
-        # (`invalidate()`) verfaelschen es in beide Richtungen.
+        # verfaelschen es in beide Richtungen.
         wakes_before = service.wake.wakes
         try:
             await service.wake.ensure_ready(timeout_s=self.wake_timeout_s)
@@ -774,18 +781,30 @@ class JobCycle:
         * **Wir haben ihn geweckt.** War er vorher wach, gehoert er jemand
           anderem: der Betreiber kann ihn ueber die Admin-UI gestartet
           haben, und ein Job darf ihm den Stack nicht unter den Haenden
-          wegstoppen.
-        * **Niemand hat ihn benutzt.** Kam waehrend des Laufs eine
-          ``/v2/``-Anfrage, uebernimmt der Idle-Stopp — er hat die Uhr
-          dafuer (§8.5). Sonst endete ein Lookup mitten im Satz, weil
-          zufaellig gerade ein Import fertig wurde.
+          wegstoppen. Gemessen wird an der Differenz des
+          Weckvorgang-Zaehlers (:attr:`~acoustid_watchdog.wake.
+          WakeCoordinator.wakes`) — er steigt nur bei einer **neuen**
+          Weckaufgabe. ``wake.ready`` waere hier falsch: ein Betreiberstart
+          oder eine verworfene Bereitschaft verfaelschen es in beide
+          Richtungen.
+        * **Niemand hat ihn benutzt.** Kam waehrend des Laufs (oder schon
+          waehrend des Weckens) eine ``/v2/``-Anfrage, uebernimmt der
+          Idle-Stopp — er hat die Uhr dafuer (§8.5). Sonst endete ein
+          Lookup mitten im Satz, weil zufaellig gerade ein Import fertig
+          wurde. Gezaehlt werden **echte** Anfragen; der Job-Aufschub des
+          Idle-Stopps zaehlt nicht mit (F8,
+          :class:`~acoustid_watchdog.lifecycle.ActivityTracker`).
         """
         service = self._service
         if not woke_stack:
             _LOG.info("Stack bleibt wach — er lief schon vor dem Lauf")
             return False
-        if service.activity.requests != requests_before:
-            _LOG.info("Stack bleibt wach — waehrend des Laufs kamen Anfragen")
+        requests = service.activity.requests
+        if requests != requests_before:
+            _LOG.info(
+                "Stack bleibt wach — waehrend des Laufs kamen Anfragen",
+                extra={"requests": requests - requests_before},
+            )
             return False
         return await service.wake.stop_stack(reason="scheduler")
 

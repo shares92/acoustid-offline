@@ -26,10 +26,12 @@ from watchdog_stubs import FakeSupervisor
 
 from acoustid_watchdog.jobs import (
     INDEX_BUSY_FILENAME,
+    INDEX_BUSY_MAX_AGE_S,
     JobCycle,
     JobManager,
     JobOutcome,
     JobRunner,
+    index_marker_expired,
     job_command,
 )
 from acoustid_watchdog.notify import Notification, NotifyEvent
@@ -421,6 +423,88 @@ def test_a_stack_that_was_already_awake_stays_awake(service: WatchdogService) ->
     assert service.state.state is StackState.READY
 
 
+def test_a_discarded_readiness_is_not_a_wake_up(service: WatchdogService) -> None:
+    """F8: `wake.ready` waere die falsche Auskunft.
+
+    `invalidate()` setzt es zurueck, ohne dass der Stack schlaeft — der
+    Zyklus haette den laufenden Stack dann faelschlich fuer seinen
+    gehalten und ihn hinterher gestoppt. Gezaehlt werden deshalb die
+    **begonnenen Weckvorgaenge**.
+    """
+
+    async def scenario() -> Any:
+        await service.wake.ensure_ready(timeout_s=5)
+        # Der Stack laeuft weiter, nur die Annahme ist verworfen.
+        service.wake.invalidate()
+        assert service.wake.ready is False
+        cycle, _runner = _cycle(service)
+        return await cycle.run(RunKind.ACOUSTID_DELTA)
+
+    result = asyncio.run(scenario())
+
+    # Es lief kein neuer Weckvorgang — also gehoert der Stack nicht uns.
+    assert result.woke_stack is False
+    assert result.slept is False
+    assert service.state.state is StackState.READY
+
+
+def test_a_job_deferral_does_not_look_like_a_request(service: WatchdogService) -> None:
+    """F8: der Idle-Stopp schiebt bei jedem offenen Lauf die Uhr.
+
+    Frueher tat er das ueber denselben Zaehler, den `_sleep_again`
+    vergleicht — jeder Job, der laenger als ein Pruefintervall lief, sah
+    damit „es kamen Anfragen", und der Stack schlief danach praktisch
+    **nie** wieder ein. Genau das verlangt die Definition of Done aber.
+    """
+
+    class DeferringRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            # Das macht der IdleStopper bei jedem offenen Lauf.
+            service.activity.defer()
+            service.activity.defer()
+            return await super().run(command, report=report)
+
+    cycle, _runner = _cycle(service, DeferringRunner())
+    result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert service.activity.defers >= 2
+    assert result.slept is True
+    assert service.state.state is StackState.SLEEPING
+
+
+def test_a_request_during_the_wake_up_counts(service: WatchdogService) -> None:
+    """F8: der Zaehler wird **vor** dem Wecken gelesen.
+
+    Eine Anfrage, die waehrend des Weckvorgangs eintrifft, gehoert zum
+    Nutzungsfenster — sie war vorher unsichtbar, weil der Vergleichswert
+    erst danach genommen wurde.
+    """
+
+    class WakingSupervisorProbe:
+        """Bereitschaftsfrage, die beim ersten Mal eine Anfrage einschiebt."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def ready(self) -> bool:
+            self.calls += 1
+            if self.calls == 1:
+                service.activity.touch()  # ein Lookup mitten im Weckvorgang
+            return True
+
+        def close(self) -> None:
+            pass
+
+    service.wake._probe = WakingSupervisorProbe()  # type: ignore[assignment]
+    cycle, _runner = _cycle(service)
+
+    result = asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert result.woke_stack is True
+    assert result.slept is False
+    assert service.state.state is StackState.READY
+
+
 def test_requests_during_the_run_keep_the_stack_awake(service: WatchdogService) -> None:
     """Sonst endete ein Lookup mitten im Satz, weil zufaellig ein Import fertig wurde."""
 
@@ -513,11 +597,74 @@ def test_only_the_import_sets_the_marker(service: WatchdogService, tmp_path: Pat
     assert seen == [False]
 
 
-def test_both_sides_use_the_same_marker_name() -> None:
+def test_both_sides_use_the_same_marker_name_and_age() -> None:
     """Der Waechter setzt sie, der API-Dienst liest sie — ohne Paketabhaengigkeit."""
-    from acoustid_api.submit import INDEX_BUSY_FILENAME as API_SIDE
+    from acoustid_api.submit import INDEX_BUSY_FILENAME as API_NAME
+    from acoustid_api.submit import INDEX_BUSY_MAX_AGE_S as API_MAX_AGE
 
-    assert INDEX_BUSY_FILENAME == API_SIDE
+    assert INDEX_BUSY_FILENAME == API_NAME
+    assert INDEX_BUSY_MAX_AGE_S == API_MAX_AGE
+
+
+def test_the_marker_carries_its_timestamp(service: WatchdogService) -> None:
+    """Ohne Inhalt liesse sich ein Waisen-Zustand nie von einem Lauf trennen."""
+    marker = service.settings.data_dir / INDEX_BUSY_FILENAME
+    seen: list[str] = []
+
+    class WatchingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            # Der Folgelauf (queue-send) sieht sie nicht mehr — nur der
+            # Delta-Import haelt sie.
+            if marker.exists():
+                seen.append(marker.read_text(encoding="utf-8"))
+            return await super().run(command, report=report)
+
+    cycle, _runner = _cycle(service, WatchingRunner())
+    asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert seen and seen[0].endswith("Z")
+    assert index_marker_expired(marker) is False  # es gibt sie nicht mehr
+
+
+def test_an_old_marker_counts_as_expired(tmp_path: Path) -> None:
+    """F7: nach einem harten Kill laeuft kein `finally` — die Marke bliebe ewig."""
+    marker = tmp_path / INDEX_BUSY_FILENAME
+    marker.write_text("2020-01-01T00:00:00.000Z", encoding="utf-8")
+
+    assert index_marker_expired(marker) is True
+
+
+def test_a_fresh_marker_is_not_expired(tmp_path: Path) -> None:
+    """Sie kann zu einem Importer gehoeren, der den Waechter ueberlebt hat."""
+    from acoustid_watchdog.store import utc_now
+
+    marker = tmp_path / INDEX_BUSY_FILENAME
+    marker.write_text(utc_now(), encoding="utf-8")
+
+    assert index_marker_expired(marker) is False
+
+
+def test_a_missing_marker_is_not_expired(tmp_path: Path) -> None:
+    assert index_marker_expired(tmp_path / "gibt-es-nicht") is False
+
+
+def test_an_unreadable_marker_falls_back_to_the_mtime(tmp_path: Path) -> None:
+    """Im Zweifel gilt sie als **gueltig** — sie schuetzt einen laufenden Feed."""
+    marker = tmp_path / INDEX_BUSY_FILENAME
+    marker.write_text("kein Zeitstempel", encoding="utf-8")
+
+    # Frisch geschrieben, also frische mtime.
+    assert index_marker_expired(marker) is False
+    # Und mit alter mtime abgelaufen.
+    import os
+
+    os.utime(marker, (0, 0))
+    assert index_marker_expired(marker) is True
+
+
+def test_the_max_age_covers_a_bootstrap_feed() -> None:
+    """Ein Bootstrap laeuft Stunden bis Tage — ein knapper Wert waere schaedlich."""
+    assert INDEX_BUSY_MAX_AGE_S >= 12 * 3600
 
 
 # --- Der Warteschlangenlauf danach ------------------------------------------

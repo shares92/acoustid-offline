@@ -43,6 +43,8 @@ beets bloss zum Wiederholen bringen — und damit Dubletten erzeugen.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 import psycopg
@@ -66,6 +68,7 @@ if TYPE_CHECKING:  # pragma: no cover - nur fuer die Typpruefung
 
 __all__ = [
     "INDEX_BUSY_FILENAME",
+    "INDEX_BUSY_MAX_AGE_S",
     "MAX_INDEX_BATCH",
     "SUBMISSION_PENDING",
     "SUBMISSION_STORED_EVENT",
@@ -110,6 +113,20 @@ SUBMISSION_STORED_EVENT: Final = "local_submission_stored"
 #: Der Name steht auch in :mod:`acoustid_watchdog.jobs`; ein Test haelt
 #: beide aneinander (der Waechter haengt bewusst nicht vom API-Paket ab).
 INDEX_BUSY_FILENAME: Final = "index-feed.busy"
+
+#: Hoechstalter der Marke — danach gilt sie als **verwaist** (F7).
+#:
+#: Stirbt der Waechter mit ``SIGKILL``, laeuft kein ``finally``, und die
+#: Marke bliebe fuer immer liegen: eigene Einreichungen waeren dauerhaft
+#: gespeichert, aber im Index unauffindbar (und die Upstream-Queue staende
+#: mit still). Der Setzzeitpunkt steht in der Datei.
+#:
+#: **24 Stunden und nicht weniger:** ein Bootstrap-Feed laeuft Stunden bis
+#: Tage (414 GB gz, §5.1). Ein knapperer Wert erklaerte einen ehrlich
+#: laufenden Import fuer tot und oeffnete genau das Fenster, das die Marke
+#: schliessen soll. Derselbe Wert steht in :mod:`acoustid_watchdog.jobs`;
+#: ein Test haelt beide aneinander.
+INDEX_BUSY_MAX_AGE_S: Final = 24 * 3600.0
 
 
 def check_mode(config: Config) -> None:
@@ -169,8 +186,53 @@ def index_deferred(service: ApiService) -> bool:
     Der Betreiber-Entscheid vom 2026-08-05 in einer Funktion: waehrend des
     Update-Laufs wird **nicht** indexiert. Einreichungen werden weiterhin
     angenommen und gespeichert; die Antwort ist ohnehin ``pending``.
+
+    **Eine verwaiste Marke laeuft ab** (:data:`INDEX_BUSY_MAX_AGE_S`).
+    Stirbt der Waechter mit ``SIGKILL``, laeuft kein ``finally``, und die
+    Marke bliebe fuer immer liegen — eigene Einreichungen waeren dauerhaft
+    gespeichert, aber im Index unauffindbar, und die Upstream-Queue staende
+    mit still. Der Setzzeitpunkt steht in der Datei; ist er alt genug,
+    gilt die Marke als tot und wird **mit Warnung** uebergangen.
     """
-    return (service.data_dir / INDEX_BUSY_FILENAME).exists()
+    marker = service.data_dir / INDEX_BUSY_FILENAME
+    try:
+        raw = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    age_s = _marker_age_s(raw, marker)
+    if age_s is None or age_s <= INDEX_BUSY_MAX_AGE_S:
+        return True
+    _LOG.warning(
+        "Import-Marke ist ueberaltert — sie wird uebergangen und die Einreichung indexiert",
+        extra={
+            "marker_path": str(marker),
+            "age_s": round(age_s),
+            "max_age_s": INDEX_BUSY_MAX_AGE_S,
+        },
+    )
+    return False
+
+
+def _marker_age_s(raw: str, marker: Path) -> float | None:
+    """Alter der Marke in Sekunden — ``None``, wenn nicht bestimmbar.
+
+    Gelesen wird der **Inhalt** (der Setzzeitpunkt), nicht die mtime: die
+    Datei liegt auf einem gemounteten Dateisystem, und ein ``touch`` waere
+    dort keine Aussage ueber den Lauf. Ist der Inhalt unverstaendlich,
+    faellt die Antwort auf die mtime zurueck — und im Zweifel auf „noch
+    gueltig": eine faelschlich fuer tot erklaerte Marke ist der teurere
+    Fehler (sie schuetzt einen laufenden Index-Feed).
+    """
+    try:
+        written = datetime.fromisoformat(raw)
+    except ValueError:
+        try:
+            written = datetime.fromtimestamp(marker.stat().st_mtime, tz=UTC)
+        except OSError:  # pragma: no cover - die Datei war eben noch da
+            return None
+    if written.tzinfo is None:  # pragma: no cover - der Waechter schreibt eine Zone
+        written = written.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - written).total_seconds()
 
 
 def index_pending(

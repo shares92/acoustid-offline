@@ -94,7 +94,21 @@ DEFAULT_IDLE_CHECK_INTERVAL_S: Final = 30.0
 
 
 class ActivityTracker:
-    """Wann zuletzt eine ``/v2/``-Anfrage lief — die Uhr des Idle-Stopps."""
+    """Wann zuletzt eine ``/v2/``-Anfrage lief — die Uhr des Idle-Stopps.
+
+    **Zwei Dinge, bewusst getrennt** (F8): die *Uhr* („wann war zuletzt
+    etwas los?") und der *Zaehler* („wie viele **echte** Anfragen gab es?").
+    Beide werden zurueckgesetzt bzw. erhoeht, wenn eine Anfrage durch den
+    Proxy laeuft — aber der Idle-Stopp schiebt die Uhr auch dann, wenn nur
+    ein **Job** laeuft (:meth:`defer`), und das ist keine Nutzung.
+
+    Die Vermischung war ein echter Fehler: der Idle-Stopp rief bei jedem
+    offenen Lauf ``touch()``, und der Job-Zyklus verglich anschliessend
+    denselben Zaehler, um zu entscheiden, ob er schlafen legen darf. Jeder
+    Job, der laenger als ein Pruefintervall lief, sah damit „es kamen
+    Anfragen" — und der Stack schlief nach einem Import praktisch **nie**
+    wieder ein (die Definition of Done verlangt genau das Gegenteil).
+    """
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
         """
@@ -109,24 +123,52 @@ class ActivityTracker:
         # waere die erste Pruefung nach einem Neustart sofort faellig.
         self._last = clock()
         self._requests = 0
+        self._defers = 0
 
     def touch(self) -> None:
-        """Merkt eine Anfrage vor (Aufrufer: der Proxy-Pfad in ``main``)."""
+        """Merkt eine **echte** Anfrage vor (Aufrufer: der Proxy-Pfad).
+
+        Setzt die Uhr **und** erhoeht den Zaehler.
+        """
         with self._lock:
             self._last = self._clock()
             self._requests += 1
 
+    def defer(self) -> None:
+        """Schiebt nur die Uhr — ein laufender Job ist keine Anfrage.
+
+        Der Weg des Idle-Stopps: ein Job schiebt den Leerlauf auf, damit
+        der Stack nicht in dem Augenblick einschlaeft, in dem ein langer
+        Import fertig wird. Er darf dabei aber nicht wie eine Nutzung
+        aussehen — sonst legte der Zyklus den Stack anschliessend nie
+        wieder schlafen (Klassen-Docstring).
+        """
+        with self._lock:
+            self._last = self._clock()
+            self._defers += 1
+
     @property
     def idle_s(self) -> float:
-        """Sekunden seit der letzten Anfrage."""
+        """Sekunden seit der letzten Anfrage (oder dem letzten Job-Aufschub)."""
         with self._lock:
             return max(self._clock() - self._last, 0.0)
 
     @property
     def requests(self) -> int:
-        """Wie viele Anfragen dieser Prozess gesehen hat (Diagnose, Tests)."""
+        """Wie viele **echte** Anfragen dieser Prozess gesehen hat.
+
+        Die Zahl, an der der Job-Zyklus ablesen kann, ob die Instanz
+        waehrend seines Laufs benutzt wurde — Job-Aufschuebe zaehlen
+        ausdruecklich nicht mit.
+        """
         with self._lock:
             return self._requests
+
+    @property
+    def defers(self) -> int:
+        """Wie oft ein laufender Job den Leerlauf aufgeschoben hat (Diagnose)."""
+        with self._lock:
+            return self._defers
 
 
 class JobSource(Protocol):
@@ -220,9 +262,12 @@ class IdleStopper:
 
         jobs = await run_in_threadpool(self._jobs.running_jobs)
         if jobs:
-            # Ein laufender Job ist Nutzung, nicht nur eine Sperre — die
-            # Leerlaufuhr beginnt nach ihm von vorn (Modul-Docstring).
-            self._activity.touch()
+            # Ein laufender Job schiebt den Leerlauf auf — die Uhr beginnt
+            # nach ihm von vorn (Modul-Docstring). **`defer` und nicht
+            # `touch`**: er ist keine Anfrage, und der Job-Zyklus liest den
+            # Anfragezaehler, um zu entscheiden, ob er schlafen legen darf
+            # (F8, `ActivityTracker`-Docstring).
+            self._activity.defer()
             self.blocked_by_jobs += 1
             _LOG.debug("Idle-Stopp aufgeschoben, Job laeuft", extra={"jobs": jobs})
             return False
