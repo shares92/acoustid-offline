@@ -83,8 +83,19 @@ print("bootstrap ok")
 #: Setzt Termine und Schalter der ``config.yaml``. Der Waechter haelt seine
 #: Konfiguration im Speicher (bewusst kein Datei-Watcher, siehe
 #: ``config_store``) — deshalb muss er danach neu starten.
+#: **Die Uhrzeit muss die des Containers sein**, nicht die des Hosts: der
+#: Zeitplan bildet seine Termine in der lokalen Zeit des Waechter-Prozesses
+#: (`acoustid_watchdog.scheduler`), und die Container-Zeitzone ist per
+#: Default UTC. Deshalb rechnet dieses Snippet **drinnen**.
+#:
+#: ``update_after`` ist der Weg fuer einen **zweiten** Termin am selben Tag:
+#: er wartet, bis die laufende Minute nach dem uebergebenen Zeitpunkt liegt,
+#: und setzt den Termin dann auf genau diese Minute. Das ist noetig, weil
+#: „faellig" heisst *„seit diesem Termin lief noch keiner"* — ein Termin,
+#: der vor dem letzten Lauf liegt, ist derselbe verbrauchte Termin und
+#: feuert nie wieder (der Fehler, an dem dieser Test zuerst scheiterte).
 _CONFIGURE = """
-import datetime, json, sys
+import datetime, json, sys, time
 from shared.config import Config, load_config, save_config
 from shared.env import EnvSettings
 
@@ -98,6 +109,14 @@ soon = (now - datetime.timedelta(minutes=1)).strftime("%H:%M")
 data = config.model_dump(by_alias=True, mode="json")
 if changes.get("update_now"):
     data["acoustid"]["update"]["time"] = soon
+if changes.get("update_after"):
+    boundary = datetime.datetime.fromisoformat(changes["update_after"])
+    while True:
+        moment = datetime.datetime.now(datetime.UTC)
+        if moment.replace(second=0, microsecond=0) > boundary:
+            break
+        time.sleep(2)
+    data["acoustid"]["update"]["time"] = datetime.datetime.now().strftime("%H:%M")
 if changes.get("update_time"):
     data["acoustid"]["update"]["time"] = changes["update_time"]
 if changes.get("backup_now"):
@@ -376,11 +395,17 @@ def test_the_next_cycle_repeats_the_failed_run(sleeping_stack: Path) -> None:
     Ohne Netz endet er mit ``download_failed``; der Nachweis ist, dass der
     Zyklus ihn ueberhaupt wieder angefasst hat — und dass die Historie
     **zwei** Laeufe zeigt, nicht einen ueberschriebenen.
+
+    **Der neue Termin muss nach dem ersten Lauf liegen** (``update_after``).
+    „Faellig" heisst *„seit diesem Termin lief noch keiner"*; ein Termin
+    davor ist derselbe verbrauchte Termin. Mit „jetzt minus eine Minute"
+    lag er, wenn beide Konfigurationen in dieselbe Minutenspanne fielen,
+    **vor** dem Start des ersten Laufs — und der Zyklus feuerte nie wieder.
     """
     first = _run_of_kind("acoustid-delta")
     assert first is not None and first["result"] == "aborted"
 
-    _configure(sleeping_stack, update_now=True, min_free_gb=0)
+    _configure(sleeping_stack, update_after=first["started_at"], min_free_gb=0)
 
     second = _wait(
         "zweiter Delta-Lauf",

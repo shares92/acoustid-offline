@@ -37,6 +37,20 @@ meldet ihn, und der naechste Termin versucht es erneut — auf einem Stand,
 der dank ``import_state`` genau dort fortsetzt, wo der gescheiterte Lauf
 aufhoerte.
 
+**Ein Abbruch zaehlt wie ein Fehlschlag.** Fuer die Faelligkeit ist der
+Ausgang eines Laufs ohne Bedeutung — gefragt wird nur, **ob** seit dem
+Termin einer lief. Fuer den haeufigsten Abbruchgrund ist das genau
+richtig: der Plattenplatz-Guard (§8.8) bricht ab, weil kein Platz da ist,
+und der kommt nicht von selbst zurueck. Sofort erneut zu starten
+reparierte nichts.
+
+**Ein neuer Termin ist eine neue Gelegenheit** — auch am selben Tag. Wer
+die Ursache beseitigt hat (Platz geschaffen, Guard gelockert) und nicht
+bis morgen warten will, setzt die Uhrzeit neu. Entscheidend ist dabei,
+dass der neue Termin **nach** dem letzten Lauf liegt; ein Termin davor
+ist derselbe verbrauchte Termin und feuert nicht noch einmal. Genau daran
+scheiterte der erste Anlauf des E2E-Zyklus-Tests.
+
 **Umstellung auf Sommerzeit.** Der Termin wird in lokaler Zeit gebildet;
 in der Nacht der Umstellung kann er dadurch ausfallen oder doppelt
 faellig scheinen. Beides ist harmlos: ein ausgefallener Lauf wird am

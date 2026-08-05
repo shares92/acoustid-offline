@@ -5,6 +5,30 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-05: Fälligkeit kennt keinen Ausgang — ein Abbruch verbraucht seinen Termin
+
+Entscheidung: Für die Frage „ist dieser Termin fällig?" zählt
+ausschließlich, **ob** seit ihm ein Lauf dieser Art begonnen hat — nicht,
+wie er ausging. `success`, `failed` und `aborted` verbrauchen den Termin
+gleichermaßen; wiederholt wird beim nächsten (§8.4). Ein **neuer** Termin
+ist dagegen eine neue Gelegenheit, auch am selben Tag — vorausgesetzt, er
+liegt **nach** dem letzten Lauf.
+Begründung: Der häufigste Abbruchgrund ist der Plattenplatz-Guard (§8.8),
+und der Platz kommt nicht von selbst zurück — ein sofortiger zweiter
+Versuch repariert nichts und hält nur das Array wach. Dieselbe Begründung
+wie beim Fehlschlag. Wer die Ursache beseitigt hat und nicht bis morgen
+warten will, setzt die Uhrzeit neu; das ist der ausdrückliche Weg (und ab
+M8 ein Knopf: der manuelle Trigger geht ohnehin am Zeitplan vorbei).
+Alternativen: **Abbruch als „nicht gelaufen" behandeln** — verworfen, eine
+volle Platte erzeugte damit alle 30 Sekunden einen Weckvorgang.
+**Erfolg gesondert behandeln** (nur er verbraucht den Termin) — verworfen,
+das ist dieselbe Falle mit einem Zwischenschritt.
+Anlass: Der E2E-Zyklus-Test setzte den zweiten Termin auf „jetzt minus
+eine Minute" und traf damit einen Zeitpunkt **vor** dem ersten Lauf —
+also denselben, bereits verbrauchten Termin. Der Code war korrekt, der
+Test falsch; die Regel stand nur nirgends ausdrücklich. Sie ist jetzt im
+`scheduler`-Docstring beschrieben und durch zwei Unit-Tests eingeklagt.
+
 ## 2026-08-05: M2.5-Nacharbeit — Findings des blinden Doppel-Reviews
 
 Entscheidung (Nacharbeitsrunde nach Opus- und GPT-5.6-Review, alle

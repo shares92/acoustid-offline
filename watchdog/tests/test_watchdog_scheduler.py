@@ -173,6 +173,42 @@ def test_a_failed_run_is_not_repeated_the_same_day(db: Database) -> None:
     assert asyncio.run(_scheduler(db, manager, config=_config(), now=_at(23, 0)).check()) is None
 
 
+def test_an_aborted_run_also_uses_up_its_slot(db: Database) -> None:
+    """Ein Abbruch zaehlt wie jeder andere Lauf — der Termin ist verbraucht.
+
+    Der Plattenplatz-Guard bricht ab, weil kein Platz da ist (§8.8); der
+    kommt nicht von selbst zurueck. Sofort erneut zu starten reparierte
+    nichts und hielte nur das Array wach — dieselbe Begruendung wie beim
+    Fehlschlag (§8.4).
+    """
+    run_id = start_run(db, RunKind.ACOUSTID_DELTA, started_at=utc_boundary(_at(4, 0)))
+    finish_run(db, run_id, RunResult.ABORTED, error="Plattenplatz zu knapp")
+    manager = FakeManager()
+
+    assert asyncio.run(_scheduler(db, manager, config=_config(), now=_at(5, 0)).check()) is None
+
+
+def test_a_new_slot_after_the_run_makes_it_due_again(db: Database) -> None:
+    """Ein **neuer** Termin ist eine neue Gelegenheit — auch am selben Tag.
+
+    Der Weg des Betreibers, der die Ursache beseitigt hat (Platz
+    geschaffen, Guard gelockert) und nicht bis morgen warten will: er
+    setzt die Uhrzeit neu. Entscheidend ist, dass der neue Termin **nach**
+    dem letzten Lauf liegt — sonst ist er derselbe verbrauchte Termin.
+    """
+    run_id = start_run(db, RunKind.ACOUSTID_DELTA, started_at=utc_boundary(_at(4, 30)))
+    finish_run(db, run_id, RunResult.ABORTED, error="Plattenplatz zu knapp")
+    manager = FakeManager()
+
+    # Ein Termin **vor** dem Lauf ist verbraucht — der Lauf liegt danach.
+    before = _scheduler(db, manager, config=_config("04:15"), now=_at(5, 0))
+    assert asyncio.run(before.check()) is None
+
+    # Ein Termin **nach** dem Lauf ist wieder faellig.
+    after = _scheduler(db, manager, config=_config("04:45"), now=_at(5, 0))
+    assert asyncio.run(after.check()) is RunKind.ACOUSTID_DELTA
+
+
 def test_the_next_day_repeats_the_failed_run(db: Database) -> None:
     """Und genau dann wird wiederholt — auf dem Stand, den `import_state` haelt."""
     run_id = start_run(db, RunKind.ACOUSTID_DELTA, started_at=utc_boundary(_at(4, 0)))
