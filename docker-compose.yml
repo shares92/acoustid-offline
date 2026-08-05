@@ -44,7 +44,14 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: musicmeta-offline
+    # **Bewusst kein `container_name`.** Ein fester Name macht den
+    # Compose-Projektnamen wirkungslos: jede zweite Zusammenstellung auf
+    # demselben Host — ein Testlauf, eine zweite Instanz, ein Probe-Stack —
+    # wuerde denselben Container ansprechen und beim `up` den laufenden
+    # ersetzen. Der Container heisst deshalb `<projekt>-app-1`; angesprochen
+    # wird er ueber den Dienstnamen (`docker compose logs app`,
+    # `docker compose exec app …`), und wer ihn umbenennen will, setzt einen
+    # eigenen Projektnamen (`docker compose -p …`).
     # Faellt der Container aus, ist die Instanz von aussen nicht mehr
     # erreichbar und niemand weckt mehr etwas.
     restart: unless-stopped
@@ -71,6 +78,10 @@ services:
       AOFF_API_HEALTH_URL: ${AOFF_API_HEALTH_URL:-}
       AOFF_API_PORT: ${AOFF_API_PORT:-}
       AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:-}
+      # Wer das Passwort als Docker-Secret einhaengt, setzt hier den Pfad —
+      # der Entrypoint schreibt dann DIESE Datei, und die Anwendung liest
+      # sie (ohne Durchreichung liefen beide auf verschiedene Dateien).
+      AOFF_DB_PASSWORD_FILE: ${AOFF_DB_PASSWORD_FILE:-}
       AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-main}
       # Container-Werte ohne AOFF_-Praefix (sie gehoeren nicht ins Schema
       # der Anwendung, s. .env.example).

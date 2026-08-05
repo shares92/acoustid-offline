@@ -205,10 +205,22 @@ def test_parent_directory_is_created(tmp_path: Path) -> None:
     assert path.is_file()
 
 
-def test_file_mode_is_owner_only(tmp_path: Path) -> None:
+def test_file_mode_stays_closed_for_others(tmp_path: Path) -> None:
+    """Secrets im Klartext (ARCHITECTURE §8.10) — „andere" duerfen nie lesen.
+
+    0640 statt 0600 seit M1b: der API-Dienst laeuft unprivilegiert und muss
+    die Datei lesen koennen (Begruendung an ``_FILE_MODE``). Geprueft wird
+    deshalb die **Zusage**, nicht die Zahl: kein Schreibrecht ausser fuer
+    den Eigentuemer, und fuer „andere" gar nichts.
+    """
     path = tmp_path / "config.yaml"
     save_config(Config(), path)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    mode = stat.S_IMODE(path.stat().st_mode)
+
+    assert mode == 0o640
+    assert not mode & stat.S_IRWXO, "world-readable"
+    assert not mode & (stat.S_IWGRP | stat.S_IXGRP), "Gruppe darf nur lesen"
 
 
 def test_write_leaves_no_temporary_files(tmp_path: Path) -> None:

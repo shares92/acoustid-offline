@@ -47,12 +47,18 @@ AOFF_DB_PORT="${AOFF_DB_PORT:-5432}"
 ACOUSTID_INDEX_DIR="${ACOUSTID_INDEX_DIR:-/index}"
 ACOUSTID_BACKUP_DIR="${ACOUSTID_BACKUP_DIR:-/backup}"
 
+# Die Datei mit dem Datenbank-Passwort. Der Vorgabewert ist derselbe, den
+# `EnvSettings.db_password_file` ableitet (<data_dir>/db-password) — ein
+# gesetztes AOFF_DB_PASSWORD_FILE gewinnt aber, sonst waeren Docker-Secrets
+# wirkungslos: die Anwendung laese dann eine andere Datei als die, die
+# dieser Vorlauf beschreibt.
+AOFF_DB_PASSWORD_FILE="${AOFF_DB_PASSWORD_FILE:-${AOFF_DATA_DIR}/db-password}"
+
 PGBIN="/usr/lib/postgresql/${AOFF_PG_MAJOR}/bin"
 PGDATA="${AOFF_DB_DATA_ROOT}/${AOFF_PG_MAJOR}"
-PASSWORD_FILE="${AOFF_DATA_DIR}/db-password"
 
 export AOFF_DATA_DIR AOFF_DUMP_DIR AOFF_DB_DATA_ROOT AOFF_PG_MAJOR
-export AOFF_DB_NAME AOFF_DB_USER AOFF_DB_PORT
+export AOFF_DB_NAME AOFF_DB_USER AOFF_DB_PORT AOFF_DB_PASSWORD_FILE
 export ACOUSTID_INDEX_DIR ACOUSTID_BACKUP_DIR PGDATA
 
 # --- 1. Verzeichnisse -------------------------------------------------------
@@ -61,7 +67,16 @@ export ACOUSTID_INDEX_DIR ACOUSTID_BACKUP_DIR PGDATA
 # erst in M2.5 (K9), das Verzeichnis soll aber ohne Image-Wechsel nutzbar sein.
 
 mkdir -p "${AOFF_DATA_DIR}/logs" "${AOFF_DUMP_DIR}" "${AOFF_DB_DATA_ROOT}" "${ACOUSTID_INDEX_DIR}"
-chmod 0755 "${AOFF_DATA_DIR}" "${AOFF_DB_DATA_ROOT}"
+
+# /config gehoert root und der Gruppe `musicmeta` — und traegt das
+# **setgid**-Bit (2750). Damit erben alle Dateien darin diese Gruppe, auch
+# die, die der Waechter spaeter per tmp+rename schreibt (config.yaml). Das
+# ist der Mechanismus, mit dem der unprivilegierte API-Dienst genau seine
+# zwei Dateien lesen kann, ohne dass irgendwer sonst hineinsieht:
+# `postgres` und `acoustid` kommen nicht einmal ins Verzeichnis.
+chown root:musicmeta "${AOFF_DATA_DIR}"
+chmod 2750 "${AOFF_DATA_DIR}"
+chmod 0755 "${AOFF_DB_DATA_ROOT}"
 # Der Index laeuft unter der UID des Upstream-Images (6081) — dieselbe UID
 # wie in v1, damit ein bestehendes Index-Verzeichnis ohne chown weiterlaeuft.
 chown acoustid:acoustid "${ACOUSTID_INDEX_DIR}"
@@ -73,23 +88,44 @@ chown postgres:postgres "${AOFF_DB_DATA_ROOT}"
 # v1 uebernehmen (docs/migration-v1-v2.md §7) und die Test-Zusammenstellung
 # kennt den Zugang. Ohne Angabe erzeugt der Entrypoint eines — der
 # `.env`-Pflichtwert von v1 entfaellt damit (E16).
+mkdir -p "$(dirname "${AOFF_DB_PASSWORD_FILE}")"
 if [ -n "${AOFF_DB_PASSWORD:-}" ]; then
     (
         umask 0077
-        printf '%s' "${AOFF_DB_PASSWORD}" > "${PASSWORD_FILE}"
+        printf '%s' "${AOFF_DB_PASSWORD}" > "${AOFF_DB_PASSWORD_FILE}"
     )
     log "Datenbank-Passwort aus der Umgebung uebernommen"
-elif [ ! -s "${PASSWORD_FILE}" ]; then
+elif [ ! -s "${AOFF_DB_PASSWORD_FILE}" ]; then
     # 24 Byte aus /dev/urandom, base64 ohne Sonderzeichen im DSN.
     (
         umask 0077
-        head -c 24 /dev/urandom | base64 | tr -d '\n=+/' > "${PASSWORD_FILE}"
+        head -c 24 /dev/urandom | base64 | tr -d '\n=+/' > "${AOFF_DB_PASSWORD_FILE}"
     )
-    log "internes Datenbank-Passwort erzeugt (${PASSWORD_FILE})"
+    log "internes Datenbank-Passwort erzeugt (${AOFF_DB_PASSWORD_FILE})"
 fi
-chmod 0600 "${PASSWORD_FILE}"
-AOFF_DB_PASSWORD="$(cat "${PASSWORD_FILE}")"
-export AOFF_DB_PASSWORD
+# Lesbar fuer root (Waechter, Importer) und die Gruppe `musicmeta` (der
+# API-Dienst) — sonst niemand. Die Gruppe erbt die Datei ueber das
+# setgid-Bit auf /config; bei einem abweichenden Pfad (Docker-Secret) wird
+# sie hier ausdruecklich gesetzt.
+chgrp musicmeta "${AOFF_DB_PASSWORD_FILE}" 2>/dev/null || true
+chmod 0640 "${AOFF_DB_PASSWORD_FILE}"
+
+# Bestandsdateien nachziehen: eine `config.yaml`, die ein aelterer Stand
+# (oder v1) mit 0600 root:root geschrieben hat, koennte der unprivilegierte
+# API-Dienst nicht lesen — und zwar bis zum naechsten Speichern in der
+# Admin-UI. Das ist genau der Migrationsfall, also hier einmal richtigstellen.
+if [ -f "${AOFF_DATA_DIR}/config.yaml" ]; then
+    chgrp musicmeta "${AOFF_DATA_DIR}/config.yaml" 2>/dev/null || true
+    chmod 0640 "${AOFF_DATA_DIR}/config.yaml"
+fi
+
+# **Der Klartext wird NICHT exportiert.** supervisord vererbt seine
+# Umgebung an jedes Kind — auch an das fremde `fpindex`, das mit der
+# Datenbank nichts zu tun hat. Weitergereicht wird deshalb nur der
+# Dateiname; API und Importer lesen ihn ueber `EnvSettings.db_password_file`
+# (shared/shared/env.py), und wer per `docker compose exec` dazukommt,
+# findet denselben Weg vor.
+unset AOFF_DB_PASSWORD
 
 [ -x "${PGBIN}/initdb" ] || die "Postgres ${AOFF_PG_MAJOR} fehlt im Image (${PGBIN})"
 
@@ -137,10 +173,17 @@ if [ ! -s "${PGDATA}/PG_VERSION" ]; then
     #                  der auf seinen gutartigen Ausweichpfad zurueck und
     #                  der Bootstrap steht nach Stunden auf ungesichertem
     #                  Grund, ohne dass es jemand merkt.
-    gosu postgres "${PGBIN}/psql" --quiet --no-psqlrc --set ON_ERROR_STOP=1 \
-        --dbname=postgres \
-        --command="CREATE ROLE \"${AOFF_DB_USER}\" LOGIN CREATEDB PASSWORD '${AOFF_DB_PASSWORD}'" \
-        --command="GRANT pg_checkpoint TO \"${AOFF_DB_USER}\"" >&2
+    #
+    # Das Passwort kommt hier aus der Datei und geht ueber **stdin** in
+    # psql — nicht als Argument: Argumente stehen in /proc und waeren fuer
+    # jeden im Container sichtbar (`ps`), auch fuer die unprivilegierten
+    # Dienste. Die Variable bleibt lokal und wird gleich wieder vergessen.
+    role_password="$(cat "${AOFF_DB_PASSWORD_FILE}")"
+    printf "CREATE ROLE %s LOGIN CREATEDB PASSWORD '%s';\nGRANT pg_checkpoint TO %s;\n" \
+        "\"${AOFF_DB_USER}\"" "${role_password}" "\"${AOFF_DB_USER}\"" \
+        | gosu postgres "${PGBIN}/psql" --quiet --no-psqlrc --set ON_ERROR_STOP=1 \
+            --dbname=postgres >&2
+    unset role_password
     gosu postgres "${PGBIN}/createdb" --owner="${AOFF_DB_USER}" "${AOFF_DB_NAME}" >&2
     gosu postgres "${PGBIN}/pg_ctl" -D "${PGDATA}" -w -m fast stop >&2
     log "Cluster angelegt"

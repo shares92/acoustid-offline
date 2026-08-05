@@ -85,7 +85,16 @@ _FILE_HEADER = (
 
 # Dateirechte der geschriebenen config.yaml: sie enthaelt Secrets im Klartext
 # (ARCHITECTURE §8.10 — Secrets gehoeren in .env/config.yaml, nie ins Repo).
-_FILE_MODE = 0o600
+#
+# **0640 und nicht 0600** (seit M1b): geschrieben wird die Datei vom Waechter
+# (root), gelesen aber auch vom API-Dienst — und der laeuft seit dem
+# Ein-Container-Umbau **unprivilegiert**, weil er als einziger Fremdeingaben
+# verarbeitet. Mit 0600 muesste er dafuer root bleiben; das waere die
+# schlechtere Sicherheitsentscheidung. „Fuer andere nicht lesbar" bleibt
+# erhalten: die Gruppe traegt im Container genau den API-Dienst
+# (`musicmeta`, gesetzt ueber das setgid-Bit auf dem Konfigurations-
+# verzeichnis), und ausserhalb existiert sie in aller Regel gar nicht.
+_FILE_MODE = 0o640
 
 
 # --- Bausteine -------------------------------------------------------------

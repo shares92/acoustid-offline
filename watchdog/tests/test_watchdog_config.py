@@ -46,10 +46,19 @@ def test_save_round_trip_is_lossless(config_store: ConfigStore) -> None:
     assert load_config(config_store.path).auth.mode is AuthMode.APIKEY
 
 
-def test_saved_file_keeps_mode_0600(config_store: ConfigStore) -> None:
-    """Die Datei enthaelt Secrets im Klartext (ARCHITECTURE §8.10)."""
+def test_saved_file_stays_closed_for_others(config_store: ConfigStore) -> None:
+    """Die Datei enthaelt Secrets im Klartext (ARCHITECTURE §8.10).
+
+    Seit M1b 0640: der unprivilegierte API-Dienst liest sie ueber die
+    Gruppe (Begruendung an ``shared.config._FILE_MODE``). „Andere" bleiben
+    ausgesperrt — das ist die eigentliche Zusage.
+    """
     config_store.save(config_store.load())
-    assert stat.S_IMODE(config_store.path.stat().st_mode) == 0o600
+
+    mode = stat.S_IMODE(config_store.path.stat().st_mode)
+
+    assert mode == 0o640
+    assert not mode & stat.S_IRWXO, "world-readable"
 
 
 def test_load_rereads_the_file_from_disk(config_store: ConfigStore) -> None:

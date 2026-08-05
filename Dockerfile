@@ -135,12 +135,27 @@ ENV PYTHONUNBUFFERED=1 \
 # brauchen berechenbare Eigentuemer (R14). 6081 ist die UID des
 # acoustid-index-Upstream-Images — ein v1-Index-Verzeichnis passt damit ohne
 # chown. NICHT 99:100 (nobody/users) verwenden.
+#
+# Vier Identitaeten, drei davon unprivilegiert:
+#
+#   postgres  999        die Datenbank
+#   acoustid  6081       der Suchindex (UID des Upstream-Images)
+#   api       6082:6080  der API-Dienst — er verarbeitet als einziger
+#                        Fremdeingaben und laeuft deshalb NICHT als root
+#   musicmeta      6080  Gruppe fuer genau die Dateien unter /config, die
+#                        der API-Dienst lesen muss (config.yaml, das
+#                        Datenbank-Passwort). Sie ist seine **primaere**
+#                        Gruppe: damit haengt der Zugriff nicht an
+#                        Supplementary-Groups des Supervisors.
 RUN groupadd --system --gid 999 postgres \
     && useradd --system --uid 999 --gid 999 --home-dir /var/lib/postgresql \
         --shell /bin/sh --comment "PostgreSQL" postgres \
     && groupadd --gid 6081 acoustid \
     && useradd --uid 6081 --gid 6081 --home-dir /nonexistent \
         --shell /usr/sbin/nologin --comment "acoustid-index" acoustid \
+    && groupadd --gid 6080 musicmeta \
+    && useradd --uid 6082 --gid 6080 --home-dir /nonexistent \
+        --shell /usr/sbin/nologin --comment "musicmeta API" api \
     && mkdir -p /var/lib/postgresql \
     && chown postgres:postgres /var/lib/postgresql
 
