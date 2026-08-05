@@ -78,6 +78,8 @@ from acoustid_watchdog.lifecycle import (
     IdleStopper,
     StatePoller,
 )
+from acoustid_watchdog.notify import EVENT_SOURCE as NOTIFY_EVENT_SOURCE
+from acoustid_watchdog.notify import Notifier, version_drift
 from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.ratelimit import IpRateLimiter
@@ -100,6 +102,7 @@ from shared.models import StackState
 __all__ = [
     "CACHE_EVENT_SOURCE",
     "EVENT_SOURCE",
+    "NOTIFY_EVENT_SOURCE",
     "STACK_EVENT_SOURCE",
     "WAKE_EVENT_SOURCE",
     "WatchdogService",
@@ -196,6 +199,13 @@ class WatchdogService:
                 version_guard=self._guard_postgres_version,
             )
         )
+        # Benachrichtigungen (M2.5). Sie bekommen die Konfiguration als
+        # Quelle, nicht als Wert: ein in der Admin-UI nachgetragener Kanal
+        # soll die naechste Meldung bekommen, ohne dass jemand neu startet.
+        self.notify = Notifier(
+            lambda: self.config,
+            log_event=partial(self.log_event, source=NOTIFY_EVENT_SOURCE),
+        )
         self.wake = WakeCoordinator(
             self.stack,
             self.probe,
@@ -203,6 +213,9 @@ class WatchdogService:
             # Weck-Ereignisse bekommen eine eigene Quelle, damit die
             # Logansicht (Phase 27) danach filtern kann.
             log_event=partial(self.log_event, source=WAKE_EVENT_SOURCE),
+            # Der nicht blockierende Weg: der Weckvorgang laeuft in der
+            # Ereignisschleife, beide Kanaele sind synchron.
+            notify=self.notify.send_background,
         )
 
         # Lebenszyklus (Phase 16): Uhr, Job-Auskunft und die beiden
@@ -305,6 +318,10 @@ class WatchdogService:
         self.cache.close()
         self.supervisor.close()
         self.probe.close()
+        # Zuletzt: eine Meldung, die gerade unterwegs ist, soll noch
+        # ankommen — sie beschreibt womoeglich genau den Grund, aus dem
+        # hier heruntergefahren wird.
+        self.notify.close()
 
     async def aclose(self) -> None:
         """Schliesst zusaetzlich den Proxy-Pool (Lifespan-Ende)."""
@@ -432,6 +449,13 @@ class WatchdogService:
                 "detail": str(drift),
             },
             source=STACK_EVENT_SOURCE,
+        )
+        # Die Benachrichtigung aus E14: ohne sie merkte der Betreiber den
+        # Drift erst am ersten 503 — moeglicherweise Stunden nach dem
+        # Update. Im Hintergrund, damit ein haengender Mailserver den Start
+        # des Waechters nicht verzoegert.
+        self.notify.send_background(
+            version_drift(expected=drift.expected, found=drift.found, detail=str(drift))
         )
 
     def log_event(

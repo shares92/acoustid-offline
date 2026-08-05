@@ -26,6 +26,7 @@ from watchdog_stubs import (
 
 from acoustid_watchdog.control import GroupStatus, ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel
+from acoustid_watchdog.notify import Notification, NotifyEvent
 from acoustid_watchdog.process import SupervisorClient, SupervisorError
 from acoustid_watchdog.stack import STACK_PROCESSES, ServiceGroupController
 from acoustid_watchdog.state import StackStateTracker
@@ -48,6 +49,7 @@ def _coordinator(
     *,
     events: list[tuple[EventLevel, str]] | None = None,
     state: StackStateTracker | None = None,
+    notifications: list[Notification] | None = None,
 ) -> tuple[WakeCoordinator, StackStateTracker]:
     tracker = state if state is not None else StackStateTracker.sleeping()
     coordinator = WakeCoordinator(
@@ -57,6 +59,7 @@ def _coordinator(
         log_event=(lambda level, message, extra=None: events.append((level, message)))
         if events is not None
         else None,
+        notify=notifications.append if notifications is not None else None,
         poll_interval_s=0.01,
     )
     return coordinator, tracker
@@ -333,6 +336,69 @@ def test_a_start_failure_of_any_controller_becomes_an_error_state() -> None:
     assert state.state is StackState.ERROR
     assert state.status.detail == "Supervisor-Socket antwortet nicht"
     assert (EventLevel.ERROR, "Stack-Start fehlgeschlagen") in events
+
+
+def test_a_start_failure_is_reported_to_the_operator() -> None:
+    """M2.5: der Stack bleibt im Fehlerzustand stehen — die Meldung geht raus.
+
+    Ohne sie saehe der Betreiber den Zustand nur an den 503-Antworten. Der
+    Weg ist bewusst der **nicht blockierende**
+    (:meth:`~acoustid_watchdog.notify.Notifier.send_background`): der
+    Weckvorgang laeuft in der Ereignisschleife, beide Kanaele sind
+    synchron.
+    """
+    supervisor = sleeping_stack()
+    supervisor.fail_on.add("db")
+    notifications: list[Notification] = []
+    coordinator, state = _coordinator(supervisor, FakeProbe(), notifications=notifications)
+
+    async def scenario() -> None:
+        await coordinator.ensure_ready(timeout_s=5)
+
+    with pytest.raises(StackNotReadyError):
+        asyncio.run(scenario())
+
+    assert state.state is StackState.ERROR
+    assert [item.event for item in notifications] == [NotifyEvent.STACK_START_FAILED]
+    assert "db" in notifications[0].fields["grund"]
+
+
+def test_a_successful_wake_reports_nothing() -> None:
+    """Der Normalfall meldet sich nicht — sonst waere die Meldung wertlos."""
+    notifications: list[Notification] = []
+    coordinator, _state = _coordinator(sleeping_stack(), FakeProbe(), notifications=notifications)
+
+    async def scenario() -> None:
+        await coordinator.ensure_ready(timeout_s=5)
+        await coordinator.stop_stack(reason="idle")
+
+    asyncio.run(scenario())
+    assert notifications == []
+
+
+def test_a_broken_notify_hook_does_not_break_the_wake() -> None:
+    """Die Ausnahme, die gemeldet werden soll, ist die wichtigere."""
+    supervisor = sleeping_stack()
+    supervisor.fail_on.add("db")
+    state = StackStateTracker.sleeping()
+
+    def explode(_notification: Notification) -> None:
+        raise RuntimeError("Benachrichtigung kaputt")
+
+    coordinator = WakeCoordinator(
+        controller(supervisor),
+        FakeProbe(),  # type: ignore[arg-type]
+        state,
+        notify=explode,
+        poll_interval_s=0.01,
+    )
+
+    async def scenario() -> None:
+        await coordinator.ensure_ready(timeout_s=5)
+
+    with pytest.raises(StackNotReadyError, match="konnte nicht gestartet werden"):
+        asyncio.run(scenario())
+    assert state.state is StackState.ERROR
 
 
 def test_a_failing_controller_leaves_the_display_alone_on_observe() -> None:

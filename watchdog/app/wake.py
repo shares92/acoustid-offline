@@ -59,6 +59,7 @@ from starlette.concurrency import run_in_threadpool
 
 from acoustid_watchdog.control import GroupStatus, ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel
+from acoustid_watchdog.notify import Notification, stack_start_failed
 from acoustid_watchdog.state import StackStateTracker
 from shared.models import StackState
 
@@ -165,6 +166,7 @@ class WakeCoordinator:
         state: StackStateTracker,
         *,
         log_event: Callable[..., None] | None = None,
+        notify: Callable[[Notification], Any] | None = None,
         poll_interval_s: float = DEFAULT_POLL_INTERVAL_S,
     ) -> None:
         """
@@ -177,12 +179,18 @@ class WakeCoordinator:
             log_event: ``(level, message, extra)`` — Anschluss an das
                 Ereignis-Log des Waechters. Ohne Angabe wird nur ins
                 Containerlog geschrieben.
+            notify: Anschluss an die Benachrichtigungen (M2.5). Erwartet
+                wird der **nicht blockierende** Weg
+                (:meth:`~acoustid_watchdog.notify.Notifier.send_background`):
+                der Weckvorgang laeuft in der Ereignisschleife, und beide
+                Kanaele sind synchron.
             poll_interval_s: Abstand zwischen zwei Bereitschaftsfragen.
         """
         self._controller = controller
         self._probe = probe
         self._state = state
         self._log_event = log_event
+        self._notify = notify
         self._poll_interval_s = poll_interval_s
         # Bewusst ein einfaches Flag und kein ``asyncio.Event``: niemand
         # *wartet* darauf (gewartet wird auf die Weck-Aufgabe), gelesen und
@@ -333,6 +341,9 @@ class WakeCoordinator:
             detail = str(exc)
             self._state.to(StackState.ERROR, detail=detail)
             self._event(EventLevel.ERROR, "Stack-Start fehlgeschlagen", {"error": detail})
+            # Der Stack bleibt bewusst im Fehlerzustand stehen (Phase 16) —
+            # ohne Meldung saehe der Betreiber davon nur die 503-Antworten.
+            self._send_notification(stack_start_failed(detail))
             raise StackNotReadyError(f"Stack konnte nicht gestartet werden: {detail}") from exc
 
         _LOG.info("Stack-Prozesse gestartet", extra={"processes_started": started})
@@ -611,6 +622,19 @@ class WakeCoordinator:
             self._log_event(level, message, extra)
         else:  # pragma: no cover - nur ohne angeschlossenes Ereignis-Log
             _LOG.log(level.logging_level, message, extra=extra or {})
+
+    def _send_notification(self, notification: Notification) -> None:
+        """Meldet nach draussen, wenn ein Kanal eingerichtet ist.
+
+        Ein Fehler beim Melden darf den Weckvorgang nicht mitreissen: die
+        Ausnahme, die gerade gemeldet werden soll, ist die wichtigere.
+        """
+        if self._notify is None:
+            return
+        try:
+            self._notify(notification)
+        except Exception:  # pragma: no cover - defensiv
+            _LOG.exception("Benachrichtigung konnte nicht ausgeloest werden")
 
 
 def _swallow(task: asyncio.Task[Any]) -> None:

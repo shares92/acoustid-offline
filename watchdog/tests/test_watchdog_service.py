@@ -133,6 +133,11 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     gehoeren ausdruecklich hierher: sie rechnen im Speicher bzw. lesen die
     eigene SQLite und muessen deshalb auch bei schlafendem Stack
     funktionieren — sonst waere ausgerechnet ein Cache-Treffer ungeschuetzt.
+
+    Seit M2.5 kommen die Benachrichtigungen dazu. Sie sprechen nach
+    **draussen** (ntfy, SMTP) und nicht mit dem Array — und sie sind der
+    Grund, warum der Betreiber von einem schlafenden Stack ueberhaupt
+    erfaehrt.
     """
     attributes = set(vars(service))
     assert attributes == {
@@ -147,6 +152,7 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "probe",
         "proxy",
         "stack",
+        "notify",
         "wake",
         "activity",
         "jobs",
