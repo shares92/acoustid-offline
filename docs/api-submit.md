@@ -193,6 +193,17 @@ new ──(_update im Index)──> indexed ──(Upstream-Antwort)──> forw
   optimistisch ab, weil er der einzige Schreiber sein soll; die API kann das
   nicht — sie schreibt neben ihm. Die Idempotenz kommt hier aus dem Inhalt:
   dieselbe Dokument-ID mit denselben Hashes zu schicken, ist folgenlos.
+- **Während des Delta-Imports wird zurückgestellt** (Betreiber-Entscheid
+  2026-08-05, ARCHITECTURE §8.12). Läuft gerade ein Import — erkennbar an
+  der Marke `/config/index-feed.busy`, die der Wächter für die Dauer des
+  Jobs hält —, wird die Einreichung **angenommen und gespeichert**, aber
+  nicht indexiert: sie erhöhte sonst die Index-Version, und der Feed des
+  Importers bräche an seinem `expected_version`-Guard ab. Das kostete
+  einen ganzen Tag Datenstand für eine Einreichung, die eine Minute
+  später genauso sichtbar wird. **Nach außen ändert sich nichts** — die
+  Antwort war ohnehin immer `pending`. Nachgetragen wird direkt nach dem
+  Lauf (`python -m acoustid_api.queuejob`, unabhängig vom Submit-Modus)
+  oder bei der nächsten Submit-Anfrage.
 - **Nur Stille im Vektor:** kein Dokument, aber trotzdem `indexed` — sonst
   läge die Zeile bei jeder künftigen Anfrage wieder im Arbeitsvorrat (wie beim
   Index-Feed).
