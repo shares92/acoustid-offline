@@ -1,0 +1,125 @@
+{
+  "schema": "acoustid-offline/importer-run/1",
+  "mode": "bootstrap",
+  "result": "ok",
+  "exit_code": 0,
+  "started_at": "2026-08-04T18:33:33.861469+00:00",
+  "finished_at": "2026-08-04T21:29:57.770747+00:00",
+  "duration_s": 10583.909,
+  "import_duration_s": 5321.499,
+  "files": {
+    "planned": 91,
+    "imported": 91,
+    "skipped": 0,
+    "downloaded": 91,
+    "resumed": 0,
+    "empty": 2
+  },
+  "rows": 16599754,
+  "rows_by_stream": {
+    "track": 3519661,
+    "meta": 170580,
+    "fingerprint": 4052403,
+    "track_fingerprint": 4052403,
+    "track_mbid": 2581800,
+    "track_meta": 171487,
+    "track_puid": 2051420
+  },
+  "files_by_stream": {
+    "track": 13,
+    "meta": 13,
+    "fingerprint": 13,
+    "track_fingerprint": 13,
+    "track_mbid": 13,
+    "track_meta": 13,
+    "track_puid": 13
+  },
+  "gz_bytes": 17275321462,
+  "downloaded_bytes": 17275321462,
+  "days": {
+    "first": "2011-08-19",
+    "last": "2011-08-31"
+  },
+  "gaps": [],
+  "escaping_fallbacks": 0,
+  "unknown_fields": [],
+  "index_feed": {
+    "documents": 4052403,
+    "batches": 4053,
+    "scanned": 4052403,
+    "incomplete": 0,
+    "empty_queries": 0,
+    "last_id": 14525525,
+    "version": 4053,
+    "duration_s": 5051.577,
+    "exhausted": true
+  },
+  "measurements": {
+    "disk_before": {
+      "path": "/data/dumps",
+      "total_bytes": 1128233570304,
+      "free_bytes": 293066002432,
+      "min_free_bytes": 53687091200,
+      "ok": true
+    },
+    "db_before": {
+      "total_bytes": 8124095,
+      "tables": {
+        "track": 8192,
+        "fingerprint": 16384,
+        "track_mbid": 8192,
+        "meta": 16384,
+        "track_meta": 8192,
+        "track_puid": 8192,
+        "import_state": 16384
+      }
+    },
+    "db_after": {
+      "total_bytes": 18440058559,
+      "tables": {
+        "track": 496041984,
+        "fingerprint": 17144995840,
+        "track_mbid": 498884608,
+        "meta": 29097984,
+        "track_meta": 21692416,
+        "track_puid": 240869376,
+        "import_state": 65536
+      }
+    },
+    "index_before": {
+      "documents": 0,
+      "version": null,
+      "bytes": 0
+    },
+    "index_after": {
+      "documents": 4052403,
+      "version": 4053,
+      "bytes": 2001906421
+    },
+    "disk_after": {
+      "path": "/data/dumps",
+      "total_bytes": 1128233570304,
+      "free_bytes": 250684567552,
+      "min_free_bytes": 53687091200,
+      "ok": true
+    },
+    "disk_checks": 7
+  },
+  "projection": {
+    "total_gz_bytes": 414000000000,
+    "measured_gz_bytes": 17275321462,
+    "measured_duration_s": 5321.499,
+    "coverage": 0.04172783,
+    "throughput_gz_bytes_s": 3246326.0,
+    "estimated_total_duration_s": 127529,
+    "estimated_total_hours": 35.42,
+    "measured_db_bytes": 18431934464,
+    "estimated_db_bytes": 441718024459,
+    "measured_index_documents": 4052403,
+    "estimated_index_documents": 97115116,
+    "measured_index_bytes": 2001906421,
+    "estimated_index_bytes": 47975330596
+  },
+  "error": null,
+  "warnings": []
+}

@@ -148,6 +148,13 @@ Warum: Level-abhängige Crashes überleben Tests, die mit anderem Level
 laufen, und schlagen erst in Produktion zu.
 Anwenden: Logging-Wrapper bauen, der Anwendungsfelder namespaced;
 Log-Aufrufe in Tests mit durchlässigem Level ausführen.
+Folgefund (M1b): Der Fehler passierte TROTZ dieses Eintrags erneut
+(`extra={"process": …}` im neuen Supervisor-Code) — ein Merkeintrag
+schützt nicht, ein Test schon. Konsequenz: repo-weiter Tripwire-Test
+(`tests/test_repo_layout.py`), der reservierte LogRecord-Feldnamen in
+`extra=`-Aufrufen findet. Für wiederkehrende Fehlerklassen gilt
+allgemein: die LEARNINGS-Erkenntnis zusätzlich als Test einklagbar
+machen, wo das billig möglich ist.
 
 ## [Bug] CI-Action-Versionen gegen echte Tags prüfen — auch „verifizierte"
 
@@ -531,22 +538,50 @@ rpcinterface.py); einen unabhängigen Reviewer explizit auf die
 Attrappen-Treue ansetzen; wo möglich später einen Kontrakt-Test gegen
 das echte System ergänzen (M1b: pytest-Fixture mit echtem supervisord).
 
+## [Technik] AF_UNIX-Socketpfade sind auf ~104 Byte begrenzt
+
+Was: Der supervisord-Socket unter `/config/…` wäre auf manchen Wirten
+(lange Bind-Mount-Pfade) über die AF_UNIX-Grenze von ~104 Byte
+gelaufen — er liegt deshalb auf `/run/supervisor.sock`, und ein Test
+hält die Grenze fest. Aus demselben Grund legt der Kontrakt-Test
+seinen Socket nicht unter pytest-`tmp_path` (macOS-Tempfade sind
+lang).
+Warum: Der Fehler tritt erst auf fremden Systemen auf und sieht dort
+wie ein kaputter Supervisor aus.
+Anwenden: Unix-Sockets immer unter kurze, feste Pfade (`/run`, tmpfs)
+legen, nie unter konfigurierbare Datenverzeichnisse; die Pfadlänge
+testen.
+
 ---
 
 ## Messwert-Rubriken v2-Migration (HANDOFF v2 §16: „LEARNINGS.md sammelt Messwerte")
 
-Noch leer — wird ab M1b/Probelauf befüllt; korrigiert v2-§15.1 und die
-E12-/R15-Vorbehalte (docs/research/m0-impact-analyse.md).
+Korrigiert v2-§15.1 und die E12-/R15-Vorbehalte
+(docs/research/m0-impact-analyse.md). Tower-Werte folgen aus
+Messlauf/Migrationsprobe.
 
-- **PG-Start/Stopp am echten Bestand** (Fast-Shutdown-Dauer,
-  Recovery-Zeit, Checkpoint-Kosten je Idle-Zyklus): —
-- **Index-Kaltstart auf SSD-Cache** (MAP_POPULATE bei 40–55 GB;
-  entscheidet E12-Mess-Vorbehalt): —
-- **Weckdauer gesamt am echten Bestand** (heute nur leerer Teststack:
-  ~1,3 s): —
+- **PG-Start/Stopp am echten Bestand** (Recovery, Checkpoint je
+  Idle-Zyklus): — (leeres Cluster, colima: Start 5,30 s — davon 5,0 s
+  eigenes `startsecs` —, Fast-Shutdown-Stopp 0,23 s)
+- **Index-Kaltstart auf SSD-Cache** (MAP_POPULATE; entscheidet
+  E12-Mess-Vorbehalt): —
+- **Weckdauer gesamt am echten Bestand**: — (leerer Teststack,
+  Ein-Container: 10,9–11,1 s, davon ~10 s `startsecs` db+api;
+  v1-Vergleich ~1,3 s; Cache-Treffer bei schlafendem Stack 0,01 s)
 - **Import-Dauern** (AcoustID-Bootstrap/Delta, Discogs-Monatsdump je
-  Etappe): —
+  Etappe): Smoke-Lauf Tower 2026-08-04 (13 Tage 2011, 17,3 GB gz,
+  91 Dateien): 2,94 h gesamt, Import-Durchsatz 3,25 MB gz/s →
+  **Projektion Vollimport ~35,4 h reine Importzeit**
+  (docs/research/probelauf/probelauf-smoke.json; 0 Lücken,
+  0 unknown_fields, 0 escaping_fallbacks)
 - **CAA-Crawl-Rate real** (Drossel 2/s, Sperren/Backoffs): —
-- **Bestandsgrößen** (PG je Schema, Index, Cover, TADB-Cache; gegen
-  v2-§15.1-Schätzung): —
-- **Image-Größe + CI-Buildzeit** des Ein-Container-Images: —
+  (Recherche: kein Rate-Limit dokumentiert/messbar, aber 30–50 %
+  Schein-500er der IA-Knoten → Retry-Pflicht;
+  docs/research/m4-caa-bezug.md)
+- **Bestandsgrößen** (gegen v2-§15.1): Projektion aus dem Smoke-Lauf
+  bei `query_hashes=120`: **PG ~442 GB** (leicht ÜBER dem
+  §15.1-Band 200–400 GB), **Index ~48 GB**; real 3,76 Mio.
+  Frontcover ≈ 0,8 TB (statt ~2 Mio. laut v2 §4)
+- **Image-Größe + Buildzeit** des Ein-Container-Images: 462 MB
+  (Filesystem 330 MB); Kaltbuild ~281 s Schrittzeit auf
+  colima/Rosetta (2 vCPU; Zig 58 s, PGDG-apt 80 s, 2× uv sync ~55 s)

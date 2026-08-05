@@ -10,34 +10,57 @@ docs/archive/HANDOFF-v1.md) + docs/research/m0-impact-analyse.md;
 technische Referenz: ARCHITECTURE.md (beschreibt bis M1/M2 den
 gebauten v1-Stand, siehe Kopfvermerk dort).
 
-**Status (2026-08-04, spät): Phasen 0–18 (v1), M0 und M1a
-abgeschlossen.** HANDOFF v2 übernommen (Ein-Container mit
-supervisord+tini, Phasen M1a–M9, Entscheide E1–E16 bestätigt —
-DECISIONS 2026-08-04). M1a (Naht-Phase, `ff018d1`): Naht-Vertrag
-`control.py`, Adressen in `EnvSettings`, `FakeSupervisor`
-(supervisord-treu nach Zweitreview-Nacharbeit), dbimport-Assertion
-(Task-Chip erledigt). **1701 Tests** (Unit 1479 + Integration;
-Compose-E2E 6/6 doppelt gefahren), Doppel-Review (Fable + GPT 5.6
-blind, 5 Findings → 4 gefixt, 1 als Entscheid dokumentiert).
-**Unraid-Probelauf läuft** auf Tower (Betreiber-Freigabe für
-Server-Tests 2026-08-04). **Warten auf Go für M1b.**
+**Status (2026-08-05, früh): Phasen 0–18 (v1), M0, M1a und M1b
+abgeschlossen — das Projekt ist ein Ein-Container-System.** M1b
+(`6c4a184`, 9 Commits): supervisord 4.3.0 + tini (läuft verifiziert
+unter Py 3.14), ein Multi-Stage-Dockerfile (PGDG-PG 18.4 + fpindex
+aus Quelle mit Commit-Pin + THIRD-PARTY-NOTICES), `process.py`/
+`stack.py` ersetzen `docker.py` (docker.sock ersatzlos weg), Kante
+`ready→error`, sequenzieller Start mit Readiness-Gates, eine
+Compose-Datei (Bind-Mounts, Healthcheck `/status`), E2E portiert
+(8/8), CI-Job `image-tests` gegen das eigene Image, Migrationsrezept
+docs/migration-v1-v2.md (UNGEPROBT — R3). Doppel-Review: GPT 5.6
+blind fand 6 fixwürdige Findings (u. a. API lief als root; `observe()`
+maskierte Teilzustände als Schlaf — ein Alt-Test hatte den Fehler
+festgeschrieben), alle gefixt und verifiziert. **1754 Tests** (Unit
+1547 + Integration 199 gegen das eigene Image + E2E 8/8, je doppelt
+gefahren). **Recherche-Gates M3–M7 erledigt** (`a4c284e`, vier
+Berichte in docs/research/, R19 entkräftet). **Unraid-Probelauf:**
+Smoke ok (Projektion: Vollimport ~35,4 h, DB ~442 GB, Index ~48 GB;
+Report im Repo), Messlauf bis 2012-12-31 läuft auf Tower.
+**Warten auf Go für M2.**
 
-## Session-Übergabe (2026-08-04, nach M0 + M1a)
+## Session-Übergabe (2026-08-04/05, nach M0 + M1a + M1b + Recherche-Gates)
 
-**Kurzbeschreibung:** Session vom 04.08.: (1) HANDOFF v2 eingelesen,
-M0-Impact-Analyse gefahren (vier parallele Opus-Analysen, Synthese
-Orchestrator, Doppel-Review Opus+GPT-5.6 mit 25 verifizierten
-Findings) → docs/research/m0-impact-analyse.md; Betreiber hat E1–E16
-entschieden, Doku-Sweep `5a38d2f`. (2) M1a per Opus-Bau-Agent im
-Worktree gebaut (Stand-Vorprüfung bestanden), vom Orchestrator
-verifiziert (Diff-Review, ruff, Unit, E2E-Zweitlauf), blinder
-GPT-5.6-Review fand 4 fixwürdige Findings (Compose-Verdrahtung der
-neuen Env-Variablen, drei supervisord-Treue-Fehler der Attrappe) —
-Nacharbeit verifiziert, ff-Merge `ff018d1`. (3) Betreiber gab
-Server-Freigabe: Unraid-Probelauf (docs/probelauf-unraid.md) von
-Claude auf Tower gestartet (Setup: PG direkt auf /mnt/disk11, Index
-auf NVMe-Cache chown 6081, Repo/Dumps auf appdata; Smoke-Lauf läuft,
-Messlauf bis 2012-12-31 folgt).
+**Kurzbeschreibung:** Marathon-Session 04./05.08.: (1) **M0** —
+HANDOFF v2 eingelesen, Impact-Analyse mit vier parallelen
+Opus-Analysen + Doppel-Review (25 verifizierte Findings) →
+docs/research/m0-impact-analyse.md; Betreiber entschied E1–E16;
+Doku-Sweep `5a38d2f`. (2) **M1a** (Naht) gebaut/reviewt/gemergt
+`ff018d1` (GPT-Review: 4 Findings gefixt). (3) **M1b**
+(Ein-Container) gebaut/reviewt/gemergt `6c4a184` (GPT-Review: 6
+Findings gefixt, s. Statuskopf). (4) **Recherche-Gates M3–M7**
+parallel erledigt (`a4c284e`): Discogs-Dumps (Referenztools veraltet,
+kein Range-Resume, 429/1h-Sperre; Bilder-ToS-Konflikt = offener
+Betreiber-Entscheid Ⓞ8), CAA (kein Bild-Bulk; direkte
+archive.org-URLs; 30–50 % Schein-500er der IA-Knoten; real 3,76 Mio.
+Cover ≈ 0,8 TB), MB-Spiegel-Empirie auf Tower (R19 entkräftet;
+Rolle `acoustid_ro` fehlt — GRANT-Skript im Bericht; MB-Netz ohne
+Host-Port → Container ins MB-Netz hängen), TADB (Cache laut ToS
+erlaubt; Empfehlung Single-Developer-Key 8 €/Mon.; Release-Group-
+MBID-Falle; Artwork muss mitgespiegelt werden). (5) **Tower:**
+Betreiber gab Server-Freigabe (`ssh Tower`); Probelauf aufgesetzt
+(PG direkt auf /mnt/disk11, Index NVMe-Cache chown 6081), Smoke ok
+(Report: docs/research/probelauf/probelauf-smoke.json), Messlauf
+läuft. **Vorfall:** Unraid-shfs (`/mnt/user`) stürzte in der Nacht
+ab (Ursache unklar, Instabilität schon vorher im Syslog); Betreiber
+hat Array neu gestartet; Messlauf danach mit Direktpfad-Dumps
+(`/mnt/cache/…`, an FUSE vorbei) neu gestartet — Resume griff.
+(6) **Parallel-Session** härtete die Repo-Hooks (`f1336d7`,
+`d4a0f30`): u. a. Pipe-Exit-Code-Wache und ask-Regeln für
+`pytest --compose/--network` — Rückfragen kann nur die Hauptsession
+beantworten, Bau-Agenten deshalb E2E-Läufe möglichst vom
+Orchestrator fahren lassen bzw. Muster `cmd > log; echo rc=$?`.
 
 **Aktueller Stand — funktioniert (getestet, CI grün, unverändert):**
 Alles aus dem v1-Stand bis Phase 18: Shared (Config/Env/Logging/
@@ -48,37 +71,50 @@ submission_status — bug-für-bug-dokumentiert), Wächter-Kern
 Zustandsmaschine/Idle-Stopp, Lookup-Cache, Auth & Rate-Limit).
 Ergebnistabelle unten.
 
-**Existiert noch nicht:** der Ein-Container-Umbau selbst (M1b:
-Supervisor, ein Image; M2: Umbenennung), Scheduler/Notify/Backup/
+**Existiert noch nicht:** Umbenennung (M2), Scheduler/Notify/Backup/
 Metrics (M2.5 — die alten Phasen 19–22 wurden nie gebaut),
-Discogs/Cover/CAA/TADB/v1-API (M3–M7), Admin-UI (M8), E2E/Release
-(M9). Nie gelaufen: Voll-Bootstrap am echten Datenbestand, echter
-Upstream-Submit.
+Discogs/Cover/CAA/TADB/v1-API (M3–M7), Admin-UI (M8), E2E-Suite in
+CI ausgeweitet/Release (M9). Nie gelaufen: Voll-Bootstrap am echten
+Datenbestand, echter Upstream-Submit, Volume-Migration v1→v2 auf
+echter Hardware.
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung M1b** einholen (Ein-Container-Umbau; Block unten,
-   inkl. Py-3.14-Check für supervisord als erstem Prüfpunkt).
-2. **Unraid-Probelauf abschließen** (läuft auf Tower, von Claude
-   gestartet — Betreiber-Freigabe 2026-08-04): Smoke-Lauf in Arbeit,
-   danach Messlauf (`--end-date 2012-12-31`); Report-JSONs auswerten →
+1. **Go-Entscheidung M2** einholen (Umbenennung; Block unten. M1+M2
+   sollen als EIN Betreiber-Release ausgeliefert werden — E5).
+2. **Messlauf auswerten** (läuft auf Tower): Report
+   `/mnt/cache/appdata/acoustid-offline/dumps/probelauf.json`, Log
+   `/mnt/cache/appdata/acoustid-offline/messlauf.log`; danach
    query_hashes-Empfehlungstabelle + README-Zeitangabe +
-   LEARNINGS-Messwerte. Nichts wegräumen — der Stand ist der Anfang
-   des echten Bootstraps.
-3. **Daten-Flaute:** entschärft — Deltas liegen wieder bis 2026-07-27
-   vor (geprüft 2026-08-04); Export hinkt aber ~8 Tage nach. Vor
-   Produktivstart erneut prüfen (ARCHITECTURE §12).
-4. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
-5. **XFF-Betreiber-Entscheid** (Rate-Limit hinter TLS-Proxy):
-   spätestens M9 beim TLS-Hinweis.
+   LEARNINGS-Messwerte (PG-Start/Stopp am echten Bestand,
+   Index-Kaltstart auf SSD → entscheidet E12-Mess-Vorbehalt +
+   startsecs-Tuning). Nichts wegräumen — der Stand ist der Anfang des
+   echten Bootstraps.
+3. **Volume-Migrationsrezept proben** (R3): docs/migration-v1-v2.md
+   auf Tower am Probelauf-Bestand durchspielen, BEVOR der Bestand
+   produktiv gebraucht wird (der neue Container-Entrypoint legt sonst
+   ein leeres Cluster an — Abnahme §8 des Rezepts prüft darauf).
+4. **Neue Betreiber-Entscheide aus den Recherche-Gates** (bei
+   M3/M6-Go stellen): Discogs-Bilder-ToS vs. Lazy-Cache (Ⓞ8 in
+   docs/research/m3-discogs-dumps.md, Empfehlung liegt bei); TADB-
+   Key-Stufe (Empfehlung: Single Developer 8 €/Mon.); MB-GRANTs
+   einspielen (Skript in docs/research/m5-mb-spiegel-befund.md §5)
+   + Projekt-Container ins MB-Docker-Netz.
+5. **Daten-Flaute:** entschärft — Deltas bis 2026-07-27 (geprüft
+   04.08.); Export hinkt ~8 Tage nach. Vor Produktivstart erneut
+   prüfen.
+6. Log-Rotation für `/config/logs/watchdog.log` (tee-Datei) → M2.5.
+7. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
+8. **XFF-Betreiber-Entscheid**: spätestens M9.
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
---oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung), dann per
-AskUserQuestion das Go für **M1b** einholen und bei Go einen
-Opus-Bau-Agenten mit dem M1b-Block unten beauftragen — inklusive
-Stand-Vorprüfung im Auftragstext (DECISIONS 2026-08-01) und
-Sperrzonen-Vermerk (Arbeitsregeln). Probelauf-Stand auf Tower prüfen
-(`tail /mnt/user/appdata/acoustid-offline/smoke.log`, Reports unter
-`/mnt/user/appdata/acoustid-offline/dumps/`).
+--oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung), dann
+Messlauf-Stand auf Tower prüfen (Pfade oben; `ssh Tower`,
+Betreiber-Freigabe 2026-08-04) und per AskUserQuestion das Go für
+**M2** einholen; bei Go einen Opus-Bau-Agenten mit dem M2-Block unten
+beauftragen — inklusive Stand-Vorprüfung und Sperrzonen-Vermerk.
+Achtung: Repo-Hooks verlangen `pytest`-Aufrufe ohne Pipe
+(`cmd > log; echo rc=$?`) und stellen bei `--compose/--network`
+Rückfragen — E2E-Läufe deshalb vom Orchestrator fahren.
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
@@ -162,86 +198,9 @@ DECISIONS.md; Berichte: docs/research/.
 | 18 | Wächter: Auth & Rate-Limit | 2570ea5 | Reihenfolge Limit → Auth → Cache → Wecken (Abweisungen wecken nie), `apikey` gegen `api_key` (sha256 konstant-zeitig), Whitelist Picard/beets, Codes 2/4/14/19, 60-s-Gleitfenster je IP (LRU 2048); E2E 6/6 |
 | **M0** | **Impact-Analyse HANDOFF v2** | 5a38d2f | docs/research/m0-impact-analyse.md: Betroffenheit (~10 % Wächter-Code, 0 Zeilen API/Importer/Shared-Steuerung, ~26 % Wächter-Testzeilen, E2E/Repo-Layout-Tests), Korrekturen K1–K10 an v2, Phasenplan M1a–M9, Entscheide E1–E16 (Betreiber bestätigt); Doppel-Review Opus+GPT-5.6, alle 25 Findings verifiziert/eingearbeitet |
 | **M1a** | **Naht-Phase (weiter auf Docker)** | 51e3541…ff018d1 | `control.py` (ProcessGroupController-Protocol + ProcessControlError), Adressen/`api_port` in EnvSettings (Defaults exakt erhalten; Compose reicht `AOFF_API_*` durch, Leerstring = Ableitungs-Schalter), `FakeSupervisor` supervisord-treu (SPAWN_ERROR-Kette, EXITED-Absturzpfad, `start_failure()`, PID-Logik — 3 Treue-Fixes aus blindem GPT-5.6-Review), dbimport-Assertion 2011er-Meta (Task-Chip task_e5db0b72 erledigt); 1701 Tests, E2E 6/6 doppelt, kein Verhaltensunterschied |
+| **M1b** | **Ein-Container-Umbau** | 6c4a184 (9 Commits) | supervisord 4.3.0 + tini (Py-3.14 verifiziert; eigenes venv /opt/supervisor), ein Multi-Stage-Dockerfile (PGDG-PG 18.4, fpindex aus Quelle mit Commit-Pin + NOTICES, 462 MB), `process.py`+`stack.py` ersetzen `docker.py` (docker.sock weg), `GroupStatus` statt bool (Absturz ≠ Schlaf), Kante `ready→error`, sequenzieller Start mit Gates (DB hart via pg_isready — gilt auch für schon Laufendes), E15-Politik + Index resident (E12), initdb-Entrypoint (App-Rolle ohne Superuser: CREATEDB+pg_checkpoint; Passwort nur als Datei), API unprivilegiert (User `api`, /config setgid 0640-Entscheid), `/_health`-Deny, eine Compose (Bind-Mounts, stop_grace 6m, Healthcheck /status), Dev-Compose aus dem einen Image, E2E portiert 8/8 (eigener Projekt-Namespace), CI `image-tests`, Kontrakt-Tests gegen echtes supervisord (12), docs/migration-v1-v2.md (ungeprobt!); GPT-Review: 6 Findings gefixt (API-root, Passwort-Leaks inkl. psql-cmdline, Gate-Lücke, observe()-Teilzustand — Alt-Test hatte den Fehler festgeschrieben, E2E-Namespace, Rollback-Doku); 1547 Unit + 199 Integration + 8/8 E2E, alles doppelt |
 
 ---
-
-## M1b: Ein-Container-Umbau
-
-Ziel: Ein Image, ein Container; supervisord + tini steuert die
-Dauerdienste; AcoustID-Teil bleibt lauffähig (E2E portiert in dieser
-Phase).
-
-Aufgaben:
-- [ ] **Erster Prüfpunkt:** supervisord unter Python 3.14 verifizieren
-      (PyPI weist bis 3.13 aus) — sonst eigener Interpreter im Image
-      oder Neubewertung melden
-- [ ] `process.py` (`SupervisorClient`: XML-RPC über Unix-Socket 0700;
-      `inspect`/`start`/`stop`/`signal`/`states`; Faults
-      ALREADY_STARTED/NOT_RUNNING → bool-Idempotenz wie heute 204/304;
-      BAD_NAME = Image-Bug; blockierende Aufrufe via
-      `asyncio.to_thread`, Read-Timeout > größtes `stopwaitsecs`)
-- [ ] `ServiceGroupController`: **sequenzieller** Start PG → Index →
-      API mit Readiness-Gate je Prozess (pg_isready/psycopg-Connect;
-      Index TCP + `/:index/_health`; API `/_health`) — die API bricht
-      ohne DB nach 30 s ab (`api/app/service.py:120`)
-- [ ] Zustandsmaschine: neue Kante `ready→error` (Prozessabsturz im
-      Betrieb) bzw. gewollter Zustand in `observe()` — Absturz darf
-      sich nicht als Schlaf maskieren; StatePoller pollt
-      `getAllProcessInfo()` (Eventlistener wäre ein eigener
-      Brückenprozess — nicht in M1b)
-- [ ] supervisord-Konfiguration: `autostart=false` +
-      `autorestart=unexpected` (begrenzte startretries) für db/index/
-      api; Wächter `autorestart=true`; Index abweichend
-      `autostart=true` (E12: resident); Postgres `stopsignal=INT`,
-      `stopwaitsecs` großzügig, `user=postgres`; Logs auf `/config`,
-      Wächter-Log **zusätzlich stdout** (Erstpasswort-Weg)
-- [ ] Ein Multi-Stage-Dockerfile (uv-App + PG 18 + fpindex aus Quelle
-      mit Commit-Pin + NOTICES/Quellangebot E7; `WORKDIR /`-Regel;
-      tini als PID 1; initdb-Entrypoint für leeres `/data/db/18/`,
-      Schemata via Migrationen); eine Compose-Datei (ein Service,
-      Bind-Mounts, `stop_grace_period`, Healthcheck = `GET /status`)
-- [ ] Volume-Layout: `/config` (Wächter-Daten — R1-Test „data_dir nie
-      unter Array-Mounts"), `/data/db/<major>/`, Index-Volume auf
-      Cache (E2), `/import`, `/backup`-Mount vorbereiten (K9);
-      Versions-Drift-Guard (Startverweigerung + Log)
-- [ ] Interner API-Port (`MMO_API_PORT`, Bind 127.0.0.1) + Deny-Regel
-      für `/_health` im Proxy + Test
-- [ ] **Volume-Migrationsrezept v1→v2** schreiben (PG-Layout
-      `18/docker` → `/data/db/18/`; Index-Verzeichnis) und auf
-      Betreiber-Hardware **proben**, bevor produktiv geschnitten wird
-- [ ] Tests: `test_watchdog_supervisor.py` (Ersatz für
-      `test_watchdog_docker.py`), Umstellung der Attrappen-Aufbauten
-      auf `FakeSupervisor`, neue Szenarien (Absturz→`error`,
-      Idle-Stopp bleibt gestoppt / Crash wird neu gestartet — beide
-      Richtungen messen, E15; Stopp-Verhalten mit TERM-ignorierendem
-      Dummy), Pfad-Whitelist-Test für Logs/Sockets (R13),
-      `test_repo_layout.py` auf neue Struktur
-- [ ] **E2E portieren** (`supervisorctl status` statt `docker
-      inspect`; fünf Nachweise bleiben) — in dieser Phase, nicht
-      später; Dev-Compose für lokale Integrationstests (nur PG+Index
-      aus dem einen Image); mind. ein CI-Lauf gegen den selbstgebauten
-      fpindex
-- [ ] Messwerte erheben → LEARNINGS-Rubriken (PG-Start/Stopp,
-      Index-Kaltstart auf SSD — entscheidet den E12-Mess-Vorbehalt)
-
-Hinweise (aus M1a): Der Adapter-Tausch ist genau eine Zeile
-(`service.py`: `self.stack: ProcessGroupController = …`).
-`FakeSupervisor.start_failure()` bildet den gescheiterten Weckvorgang
-ab (`STARTING→BACKOFF→FATAL` → `ready` wird nie erreicht), `crash()`
-den Absturz im Betrieb (`RUNNING→EXITED`) — damit lassen sich die
-beiden E15-Richtungen getrennt messen. Beim Tausch nachziehen:
-`WakeCoordinator._docker_failures` + Logtexte „Docker antwortet
-nicht/wieder" (`wake.py`, bewusst in M1a belassen); optional
-`ReadinessSource`-Protocol für `FakeProbe` (heute
-`# type: ignore[arg-type]` in Tests). Leerstring-Konvention für
-abgeleitete Env-Werte übernehmen (DECISIONS 2026-08-04 M1a).
-Messungen auf Tower fahren (SSH-Zugang, Betreiber-Freigabe
-2026-08-04) — der Probelauf-Bestand dort ist zugleich das
-Migrations-Testobjekt für das Volume-Rezept.
-
-Definition of Done: Suite grün; portierter E2E grün (lokal); CI grün
-inkl. Lauf gegen eigenen fpindex-Build; `docker.py` + docker.sock +
-`docker-compose.watchdog.yml` entfernt; Migrationsrezept geprobt.
 
 ## M2: Umbenennung
 

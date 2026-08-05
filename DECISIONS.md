@@ -5,6 +5,52 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-05: M1b-Entscheide — Ein-Container-Betrieb, Rechte, Secrets
+
+Entscheidung (Phase M1b, Merge `6c4a184`; Details im PROGRESS-
+Ergebniseintrag und den Quelldateien):
+(a) **supervisord 4.3.0 läuft unter Python 3.14** (doppelt
+verifiziert; PyPI-Metadaten „bis 3.13" sind konservativ) und liegt in
+einem **eigenen venv** `/opt/supervisor` — Werkzeug des Images, keine
+App-Abhängigkeit. (b) **Naht-Vertrag erweitert:** `all_running() ->
+bool` wurde `inspect() -> GroupStatus` — supervisord unterscheidet
+`STOPPED` (gewollt) von `EXITED/FATAL/BACKOFF` (Absturz), ein Bool
+kann das nicht tragen; `sleeping` ist seither eine positive Aussage
+(„alles Stoppbare ist STOPPED"), Teilzustände/`STARTING` sind nie
+Schlaf. (c) **Gates:** hart nur für die DB (`pg_isready`, ohne
+Treiber/Passwort — §8.2), und zwingende Gates gelten auch für schon
+Laufendes (Review-Finding: `ALREADY_STARTED` hatte das Gate
+übersprungen); Index/API weich, resident nur der Index (E12).
+(d) **Prozess-Benutzer:** db=`postgres`, index=`acoustid` (6081, wie
+v1), api=eigener User `api` (6082 — bewusst nicht `acoustid`, sonst
+tauschte ein API-Exploit Socket-Zugriff gegen Schreibrecht am
+Index); Wächter bleibt root (einziger Weg an den 0700-Supervisor-
+Socket; Tradeoff in supervisord.conf dokumentiert).
+(e) **`_FILE_MODE` der config.yaml 0600 → 0640 mit setgid-Gruppe
+`musicmeta` auf `/config`** — überschreibt den Phase-3-Entscheid
+„Secrets 0600"; die Schutzzusage bleibt („andere" lesen nie), ohne
+die Änderung könnte kein unprivilegierter Dienst die Config lesen.
+(f) **DB-Passwort:** kein `.env`-Pflichtwert mehr; der Entrypoint
+erzeugt es (bzw. respektiert `AOFF_DB_PASSWORD_FILE`/Docker-Secret)
+und exportiert nur den DATEIPFAD — nie den Klartext (drei Leak-Wege
+im Review gefunden, inkl. psql-cmdline → stdin). App-Rolle ohne
+Superuser: exakt `CREATEDB` + `pg_checkpoint`.
+(g) **E2E fährt einen eigenen Compose-Projekt-Namespace** und die
+Produktions-Compose hat keinen festen `container_name` mehr — ein
+Test darf nie eine echte Instanz ersetzen können.
+(h) `dump_dir` folgt `data_dir` NICHT mehr (GB-Dateien gehörten sonst
+auf den Cache-Pool); SupervisorClient bleibt synchron (der Threadpool
+sitzt eine Ebene höher, wie zuvor bei docker.py).
+Begründung: HANDOFF v2 §3/§5, Entscheide E1/E10/E12/E14/E15/E16;
+sechs Findings des blinden GPT-5.6-Zweitreviews, alle am Code
+bestätigt — darunter zwei HOCH-Klassen (API-root; observe()
+maskierte Teilzustände als Schlaf, ein Alt-Test hatte den Fehler
+festgeschrieben).
+Alternativen: api unter `acoustid` (Angriffsflächen-Tausch), 0600
+mit root-API (keine Privilegientrennung), Passwort-Export in die
+supervisord-Umgebung (erbt bis in den Fremdprozess fpindex),
+`container_name` behalten (E2E-Kollisionsrisiko) — verworfen.
+
 ## 2026-08-04: M1a-Entscheide — Naht-Modul, Adress-Ableitung, Attrappen-Treue
 
 Entscheidung (Phase M1a, Commits `51e3541`…`ff018d1`):
