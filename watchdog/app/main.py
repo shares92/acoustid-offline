@@ -145,12 +145,22 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
         tasks = [
             asyncio.create_task(running.poller.run(), name="stack-poller"),
             asyncio.create_task(running.idle.run(), name="idle-stopper"),
+            # Der dritte Dauerlaeufer (M2.5) — der einzige, der die Instanz
+            # von selbst aufweckt.
+            asyncio.create_task(running.scheduler.run(), name="scheduler"),
         ]
         try:
             yield
         finally:
             for task in tasks:
                 task.cancel()
+            # Einen laufenden Job **loslassen**, nicht abbrechen: der
+            # Waechter laeuft unter `stopasgroup=true` (supervisord.conf),
+            # sein SIGTERM erreicht den Subprozess also ohnehin. Ein
+            # zweites Signal von hier bedeutete im Importer „sofort
+            # beenden" — statt des geordneten Exit-Codes 8 gaebe es eine
+            # zurueckgerollte Transaktion (`JobManager.abandon`).
+            running.job_manager.abandon()
             # Auf das Ende warten, sonst meldet asyncio beim Herunterfahren
             # „Task was destroyed but it is pending".
             await asyncio.gather(*tasks, return_exceptions=True)

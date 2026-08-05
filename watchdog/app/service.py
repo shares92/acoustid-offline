@@ -53,9 +53,23 @@ anlegen und migrieren, ``config.yaml`` mit den Defaults aus §6 erzeugen,
 Admin-Passwort generieren und ins Containerlog schreiben. Alle drei
 Schritte sind idempotent — ein Neustart wiederholt keinen davon.
 
-Ab Phase 19 kommt der Scheduler dazu. Der Schnitt ist bewusst derselbe wie
-im API-Dienst: alles Langlebige entsteht einmal beim Start und wird beim
-Herunterfahren wieder freigegeben.
+Seit M2.5 kommen die vier Teile des Zeitplans dazu:
+
+* **Benachrichtigungen** (:mod:`acoustid_watchdog.notify`) — ntfy und
+  SMTP, beide per Default aus. Sie sprechen nach draussen und nicht mit
+  dem Array; sie sind der Grund, warum der Betreiber von einem
+  fehlgeschlagenen Nachtlauf ueberhaupt erfaehrt.
+* **Jobs als Subprozesse** (:mod:`acoustid_watchdog.jobs`) — Importer,
+  Sicherung und Warteschlangenlauf laufen als Kinder des Waechters (E10),
+  nicht unter supervisord: nur so bekommen sie Per-Lauf-Argumente, und nur
+  so kommen Returncode und Report ohne Umweg zurueck.
+* **Der Zeitplan** (:mod:`acoustid_watchdog.scheduler`) — der dritte
+  Dauerlaeufer, und der einzige, der die Instanz von selbst aufweckt.
+* **Kennzahlen** (:mod:`acoustid_watchdog.metrics`) — `/metrics`, nur bei
+  ``metrics.enabled``.
+
+Der Schnitt ist bewusst derselbe wie im API-Dienst: alles Langlebige
+entsteht einmal beim Start und wird beim Herunterfahren wieder freigegeben.
 """
 
 from __future__ import annotations
@@ -72,6 +86,7 @@ from acoustid_watchdog.cache import LookupCache
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.control import ProcessControlError, ProcessGroupController
 from acoustid_watchdog.events import EventLevel, log_event
+from acoustid_watchdog.jobs import JobCycle, JobManager
 from acoustid_watchdog.lifecycle import (
     ActivityTracker,
     DatabaseJobs,
@@ -84,6 +99,7 @@ from acoustid_watchdog.process import SupervisorClient
 from acoustid_watchdog.proxy import ReverseProxy
 from acoustid_watchdog.ratelimit import IpRateLimiter
 from acoustid_watchdog.reload import ReloadMarker
+from acoustid_watchdog.scheduler import Scheduler
 from acoustid_watchdog.stack import (
     ServiceGroupController,
     check_postgres_version,
@@ -230,6 +246,13 @@ class WatchdogService:
             lambda: self.config,
         )
         self.poller = StatePoller(self.wake)
+
+        # Zeitgesteuerte Laeufe (M2.5). Der Manager haelt genau einen Job
+        # gleichzeitig und ist zugleich die interne Trigger-API fuer
+        # manuelle Laeufe (Grundlage von `/admin/jobs`, M8); der Scheduler
+        # fragt im Takt, ob ein Termin faellig ist.
+        self.job_manager = JobManager(JobCycle(self))
+        self.scheduler = Scheduler(self.db, self.job_manager, lambda: self.config)
 
     @classmethod
     def from_env(cls, env: EnvSettings | None = None) -> Self:

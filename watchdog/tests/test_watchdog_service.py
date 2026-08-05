@@ -138,6 +138,10 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
     **draussen** (ntfy, SMTP) und nicht mit dem Array — und sie sind der
     Grund, warum der Betreiber von einem schlafenden Stack ueberhaupt
     erfaehrt.
+
+    Ebenfalls seit M2.5: Job-Manager und Zeitplan. Sie **wecken** den
+    Stack, wenn ein Termin faellig ist — sie halten aber selbst keine
+    Verbindung: die Datenbank sieht erst der Subprozess (E10).
     """
     attributes = set(vars(service))
     assert attributes == {
@@ -158,5 +162,7 @@ def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> N
         "jobs",
         "idle",
         "poller",
+        "job_manager",
+        "scheduler",
     }
     assert not {"pool", "index", "mb", "matcher"} & attributes
