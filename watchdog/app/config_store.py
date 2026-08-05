@@ -1,7 +1,8 @@
 """Die ``config.yaml`` aus Sicht des Waechters (ARCHITECTURE §5, §6).
 
 Der Waechter ist der **einzige Schreiber** der Laufzeit-Konfiguration; API
-und Importer mounten dieselbe Datei read-only (siehe ``docker-compose.yml``).
+und Importer sehen dieselbe Datei auf dem ``/config``-Mount (seit M1b ein
+Container; lesbar fuer sie ueber Gruppe ``musicmeta``, Modus 0640).
 Schema, Laden und atomares Schreiben liegen in :mod:`shared.config` — hier
 kommt nur das dazu, was dieser Schreiber braucht:
 

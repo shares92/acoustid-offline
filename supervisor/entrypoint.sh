@@ -144,7 +144,12 @@ fi
 # setgid-Bit auf /config; bei einem abweichenden Pfad (Docker-Secret) wird
 # sie hier ausdruecklich gesetzt.
 chgrp musicmeta "${MMO_DB_PASSWORD_FILE}" 2>/dev/null || true
-chmod 0640 "${MMO_DB_PASSWORD_FILE}"
+# Auf einem read-only eingehaengten Docker-Secret schlaegt chmod mit EROFS
+# fehl — das darf den Start nicht abbrechen (set -eu), der Betreiber muss
+# die Rechte dann selbst vergeben (.env.example).
+chmod 0640 "${MMO_DB_PASSWORD_FILE}" 2>/dev/null \
+    || log "WARNUNG: chmod 0640 auf ${MMO_DB_PASSWORD_FILE} nicht moeglich" \
+           "(read-only Secret?) — Gruppe musicmeta braucht Lesezugriff"
 
 # Bestandsdateien nachziehen: eine `config.yaml`, die ein aelterer Stand
 # (oder v1) mit 0600 root:root geschrieben hat, koennte der unprivilegierte
