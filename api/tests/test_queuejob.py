@@ -12,7 +12,9 @@ nicht die Weiterleitung selbst — die steht seit Phase 12 in
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -26,20 +28,61 @@ from acoustid_api.queuejob import (
     main,
 )
 from acoustid_api.upstream import MAX_FORWARD_ATTEMPTS
+from shared.env import EnvSettings
+from shared.fpindex import FpIndexClient
 
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Bootstrap-Umgebung ohne Dienste — der Job soll trotzdem antworten."""
+    """Bootstrap-Umgebung **ohne** Dienste — der Job soll trotzdem antworten.
+
+    Das Passwort ist bewusst erfunden: diese Tests kommen nie bis zu einer
+    Verbindung, brauchen aber einen baubaren DSN (:meth:`shared.env.
+    EnvSettings.db_dsn` wirft sonst).
+    """
     monkeypatch.setenv("MMO_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MMO_DB_PASSWORD", "geheim")
     return tmp_path
 
 
+@pytest.fixture
+def live_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db: psycopg.Connection) -> Path:
+    """Bootstrap-Umgebung **mit** echter Datenbank — fuer den ganzen CLI-Lauf.
+
+    Der Job liest seine Zugaenge wie im Betrieb aus den ``MMO_``-Variablen
+    (:func:`acoustid_api.queuejob.main`). Sie werden hier **vollstaendig
+    und ausdruecklich** gesetzt, statt sich auf die Prozessumgebung zu
+    verlassen — zwei Fallen sonst:
+
+    * Ein erfundenes ``MMO_DB_PASSWORD`` (wie in :func:`env`) laesst die
+      Anmeldung scheitern, und der Pool laeuft in seinen Timeout.
+    * ``MMO_DB_PASSWORD_FILE`` **folgt** dem Datenverzeichnis
+      (``shared.env._derive_defaults``): ein umgebogenes ``MMO_DATA_DIR``
+      zeigt sonst auf eine Passwortdatei, die es dort nicht gibt.
+
+    Die Datenbank ist die frisch angelegte des ``db``-Fixtures.
+    """
+    original = EnvSettings.from_env()
+    monkeypatch.setenv("MMO_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MMO_DB_PASSWORD_FILE", str(original.db_password_file))
+    monkeypatch.setenv("MMO_DB_HOST", original.db_host)
+    monkeypatch.setenv("MMO_DB_PORT", str(original.db_port))
+    monkeypatch.setenv("MMO_DB_USER", original.db_user)
+    monkeypatch.setenv("MMO_DB_NAME", db.info.dbname)
+    monkeypatch.setenv("MMO_INDEX_URL", original.index_url)
+    monkeypatch.setenv("MMO_INDEX_NAME", original.index_name)
+    password = original.db_password.get_secret_value()
+    if password:
+        monkeypatch.setenv("MMO_DB_PASSWORD", password)
+    else:
+        # Das Passwort steht in der Datei — dann darf die Variable nicht
+        # als leerer Rest herumliegen.
+        monkeypatch.delenv("MMO_DB_PASSWORD", raising=False)
+    return tmp_path
+
+
 @pytest.mark.integration
-def test_without_upstream_the_job_still_catches_up(
-    env: Path, db: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_without_upstream_the_job_still_catches_up(live_env: Path) -> None:
     """Modus ``local`` ist eine Betreiber-Entscheidung, kein Fehler.
 
     Der Lauf steht deswegen nicht rot in der Historie — und der
@@ -47,8 +90,7 @@ def test_without_upstream_the_job_still_catches_up(
     zurueckgestellte Einreichungen (Betreiber-Entscheid 2026-08-05) waeren
     sonst gespeichert, aber im Index unauffindbar.
     """
-    monkeypatch.setenv("MMO_DB_NAME", db.info.dbname)
-    report_path = env / "jobs" / "queue-send.json"
+    report_path = live_env / "jobs" / "queue-send.json"
 
     code = main(["--report", str(report_path)])
 
@@ -59,22 +101,65 @@ def test_without_upstream_the_job_still_catches_up(
     assert document["exit_code"] == 0
     assert document["attempted"] == 0
     assert document["indexed"] == 0  # es lag nichts an
+    assert document["catch_up_rounds"] == 1
 
 
 @pytest.mark.integration
 def test_the_report_lands_on_stdout_by_default(
-    env: Path,
-    db: psycopg.Connection,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    live_env: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Log auf stderr, Report auf stdout — die beiden Stroeme bleiben getrennt."""
-    monkeypatch.setenv("MMO_DB_NAME", db.info.dbname)
-
     assert main([]) == EXIT_OK
 
     document = json.loads(capsys.readouterr().out)
     assert document["result"] == "disabled"
+
+
+@pytest.fixture
+def live_index(live_env: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Wie :func:`live_env`, zusaetzlich mit **eigenem** Suchindex.
+
+    Eigener Name je Lauf und danach abgeraeumt: der Server kann beliebig
+    viele halten, und kein Test darf den Index eines anderen anfassen
+    (dasselbe Muster wie in ``importer/tests/test_indexfeed_integration.py``).
+    """
+    monkeypatch.setenv("MMO_INDEX_NAME", f"queuejob{uuid4().hex[:8]}")
+    client = FpIndexClient.from_env(EnvSettings.from_env())
+    client.ensure_index()
+    try:
+        yield live_env
+    finally:
+        client.delete_index(missing_ok=True)
+        client.close()
+
+
+@pytest.mark.integration
+@pytest.mark.db
+@pytest.mark.index
+def test_deferred_submissions_are_caught_up(live_index: Path, db: psycopg.Connection) -> None:
+    """Der eigentliche Zweck des Nachlaufs (§8.12, K4).
+
+    Eine Einreichung im Status ``new`` — genau das, was waehrend eines
+    Delta-Imports liegen bleibt — wird hier nachgetragen, und zwar
+    unabhaengig vom Submit-Modus.
+    """
+    live_env = live_index
+    db.execute(
+        "INSERT INTO local_submission (local_track_id, local_track_gid, fingerprint, length)"
+        " VALUES (23, gen_random_uuid(), %s, 137)",
+        (list(range(1000, 1300)),),
+    )
+    report_path = live_env / "queue.json"
+
+    assert main(["--report", str(report_path)]) == EXIT_OK
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert document["indexed"] == 1
+    # Und die Zeile traegt jetzt ihren Indexierungs-Zeitpunkt.
+    row = db.execute(
+        "SELECT status, indexed_at FROM local_submission WHERE local_track_id = 23"
+    ).fetchone()
+    assert row is not None and row[0] == "indexed" and row[1] is not None
 
 
 def test_an_unreachable_database_is_reported_not_raised(
@@ -118,20 +203,24 @@ def test_given_up_groups_are_found_in_the_database(db: psycopg.Connection) -> No
     aus M2.5 braucht aber ``local_track_id``, ``forward_attempts`` und
     ``forward_error``.
     """
+    # `local_track_id` ist **integer** (Sequenz bis 2147483647, §5.2); der
+    # reservierte Bereich [2^31, 2^32-1] gilt fuer die **Dokument-ID** im
+    # Suchindex — sie entsteht erst durch den Offset `LOCAL_DOC_ID_BASE`
+    # (§5.3). Der Wert 2^31 gehoert also nicht in diese Spalte.
     db.execute(
         "INSERT INTO local_submission"
         " (local_track_id, local_track_gid, fingerprint, length, status,"
         "  forward_attempts, forward_error)"
-        " VALUES (2147483648, gen_random_uuid(), ARRAY[1], 10, 'forward_failed', %s, %s),"
-        "        (2147483649, gen_random_uuid(), ARRAY[2], 11, 'forward_failed', 2, 'nur zwei'),"
-        "        (2147483650, gen_random_uuid(), ARRAY[3], 12, 'indexed', 0, NULL)",
+        " VALUES (17, gen_random_uuid(), ARRAY[1], 10, 'forward_failed', %s, %s),"
+        "        (18, gen_random_uuid(), ARRAY[2], 11, 'forward_failed', 2, 'nur zwei'),"
+        "        (19, gen_random_uuid(), ARRAY[3], 12, 'indexed', 0, NULL)",
         (MAX_FORWARD_ATTEMPTS, "HTTP 500"),
     )
 
     rows = _gave_up_rows(db)
 
-    assert list(rows) == [2147483648]
-    assert rows[2147483648] == (MAX_FORWARD_ATTEMPTS, "HTTP 500")
+    assert list(rows) == [17]
+    assert rows[17] == (MAX_FORWARD_ATTEMPTS, "HTTP 500")
 
 
 @pytest.mark.integration

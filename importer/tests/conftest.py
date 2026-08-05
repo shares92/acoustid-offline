@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import warnings
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -101,9 +102,37 @@ def _fresh_connection(
         with psycopg.connect(scratch_dsn, autocommit=autocommit) as connection:
             yield connection
     finally:
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
+        _drop_scratch_database(admin_dsn, name)
+
+
+def _drop_scratch_database(admin_dsn: str, name: str) -> None:
+    """Raeumt eine Wegwerf-Datenbank ab — ohne den Teardown zu sprengen.
+
+    ``WITH (FORCE)`` terminiert offene Backends, und genau das darf die
+    App-Rolle nicht: sie hat bewusst keinen Superuser-Status und kein
+    ``pg_signal_backend`` (M1b-Entscheid). Haengt zum Abraeumzeitpunkt ein
+    Backend **fremder** Rolle daran — im Regelfall ein Autovacuum-Worker
+    der Rolle ``postgres`` —, scheitert der Drop mit
+    ``InsufficientPrivilege``, obwohl der Test laengst durch ist. Unter
+    Last liess das sporadisch einen gruenen Lauf rot aussehen.
+
+    Dieselben drei Stufen wie in ``api/tests/conftest.py`` (bewusst
+    dupliziert: ein gemeinsames Hilfsmodul kollidierte ueber die
+    Paketgrenze — LEARNINGS „gleichnamige Test-Hilfsmodule").
+    """
+    statement = sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name))
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        try:
+            admin.execute(statement + sql.SQL(" WITH (FORCE)"))
+            return
+        except psycopg.errors.InsufficientPrivilege:
+            pass
+        try:
+            admin.execute(statement)
+        except psycopg.Error as error:
+            warnings.warn(
+                f"Wegwerf-Datenbank {name} liess sich nicht abraeumen: {error}",
+                stacklevel=2,
             )
 
 

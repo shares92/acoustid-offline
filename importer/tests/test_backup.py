@@ -148,9 +148,12 @@ def test_a_backup_writes_the_three_parts_and_nothing_else(
     (data_dir / "lookup-cache.sqlite3").write_bytes(b"SQLite format 3\x00")
     (data_dir / "config.yaml").write_text("auth:\n  mode: none\n", encoding="utf-8")
 
+    # `local_track_id` ist **integer** (Sequenz bis 2147483647, §5.2); der
+    # reservierte Bereich [2^31, 2^32-1] gilt fuer die **Dokument-ID** im
+    # Suchindex, die erst durch den Offset entsteht (§5.3).
     db.execute(
         "INSERT INTO local_submission (local_track_id, local_track_gid, fingerprint, length)"
-        " VALUES (2147483648, gen_random_uuid(), ARRAY[1,2,3], 137)"
+        " VALUES (4711, gen_random_uuid(), ARRAY[1,2,3], 137)"
     )
     settings = env_settings.model_copy(
         update={

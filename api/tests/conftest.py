@@ -18,6 +18,7 @@ conftest.py im Repo-Wurzelverzeichnis.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator
 from uuid import uuid4
 
@@ -60,6 +61,43 @@ def env_settings() -> EnvSettings:
     return EnvSettings.from_env()
 
 
+def drop_scratch_database(admin_dsn: str, name: str) -> None:
+    """Raeumt eine Wegwerf-Datenbank ab — ohne den Teardown zu sprengen.
+
+    ``WITH (FORCE)`` terminiert offene Backends, und genau das darf die
+    App-Rolle nicht: sie hat bewusst keinen Superuser-Status und kein
+    ``pg_signal_backend`` (M1b-Entscheid, exakt ``CREATEDB`` +
+    ``pg_checkpoint``). Haengt zum Abraeumzeitpunkt ein Backend **fremder**
+    Rolle an der Datenbank — im Regelfall ein Autovacuum-Worker, der der
+    Rolle ``postgres`` gehoert —, scheitert der Drop mit
+    ``InsufficientPrivilege``.
+
+    Das ist ein reiner Aufraeum-Fehler: der Test selbst ist da laengst
+    durch. Er trat unter Last sporadisch auf und liess einen gruenen Lauf
+    rot aussehen. Deshalb hier drei Stufen:
+
+    1. mit ``FORCE`` (der schnelle Regelweg),
+    2. ohne ``FORCE`` — es gibt fast immer gar keine offene Verbindung
+       mehr, und dann genuegt das,
+    3. sonst eine Warnung. Die Datenbank traegt einen uuid-Namen und stoert
+       niemanden; sie faellt spaetestens mit dem Test-Stack weg.
+    """
+    statement = sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name))
+    with psycopg.connect(admin_dsn, autocommit=True) as admin:
+        try:
+            admin.execute(statement + sql.SQL(" WITH (FORCE)"))
+            return
+        except psycopg.errors.InsufficientPrivilege:
+            pass
+        try:
+            admin.execute(statement)
+        except psycopg.Error as error:
+            warnings.warn(
+                f"Wegwerf-Datenbank {name} liess sich nicht abraeumen: {error}",
+                stacklevel=2,
+            )
+
+
 @pytest.fixture
 def scratch_env(env_settings: EnvSettings) -> Iterator[EnvSettings]:
     """Frisch angelegte, migrierte Datenbank — als vollstaendige Umgebung.
@@ -78,10 +116,7 @@ def scratch_env(env_settings: EnvSettings) -> Iterator[EnvSettings]:
             apply(setup)
         yield scratch
     finally:
-        with psycopg.connect(admin_dsn, autocommit=True) as admin:
-            admin.execute(
-                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
-            )
+        drop_scratch_database(admin_dsn, name)
 
 
 @pytest.fixture
