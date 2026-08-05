@@ -1,11 +1,14 @@
 """HTTP-Schicht des Waechters (FastAPI) — ARCHITECTURE §4, §7.
 
-Stand M1b traegt sie drei Routen:
+Stand M2.5 traegt sie vier Routen:
 
 ===============  ======  =================================================
 ``/status``      GET     Stack-Zustand, Datenstand, letzter Update-Lauf,
                          Version — **weckt nie** (§7, §8.2), und **ohne
                          Auth und ohne Rate-Limit**
+``/metrics``     GET     Kennzahlen im Prometheus-Format, **nur** bei
+                         ``metrics.enabled`` (§6) — sonst 404. Weckt
+                         ebenfalls nie (:mod:`acoustid_watchdog.metrics`)
 ``/v2/{...}``    alle    Rate-Limit, Key-Pruefung, Lookup-Cache,
                          Reverse-Proxy auf den API-Dienst, **mit
                          Weck-Logik** (§7 „Fehlerverhalten") und der
@@ -40,10 +43,13 @@ ihre Antwort geht unveraendert zurueck (auch das nackte HTTP 405 auf
 ``GET /v2/lookup/batch``, Hinweis aus Phase 13). Ein eigenes Methodenraster
 im Proxy waere eine zweite Vertragsquelle mit eigener Fehlermenge.
 
-Es folgen ``/metrics`` (Phase 22) und die Admin-UI unter ``/admin``
-(Phasen 23-27). Alles laeuft ueber **einen** Port (``MMO_PORT``, Default
-8080; ARCHITECTURE §6 „Feste Werte"), weil der Waechter der einzige nach
-aussen sichtbare Dienst ist.
+Es folgt die Admin-UI unter ``/admin`` (M8). Alles laeuft ueber **einen**
+Port (``MMO_PORT``, Default 8080; ARCHITECTURE §6 „Feste Werte"), weil der
+Waechter der einzige nach aussen sichtbare Dienst ist.
+
+Seit M2.5 laeuft im Lifespan ein dritter Dauerlaeufer: der Zeitplan
+(:mod:`acoustid_watchdog.scheduler`). Er ist der einzige, der die Instanz
+von selbst aufweckt — Idle-Stopp und Zustandsabgleich raeumen nur auf.
 
 Wie im API-Dienst sind die Routen ``async`` und die Arbeit dahinter nicht:
 SQLite ist synchron, also geht die Abfrage ueber ``run_in_threadpool``. Und
@@ -62,7 +68,7 @@ from typing import Any, Final
 
 import httpx
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 from acoustid_watchdog.auth import AuthOutcome, AuthResult
@@ -73,6 +79,8 @@ from acoustid_watchdog.cache import (
     is_cacheable_response,
     plan_request,
 )
+from acoustid_watchdog.metrics import CONTENT_TYPE as METRICS_CONTENT_TYPE
+from acoustid_watchdog.metrics import render as render_metrics
 from acoustid_watchdog.proxy import (
     ERROR_INVALID_API_KEY,
     ERROR_MESSAGES,
@@ -180,6 +188,10 @@ def create_app(service: WatchdogService | None = None) -> FastAPI:
     async def status(request: Request) -> JSONResponse:
         return await _status(request)
 
+    @app.get("/metrics")
+    async def metrics(request: Request) -> Response:
+        return await _metrics(request)
+
     for denied_path in DENIED_PATHS:
         # Vor der Proxy-Route registriert: FastAPI nimmt die erste passende,
         # und eine spaetere Allowlist darf diese hier nicht ueberholen.
@@ -232,6 +244,28 @@ async def _status(request: Request) -> JSONResponse:
             status_code=500,
         )
     return JSONResponse(data)
+
+
+async def _metrics(request: Request) -> Response:
+    """Kennzahlen im Prometheus-Format — **nur** bei ``metrics.enabled`` (§6).
+
+    Abgeschaltet antwortet der Pfad mit **404** und nicht mit 403: der
+    Waechter gibt nach aussen nicht preis, dass es diesen Endpunkt gibt
+    (dieselbe Haltung wie bei :data:`DENIED_PATHS`).
+
+    Wie `/status` ist er offen — kein Key, kein Rate-Limit — und **weckt
+    nie**: gelesen werden nur Zaehler aus dem Speicher und die
+    Zustandsdatenbank auf dem Cache-Pool (:mod:`acoustid_watchdog.metrics`).
+    """
+    service: WatchdogService = request.app.state.service
+    if not _runtime_config(service).metrics.enabled:
+        return await _denied(request)
+    try:
+        body = await run_in_threadpool(render_metrics, service)
+    except Exception:
+        _LOG.exception("Kennzahlen nicht erhebbar")
+        return PlainTextResponse("# Kennzahlen nicht erhebbar\n", status_code=500)
+    return PlainTextResponse(body, media_type=METRICS_CONTENT_TYPE)
 
 
 async def _proxy(request: Request) -> Response:

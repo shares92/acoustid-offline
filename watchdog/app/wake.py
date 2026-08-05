@@ -215,6 +215,11 @@ class WakeCoordinator:
         #: Dasselbe fuer den Teilzustand „laeuft, aber nicht vollstaendig"
         #: (:meth:`_observe_partial`).
         self._partial: tuple[str, ...] = ()
+        #: Zuletzt erhobener Zustand je Prozess (``("db", "RUNNING")``, …).
+        #: Der Poller fragt ihn ohnehin alle 15 s ab; gemerkt wird er, damit
+        #: `/metrics` den Prozess-Zustand ausweisen kann, **ohne** selbst
+        #: mit supervisord zu sprechen (M2.5).
+        self._process_states: tuple[tuple[str, str], ...] = ()
 
     @property
     def wakes(self) -> int:
@@ -235,6 +240,17 @@ class WakeCoordinator:
     def ready(self) -> bool:
         """Gilt der Stack als bereit (letzte Pruefung war erfolgreich)?"""
         return self._ready
+
+    @property
+    def process_states(self) -> tuple[tuple[str, str], ...]:
+        """Zuletzt erhobener Zustand je Prozess — leer vor dem ersten Abgleich.
+
+        Eine **Momentaufnahme aus dem Speicher**: `/metrics` liest sie,
+        statt selbst mit supervisord zu sprechen. Aktualisiert wird sie im
+        Takt des Pollers (15 s, :class:`acoustid_watchdog.lifecycle.
+        StatePoller`).
+        """
+        return self._process_states
 
     @property
     def busy(self) -> bool:
@@ -513,6 +529,7 @@ class WakeCoordinator:
             )
             self._control_failures = 0
 
+        self._process_states = status.states
         previous = self._state.state
         if status.crashed:
             return self._observe_crash(status.crashed, previous, announce=announce)
