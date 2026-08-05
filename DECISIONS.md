@@ -7,6 +7,10 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ## 2026-08-05: Der tägliche Delta-Lauf baut keine Historie von Null auf
 
+**Betreiber bestätigt 2026-08-05 (abend):** Sperre bleibt wie gebaut
+(AskUserQuestion, gewählt „Sperre behalten"; verworfen: nur im
+Wächter-Pfad sperren, nur warnen).
+
 Entscheidung: Ein `update`-Lauf **ohne ausdrückliche Grenze** bricht sofort
 ab, wenn `import_state` leer ist — `usage_error` (Exit 2) mit dem Verweis
 auf `--mode bootstrap`, und zwar **bevor** die Quelle überhaupt gefragt

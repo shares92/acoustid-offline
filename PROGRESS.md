@@ -7,127 +7,151 @@ offenen Phasen. Die ausführlichen Aufgabenblöcke erledigter Phasen
 Datei und im Session-Archiv (`sessions/`). Quelle des Plans:
 docs/HANDOFF.md (**v2**, „musicmeta-offline"; v1 archiviert unter
 docs/archive/HANDOFF-v1.md) + docs/research/m0-impact-analyse.md;
-technische Referenz: ARCHITECTURE.md (beschreibt bis M1/M2 den
-gebauten v1-Stand, siehe Kopfvermerk dort).
+technische Referenz: ARCHITECTURE.md (beschreibt den gebauten
+v2-Stand inkl. M2.5; M3–M8 dort als Plan, siehe Kopfvermerk).
 
-**Status (2026-08-05, mittag): Phasen 0–18 (v1), M0, M1a, M1b und M2
-abgeschlossen — das Projekt heißt überall musicmeta-offline und der
-GitHub-Rename ist ausgeführt.** M2 (`1fc9f7f`, 14 Commits in zwei
-sequenziellen Wellen + Kleinst-Posten): Env-Prefix `AOFF_`→`MMO_` und
-Config-Keys aufs v2-Schema (E9: deklarative `LEGACY_KEYS`-Tabelle +
-einmaliger Umschreiber beim Wächter-Start; Übergangslesen eine
-Release-Runde — auch über die **Compose-Grenze**: beide Namenssätze
-werden durchgereicht, `ports:` mit verschachtelter Interpolation,
-per Layout-Tests eingeklagt), `/status` additiv um `components`
-(PG-Major, Index-Commit), `release.yml` (v*-Tag → ein GHCR-Image,
-`latest=auto`, Guard erzwingt die Rename-Reihenfolge), ARCHITECTURE/
-README/Betriebs-Docs auf den gebauten v2-Stand (§5.1/§5.2
-byte-identisch). Doppel-Review blind (Opus 7 + GPT 3 Findings,
-Konsens-HOCH: Übergangslesen war auf dem Compose-Weg wirkungslos;
-ein Reviewer-Fixvorschlag durch adversariale Verifikation als
-schädlich widerlegt). Gates: Unit 1597, Integration 199 gegen das
-eigene Image, E2E 8/8, CI 2× grün (4 Jobs). **GitHub-Rename
-shares92/musicmeta-offline ausgeführt** (Redirects aktiv; Remotes
-lokal + Tower nachgezogen). Erster Release-Tag bewusst offen bis
-nach Messlauf-Auswertung + R3-Probe (Betreiber-Entscheid).
-**Messlauf läuft auf Tower** (mittags bei 2011-09-20, ~15 min je
-Delta-Tag der Anfangswelle, 0 Fehler). **Warten auf Go für M2.5.**
+**Status (2026-08-05, abend): Phasen 0–18 (v1), M0, M1a, M1b, M2 und
+M2.5 abgeschlossen — die Instanz weckt sich selbst, importiert
+täglich, meldet, sichert und misst.** M2.5 (`0dd9fab`, 17 Commits:
+9 Bau + 4 Review-Fixes + 4 Gate-Fixes): Scheduler (Fälligkeit „seit
+diesem Termin lief keiner" — auch `aborted` verbraucht den Termin,
+DECISIONS), Jobs als Wächter-Subprozesse (E10) mit kohärenter
+Fristen-Kette 360/300/240 s (stop_grace ≥ stopwaitsecs ≥
+SIGTERM-Frist), `update_run`-Migration (6 Job-Arten) + Startup-
+Rekonziliation gegen ewig offene Läufe, Notify (ntfy/Webhook + SMTP,
+5 Ereignisse, zustandsgetrieben), Backup-Job + Restore-Doku
+(lookup-cache bleibt draußen, `.part`-Reste werden geräumt),
+`GET /metrics`, Log-Rotation (copytruncate), Disk-Guard je
+Schreibpfad inkl. `/index` (E11), Submit-Zurückstellung während des
+Laufs (Marke mit 24-h-Ablauf, Nachlauf `queue-send`, Feed-Retry bei
+Version-Mismatch) und **Kaltstart-Sperre**: ein unbegrenzter
+`update`-Lauf auf leerer Historie bricht mit Bootstrap-Verweis ab
+(Betreiber bestätigt — sonst zöge jede frische Instanz um 04:00 die
+414-GB-Historie). Doppel-Review blind (Opus 7 + GPT 15 Findings,
+6 Konsens; 10 einseitige adversarial verifiziert: 7 bestätigt,
+2 widerlegt, 1 herabgestuft; 3 Nebenbefunde) — alles gefixt.
+E2E-Fund: Compose-Tests haben NETZ; ein Test lud real echte Deltas
+→ Quelle im Test abgeklemmt, Sperre im Produkt. Gates doppelt:
+Unit 1805, Integration 210 (eigenes Image), E2E 13/13, CI grün.
+**Messlauf auf Tower ABGEBROCHEN** (12:58 UTC, nach 383/3386
+Dateien, 19,6 GB gz, 8,1 h: „server closed the connection
+unexpectedly … terminated abnormally" — die Tower-PG brach weg,
+Exit 6; Resume via `import_state` intakt, Ursache klären).
+**Warten auf Go für M3 (Recherche-Gate Discogs zuerst).**
 
-## Session-Übergabe (2026-08-05, M2 komplett)
+## Session-Übergabe (2026-08-05, M2.5 komplett)
 
-**Kurzbeschreibung:** (1) **Messlauf-Kontrolle Tower:** läuft gesund
-(Resume nach shfs-Absturz griff; mittags bei 2011-09-20, ~15 min je
-Delta-Tag der ~4,4-GB-Anfangswelle, 0 Fehler, Dumps werden nach
-Import gelöscht, Platz unkritisch: DB 36 GB/disk11 793 GB frei).
-(2) **M2 in zwei sequenziellen Wellen** (Betreiber-Entscheid:
-Kontextlast pro Agent begrenzen; parallele Zerlegung bei einem
-Querschnitts-Rename bewusst verworfen — konfliktfreier Zuschnitt ≈ 1):
-Welle 1 Code-Kern (Opus-Agent, 6 Commits), Welle 2 Doku-Umschrift
-(frischer Opus-Agent, 6 Commits), dazu 2 Kleinst-Posten-Commits der
-Koordination. (3) **Doppel-Review + adversariale Verifikation:**
-Konsens-HOCH beider blinder Reviewer — das Übergangslesen war auf dem
-Compose-Weg wirkungslos (nur `MMO_*` interpoliert; der dokumentierte
-v1-Passwort-Übernahmeweg wäre ein No-Op gewesen, Zufallspasswort
-statt Bestand). Fix: beide Namenssätze durchreichen, Warnung bleibt
-beim Betreiber sichtbar; Layout-Tests klagen die Fehlerklasse ein.
-Bonus-Fund: Healthcheck bei leerer `MMO_PORT` → dauerhaft unhealthy.
-Ein GPT-Finding (`latest` durch Kurz-Tags wie `v2`) bestätigt und
-verschärft; ein Opus-Finding (imagetools/Attestations) **widerlegt**
-— der vorgeschlagene Fix hätte den Release-Job real gebrochen
-(empirisch gegen echte Manifeste + buildx-Quelltext entschieden).
-(4) **Gates doppelt:** Unit 1597 (eigener Lauf), Integration 199
-gegen das eigene Image (70 s), E2E 8/8 (105 s), Image verifiziert
-(PG 18.4, supervisord 4.3.0, Index-Commit-Label), CI 2× grün.
-(5) **GitHub-Rename ausgeführt** (`gh api`), Redirect verifiziert,
-`git remote set-url` lokal + Tower (Messlauf ungestört). GHCR: alte
-v1-Pakete von Hand als „eingestellt" markieren (Token ohne
-packages-Scope — UI-Schritt des Betreibers); neues Paket entsteht
-erst beim ersten v*-Tag. (6) Zwei Code-Nachzügler inline gefixt:
-Entrypoint-`chmod` toleriert read-only Docker-Secrets (EROFS brach
-sonst den Start unter `set -eu`), zwei Docstrings (Legacy-Beispiel,
-0640).
+**Kurzbeschreibung:** (1) **Bau:** ein Opus-Agent im Worktree
+(9 Commits; Querschnitts-Phase, konfliktfreier Zuschnitt ≈ 1 wie bei
+M2). Betreiber-Entscheid vorab: Submits während des Update-Laufs
+**zurückstellen** (Guard bleibt), statt Feed ohne Guard oder
+Abbruch+Retry. (2) **Doppel-Review blind + adversariale
+Verifikation:** Opus 7 + GPT‑5.6 15 Findings → 6 Konsens (u. a.
+HOCH: abgebrochene Zyklen hinterlassen ewig offene `update_run`-
+Zeilen → Idle-Stopp dauerhaft blockiert; `stopwaitsecs=30` hebelte
+die 900-s-SIGTERM-Frist aus; Cache-Invalidierung saß VOR dem
+Submit-Nachtrag). 10 einseitige durch 3 Opus-Verifizierer + Fable
+(HOCH) geprüft: 7 bestätigt, 2 widerlegt (kind-Umschrieb — Tabelle
+nachweislich leer; SQLite-Migrationskonvention korrekt),
+1 herabgestuft (Marken-TOCTOU theoretisch). 3 Nebenbefunde der
+Verifikation selbst (Hand-Läufe ohne Marke; IdleStopper-Kopplung
+ließ den Stack nach Jobs nie einschlafen; ungeschützte mkdir/unlink
+im Runner). 5 Fix-Richtungen als schädlich widerlegt und NICHT
+gebaut. Nacharbeit: 4 Commits, alles gefixt. (3) **Gates + zwei
+Gate-Fix-Runden:** Integration fand 3 Testfehler (CLI ohne
+DB-Passwort im Test-Env, Doc-ID-Bereich verwechselt,
+DROP-DATABASE-FORCE-Flake im Bestands-Teardown). E2E fand
+nacheinander: Termin-Fälligkeits-Missverständnis im Test (Termin lag
+VOR dem ersten Lauf), dann den Kernfund — **Compose-Tests haben
+Netz**, der Retry-Test lud real echte AcoustID-Deltas ab 2011
+(leere `import_state` = ganze Historie). Konsequenz beidseitig:
+**Kaltstart-Sperre im Produkt** (unbegrenzter `update`-Lauf auf
+leerer Historie → `usage_error` mit Bootstrap-Verweis; Betreiber
+bestätigt) und Test-Härtung (`/etc/hosts`-Abklemmung, definierter
+Stack-Zustand je Test). (4) **Gates final doppelt:** Unit 1805,
+Integration 210, E2E 13/13 (7:05), ruff; Merge ff `0dd9fab`
+(+9430/−127), CI grün. (5) **Messlauf Tower:** heute 04:53–12:58 UTC
+gelaufen, dann `import_failed` Exit 6 — PG-Server brach weg
+(„terminated abnormally"; shfs-Vorgeschichte vom Morgen). 383/3386
+Dateien, 17,6 Mio Zeilen; Resume intakt, nichts angefasst.
+(6) Prozess-Besonderheit: der Bau-Agent überlebte eine
+Session-Rotation nicht — Fortsetzung durch frischen Opus-Agenten
+mit self-contained Auftrag im selben Worktree.
 
-**Aktueller Stand — funktioniert (getestet, CI grün, unverändert):**
+**Aktueller Stand — funktioniert (getestet, CI grün):**
 Alles aus dem v1-Stand bis Phase 18: Shared (Config/Env/Logging/
 Modelle), DB-Migrationen, Index-Client, Importer komplett, API komplett
 (/v2/lookup, /v2/submit off/local/local+upstream, Batch,
 submission_status — bug-für-bug-dokumentiert), Wächter-Kern
-(Grundgerüst/SQLite/Status, Proxy/Docker-Steuerung/Wecken,
+(Grundgerüst/SQLite/Status, Proxy/Prozess-Steuerung/Wecken,
 Zustandsmaschine/Idle-Stopp, Lookup-Cache, Auth & Rate-Limit).
+Seit M2.5 dazu: Scheduler mit täglichem Zyklus, Jobs als
+Wächter-Subprozesse, Notify, Backup + Restore-Doku, `/metrics`,
+Log-Rotation, Disk-Guard je Schreibpfad, Kaltstart-Sperre.
 Ergebnistabelle unten.
 
-**Existiert noch nicht:** Scheduler/Notify/Backup/Metrics (M2.5 —
-die alten Phasen 19–22 wurden nie gebaut), Discogs/Cover/CAA/TADB/
-v1-API (M3–M7), Admin-UI (M8), E2E-Suite in CI ausgeweitet/Release
-(M9). Nie gelaufen: Voll-Bootstrap am echten Datenbestand, echter
-Upstream-Submit, Volume-Migration v1→v2 auf echter Hardware, erster
-v*-Release-Tag (bewusst zurückgestellt).
+**Existiert noch nicht:** Discogs/Cover/CAA/TADB/v1-API (M3–M7),
+Admin-UI (M8), E2E-Suite in CI ausgeweitet/Release (M9). Nie
+gelaufen: Voll-Bootstrap am echten Datenbestand (Messlauf ist erst
+der Anfang), echter Upstream-Submit, Volume-Migration v1→v2 auf
+echter Hardware (R3-Probe offen), erster v*-Release-Tag (bewusst
+zurückgestellt).
 
 **Offene Punkte (priorisiert):**
-1. **Go-Entscheidung M2.5** einholen (Scheduler/Notify/Backup/
-   Metrics; Block unten). Nach M2.5: voller 5-Phasen-Doku-Sweep.
-2. **Messlauf auswerten** (läuft auf Tower): Report
-   `/mnt/cache/appdata/acoustid-offline/dumps/probelauf.json`, Log
-   `/mnt/cache/appdata/acoustid-offline/messlauf.log`; danach
-   query_hashes-Empfehlungstabelle + README-Zeitangabe +
-   LEARNINGS-Messwerte (PG-Start/Stopp am echten Bestand,
-   Index-Kaltstart auf SSD → entscheidet E12-Mess-Vorbehalt +
-   startsecs-Tuning). Nichts wegräumen — der Stand ist der Anfang des
-   echten Bootstraps.
-3. **Volume-Migrationsrezept proben** (R3): docs/migration-v1-v2.md
+1. **Messlauf-Abbruch auf Tower klären + fortsetzen:** heute
+   12:58 UTC `import_failed` Exit 6 nach 383/3386 Dateien — die
+   Tower-PG beendete die Verbindung („server terminated abnormally";
+   shfs-Absturz-Vorgeschichte vom Morgen). PG-Logs auf Tower
+   ansehen, Ursache klären (OOM? Platte? shfs?), Lauf per Resume
+   fortsetzen. Report `/mnt/cache/appdata/acoustid-offline/dumps/
+   probelauf.json`, Log `…/messlauf.log`. Nichts wegräumen — der
+   Stand ist der Anfang des echten Bootstraps.
+2. **Go-Entscheidung M3** einholen (Discogs-Spiegel; beginnt mit
+   dem Recherche-Gate §14.2, Block unten).
+3. **Messlauf auswerten** (sobald durch): query_hashes-
+   Empfehlungstabelle + README-Zeitangabe + LEARNINGS-Messwerte
+   (PG-Start/Stopp am echten Bestand, Index-Kaltstart auf SSD →
+   entscheidet E12-Mess-Vorbehalt + startsecs-Tuning).
+4. **Volume-Migrationsrezept proben** (R3): docs/migration-v1-v2.md
    auf Tower am Probelauf-Bestand durchspielen, BEVOR der Bestand
    produktiv gebraucht wird (der neue Container-Entrypoint legt sonst
    ein leeres Cluster an — Abnahme §8 des Rezepts prüft darauf).
-4. **Neue Betreiber-Entscheide aus den Recherche-Gates** (bei
+5. **README/Setup:** der Bootstrap-Schritt muss ausdrücklich in die
+   Anleitung — die Kaltstart-Sperre (DECISIONS 2026-08-05) setzt ihn
+   voraus; Fehlertext und Notification verweisen zwar auf
+   `--mode bootstrap`, die Anleitung fehlt aber (spätestens
+   M9-README).
+6. **Neue Betreiber-Entscheide aus den Recherche-Gates** (bei
    M3/M6-Go stellen): Discogs-Bilder-ToS vs. Lazy-Cache (Ⓞ8 in
    docs/research/m3-discogs-dumps.md, Empfehlung liegt bei); TADB-
    Key-Stufe (Empfehlung: Single Developer 8 €/Mon.); MB-GRANTs
    einspielen (Skript in docs/research/m5-mb-spiegel-befund.md §5)
    + Projekt-Container ins MB-Docker-Netz.
-5. **Daten-Flaute:** entschärft — Deltas bis 2026-07-27 (geprüft
+7. **Daten-Flaute:** entschärft — Deltas bis 2026-07-27 (geprüft
    04.08.); Export hinkt ~8 Tage nach. Vor Produktivstart erneut
    prüfen.
-6. Log-Rotation für `/config/logs/watchdog.log` (tee-Datei) → M2.5.
-7. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
-8. **XFF-Betreiber-Entscheid**: spätestens M9.
-9. **Erster Release-Tag** (`v*` → GHCR-Image): erst nach
-   Messlauf-Auswertung + R3-Probe (Betreiber 2026-08-05). Danach
-   GHCR-Paket von Hand öffentlich stellen; alte
-   `acoustid-offline-*`-Pakete als „eingestellt" markieren
-   (UI-Schritt, Token ohne packages-Scope).
+8. Echter Upstream-Lauf + Drittclient-Tests: bewusst erst M9.
+9. **XFF-Betreiber-Entscheid**: spätestens M9.
+10. **Erster Release-Tag** (`v*` → GHCR-Image): erst nach
+    Messlauf-Auswertung + R3-Probe (Betreiber 2026-08-05). Danach
+    GHCR-Paket von Hand öffentlich stellen; alte
+    `acoustid-offline-*`-Pakete als „eingestellt" markieren
+    (UI-Schritt, Token ohne packages-Scope).
 
 **Nächster konkreter Schritt für eine frische Session:** `git log
 --oneline -5` + diesen Statuskopf lesen (Pflicht-Vorprüfung), dann
-Messlauf-Stand auf Tower prüfen (Pfade oben; `ssh Tower`,
-Betreiber-Freigabe 2026-08-04) — ist er fertig: Auswertung (Punkt 2)
-und R3-Probe (Punkt 3) vor M2.5 anbieten. Per AskUserQuestion das Go
-für **M2.5** einholen; bei Go einen Opus-Bau-Agenten mit dem
-M2.5-Block unten beauftragen — inklusive Stand-Vorprüfung und
-Sperrzonen-Vermerk. Achtung: Repo-Hooks verlangen `pytest`-Aufrufe
-ohne Pipe (`cmd > log; echo rc=$?`) und stellen bei
-`--compose/--network` Rückfragen — E2E-Läufe deshalb vom
-Orchestrator fahren. Serena-Symboltools NIE in Worktrees verwenden
-(schreiben ins Haupt-Repo — LEARNINGS).
+den Messlauf-Abbruch auf Tower klären (Punkt 1; `ssh Tower`,
+Betreiber-Freigabe 2026-08-04). Per AskUserQuestion das Go für
+**M3** einholen — M3 beginnt mit dem Recherche-Gate (§14.2, Bericht
+nach docs/research/, erst dann Datenmodell/Bau); bei Go den
+Recherche-Agenten bzw. Opus-Bau-Agenten mit dem M3-Block unten
+beauftragen — inklusive Stand-Vorprüfung und Sperrzonen-Vermerk.
+Achtung: Repo-Hooks verlangen `pytest`-Aufrufe ohne Pipe
+(`cmd > log; echo rc=$?`) und stellen bei `--compose/--network`
+Rückfragen — E2E-Läufe deshalb vom Orchestrator fahren.
+Serena-Symboltools NIE in Worktrees verwenden (schreiben ins
+Haupt-Repo — LEARNINGS). Compose-E2E-Container haben NETZ — Tests,
+die Quellen brauchen, klemmen sie explizit ab (LEARNINGS M2.5).
 
 **Fallstricke — nicht ändern / beachten:**
 - ARCHITECTURE-§5.2-DDL und §5.1-Ströme-Tabelle sind **testgekoppelt**
@@ -220,62 +244,9 @@ DECISIONS.md; Berichte: docs/research/.
 | **M1a** | **Naht-Phase (weiter auf Docker)** | 51e3541…ff018d1 | `control.py` (ProcessGroupController-Protocol + ProcessControlError), Adressen/`api_port` in EnvSettings (Defaults exakt erhalten; Compose reicht `AOFF_API_*` durch, Leerstring = Ableitungs-Schalter), `FakeSupervisor` supervisord-treu (SPAWN_ERROR-Kette, EXITED-Absturzpfad, `start_failure()`, PID-Logik — 3 Treue-Fixes aus blindem GPT-5.6-Review), dbimport-Assertion 2011er-Meta (Task-Chip task_e5db0b72 erledigt); 1701 Tests, E2E 6/6 doppelt, kein Verhaltensunterschied |
 | **M1b** | **Ein-Container-Umbau** | 6c4a184 (9 Commits) | supervisord 4.3.0 + tini (Py-3.14 verifiziert; eigenes venv /opt/supervisor), ein Multi-Stage-Dockerfile (PGDG-PG 18.4, fpindex aus Quelle mit Commit-Pin + NOTICES, 462 MB), `process.py`+`stack.py` ersetzen `docker.py` (docker.sock weg), `GroupStatus` statt bool (Absturz ≠ Schlaf), Kante `ready→error`, sequenzieller Start mit Gates (DB hart via pg_isready — gilt auch für schon Laufendes), E15-Politik + Index resident (E12), initdb-Entrypoint (App-Rolle ohne Superuser: CREATEDB+pg_checkpoint; Passwort nur als Datei), API unprivilegiert (User `api`, /config setgid 0640-Entscheid), `/_health`-Deny, eine Compose (Bind-Mounts, stop_grace 6m, Healthcheck /status), Dev-Compose aus dem einen Image, E2E portiert 8/8 (eigener Projekt-Namespace), CI `image-tests`, Kontrakt-Tests gegen echtes supervisord (12), docs/migration-v1-v2.md (ungeprobt!); GPT-Review: 6 Findings gefixt (API-root, Passwort-Leaks inkl. psql-cmdline, Gate-Lücke, observe()-Teilzustand — Alt-Test hatte den Fehler festgeschrieben, E2E-Namespace, Rollback-Doku); 1547 Unit + 199 Integration + 8/8 E2E, alles doppelt |
 | **M2** | **Umbenennung musicmeta-offline** | 1fc9f7f (14 Commits, 2 Wellen) | Env-Prefix `AOFF_`→`MMO_` + Config-Keys aufs v2-Schema mit Übergangslesen (E9: `LEGACY_KEYS`-Tabelle statt AliasChoices — Aliase lösen nur je Mapping-Ebene; einmaliger Umschreiber beim Wächter-Start, v1-config-Test), Übergang wirkt auch über die **Compose-Grenze** (beide Namenssätze durchgereicht, `ports:` verschachtelt interpoliert, Layout-Tests; Konsens-HOCH-Finding des blinden Doppel-Reviews Opus+GPT 5.6), `/status` additiv `components` (PG-Major, `MMO_INDEX_COMMIT`), `release.yml` (v*-Tag→GHCR, `latest=auto`, Rename-Guard; imagetools-Finding adversarial **widerlegt** — Fix hätte den Job gebrochen), Entrypoint-Warn-Hygiene + read-only-Secret-Toleranz, ARCHITECTURE/README/4 Betriebs-Docs auf gebauten v2-Stand (§5.1/§5.2 byte-identisch, §12-Nummerierung erhalten — Code zitiert Punktnummern), Rename-Reihenfolge dokumentiert + **GitHub-Rename ausgeführt** (Redirects, Remotes lokal+Tower). Gates: Unit 1597, Integration 199 (eigenes Image), E2E 8/8, CI 2× grün |
+| **M2.5** | **Scheduler, Notify, Backup, Metrics** | 0dd9fab (17 Commits) | Täglicher Zyklus: Wecken → Importer als Wächter-Subprozess (E10) → Cache-Invalidierung → `queue-send`-Nachlauf → Schlafen (nur wenn selbst geweckt + unbenutzt; `ActivityTracker.defer()` trennt Job-Aufschub vom Anfragezähler — sonst schlief der Stack nach Jobs nie). Fälligkeit „seit Termin lief keiner" (auch `aborted` verbraucht; neuer Termin nach dem Lauf = neue Gelegenheit). `update_run`-Migration (6 Job-Arten) + Startup-Rekonziliation (keine ewig offenen Läufe; Backup-Kopie wird nachgezogen), Fristen-Kette 360/300/240 s testgekoppelt, Notify ntfy/Webhook+SMTP (5 Ereignisse, zustandsgetrieben, gave-up nur bei Neuzugang), Backup (local_submission + SQLite + config.yaml via Online-Backup-API, ohne lookup-cache; `.part`-Räumung; docs/backup-restore.md), `/metrics` (nur bei `metrics.enabled`), Log-Rotation copytruncate, Disk-Guard je Schreibpfad inkl. `/index` aus `ACOUSTID_INDEX_DIR` (E11), Submit-Zurückstellung (Marke mit 24-h-Ablauf; Feed heilt Version-Mismatch 2×), **Kaltstart-Sperre** (unbegrenzter `update` auf leerer `import_state` → `usage_error` mit Bootstrap-Verweis, Betreiber bestätigt). Doppel-Review blind Opus 7 + GPT 15 → 6 Konsens, 7 bestätigt, 2 widerlegt, 1 herabgestuft, 3 Nebenbefunde, 5 schädliche Fix-Richtungen verworfen; E2E-Fund „Compose-Tests haben Netz" (Test lud echte Deltas → Quelle abklemmen + Produkt-Sperre). Gates: Unit 1805, Integration 210 (eigenes Image), E2E 13/13, CI 2× grün |
 
 ---
-
-## M2.5: Scheduler, Notifications, Backup, Metrics (alte Phasen 19–22)
-
-Ziel: Täglicher vollautomatischer Delta-Import inkl. Wecken/Schlafen;
-Kanäle ntfy/Webhook + SMTP; zeitgesteuerte Sicherung; optionaler
-Prometheus-Endpoint. Danach voller 5-Phasen-Doku-Sweep (M1a–M2.5).
-
-Aufgaben:
-- [ ] Scheduler: `acoustid.update.time` → Prozesse wecken →
-      Importer-Job als **Wächter-Subprozess** (E10; Argumente,
-      returncode, `--report`-Datei) → Ergebnis überwachen →
-      `invalidate_cache("delta_import")` → schlafen legen
-- [ ] `update_run`-Migration: neue Job-Typen (acoustid-delta,
-      discogs-dump, caa-crawl, nachzügler, backup, queue-send) —
-      CHECK-Constraint + `RunKind` erweitern; Historie aus dem
-      Importer-Report befüllen
-- [ ] Fehlgeschlagener Lauf → automatische Wiederholung im nächsten
-      Zyklus; `disk.min_free_gb`-Guard je Schreibpfad (E11)
-- [ ] Interne Trigger-API für manuelle Läufe (Basis für /admin/jobs)
-- [ ] Notify-Modul (ntfy/Webhook + SMTP, leer = aus); Ereignisse:
-      Import fehlgeschlagen, Plattenplatz knapp, Stack-Start-Fehler,
-      `upstream_forward_gave_up`, Versions-Drift (E14);
-      Testnachricht-Funktion je Kanal
-- [ ] Backup-Job (`backup.time` → `/backup`, K9): local_submission +
-      Wächter-SQLite + config.yaml; `backup.include_covers`-Schalter
-      (Default false); zählt als Job (blockiert Idle-Stopp);
-      Restore-Anleitung; **lookup-cache.sqlite3 gehört NICHT ins
-      Backup**
-- [ ] `GET /metrics` (nur bei `metrics.enabled`): Lookups,
-      Cache-Quote, Weckvorgänge, Prozess-Zustand, Import-Läufe/-Dauer
-- [ ] Compose-Test: simulierter Zyklus inkl. Fehler-Retry-Pfad
-
-Hinweise (aus v1-Phasen, übernommen):
-- Beim Stoppen des Importer-Subprozesses großzügige Frist — SIGTERM
-  wirkt erst nach der laufenden Tagesdatei (sonst SIGKILL statt
-  geordnetem Exit-Code 8).
-- Ein Submit während des Update-Laufs erhöht die Index-Version und
-  lässt den Index-Feed am `expected_version`-Guard scheitern (Lauf
-  endet als Fehler, Resume intakt) — **in dieser Phase entscheiden:**
-  Submits während des Laufs zurückstellen ODER Feed ohne Guard.
-- Aufrufpunkte für den Update-Lauf: `drain_queue(connection, service,
-  limit=…, max_attempts=…)` und `retry_forward(connection, service,
-  local_track_ids=…)` (`api/app/upstream.py`; beide werfen bewusst
-  durch).
-- „Stack-Start-Fehler"-Ereignisse existieren (Quelle `wake`/`stack`,
-  Phase 16); ein Stack im `error`-Zustand bleibt bewusst stehen —
-  die Notification macht ihn aktiv sichtbar.
-- Ereignis `upstream_forward_gave_up` trägt `local_track_id`,
-  `forward_attempts`, `forward_error` (Phase 12).
-
-Definition of Done: Zyklus-Test grün; Historie korrekt; Prozesse
-schlafen nach dem Lauf; alle vier Notify-Ereignisse feuern in Tests
-auf beiden Kanälen; Backup-Tests grün + Restore dokumentiert;
-Metrics-Tests grün. Danach 5-Phasen-Doku-Sweep.
 
 ## M3: Discogs-Spiegel
 
