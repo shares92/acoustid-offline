@@ -156,7 +156,7 @@ def test_the_switches_reach_the_run_options(fake_run: Callable[..., list[RunOpti
 def test_the_guard_can_be_switched_off_explicitly(
     fake_run: Callable[..., list[RunOptions]],
 ) -> None:
-    """`update.min_free_gb: 0` heisst laut §6: keine Reserve gefordert."""
+    """`disk.min_free_gb: 0` heisst laut §6: keine Reserve gefordert."""
     seen = fake_run()
     cli.main(["--min-free-gb", "0"])
     assert seen[0].min_free_gb == 0

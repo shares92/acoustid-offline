@@ -207,7 +207,11 @@ chmod 0640 "$CONFIG_V2/db-password"
 
 Alternativ genügt es, `AOFF_DB_PASSWORD` beim ersten Start in der `.env`
 stehen zu lassen — der Entrypoint schreibt die Datei dann selbst (und
-danach kann der Wert aus der `.env` wieder verschwinden).
+danach kann der Wert aus der `.env` wieder verschwinden). Seit M2 heißt die
+Variable `MMO_DB_PASSWORD`; der alte Name wird **eine Release-Runde** noch
+gelesen und meldet sich dabei mit einer Warnung im Containerlog. Eine
+unveränderte v1-`.env` funktioniert also, sollte aber bei der Gelegenheit
+umbenannt werden.
 
 Alternative, wenn das alte Passwort nicht mehr vorliegt: Datei **nicht**
 anlegen, den Container starten (der Entrypoint erzeugt eines) und die Rolle
@@ -224,7 +228,7 @@ docker compose exec app gosu postgres \
 ## 8. Umschalten
 
 ```
-cp .env.example .env      # AOFF_DB_PASSWORD bleibt leer (s. o.)
+cp .env.example .env      # MMO_DB_PASSWORD bleibt leer (s. o.)
 docker compose up -d --build
 docker compose logs -f app
 ```

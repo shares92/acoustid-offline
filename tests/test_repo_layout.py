@@ -12,14 +12,22 @@ Ein-Container-Umbaus fest, die sonst niemand pruefen wuerde:
   Datenverzeichnis des Waechters gehoeren auf den Cache-Mount. Ein Pfad
   unter ``/data`` haette die Invariante §10.2 lautlos aufgehoben — das
   Array wuerde nie schlafen, und keine Testsuite haette es gemerkt.
+
+Seit M2 kommt eine dritte dazu — **die Compose-Grenze vergisst den
+Uebergang nicht** (siehe Abschnitt unten): das Uebergangslesen `AOFF_` ->
+`MMO_` lebt in `shared/shared/env.py` und im Entrypoint, wirkt aber nur,
+wenn die alten Variablen den Container ueberhaupt erreichen. Genau das ist
+in der ersten Fassung durchgerutscht.
 """
 
 import importlib
 import logging
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -157,3 +165,107 @@ def test_dump_fixtures_are_not_committed() -> None:
     """Der Datenbestand wird nicht weiterverteilt (Lizenz CC BY-SA 3.0)."""
     gitignore = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "tests/fixtures/acoustid-dumps/*.jsonl.gz" in gitignore
+
+
+# --- Die Compose-Grenze vergisst den M2-Uebergang nicht ---------------------
+#
+# Das Uebergangslesen `AOFF_` -> `MMO_` steht in `shared/shared/env.py` und
+# in `supervisor/entrypoint.sh` — beide sehen aber nur, was der Container
+# bekommt. Die erste M2-Fassung reichte ausschliesslich `MMO_*` durch: eine
+# unveraenderte Bestands-.env erreichte den Container nie, das Uebergangs-
+# lesen lief ins Leere, und zwar **ohne Warnung** (die haette ja die
+# Variable gebraucht, die nicht ankam).
+#
+# Der teuerste belegte Fall: `AOFF_DB_PASSWORD` kam nicht an, der Entrypoint
+# erzeugte ein Zufallspasswort, die bestehende DB-Rolle behielt ihres — der
+# Stack waere nie `ready` geworden, und der in docs/migration-v1-v2.md §7
+# beschriebene Weg waere ein No-Op gewesen.
+
+COMPOSE = yaml.safe_load((REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+APP_SERVICE = COMPOSE["services"]["app"]
+APP_ENV: dict[str, str] = {key: str(value) for key, value in APP_SERVICE["environment"].items()}
+
+#: Schema-Variablen, die Compose bewusst **fest** setzt, statt sie aus der
+#: Umgebung zu uebernehmen — und die deshalb auch keinen Altwert annehmen.
+#: In v1 war `/data` das Waechter-Verzeichnis, in v2 ist es das Array: ein
+#: durchgereichtes `AOFF_DATA_DIR=/data` legte SQLite, Keys und Lookup-Cache
+#: auf die Spindeln (Risiko R1). Hier waere Kompatibilitaet der Fehler.
+PINNED_ENV = {"MMO_DATA_DIR", "MMO_DUMP_DIR", "MMO_DB_DATA_ROOT"}
+
+
+def _forwarded() -> set[str]:
+    """Alle `MMO_*`, deren Wert aus der Umgebung interpoliert wird."""
+    return {name for name, value in APP_ENV.items() if name.startswith("MMO_") and "${" in value}
+
+
+def test_every_forwarded_variable_also_accepts_the_old_prefix() -> None:
+    """Jede durchgereichte `MMO_`-Variable braucht ihr `AOFF_`-Gegenstueck."""
+    missing = {name for name in _forwarded() if name.replace("MMO_", "AOFF_", 1) not in APP_ENV}
+    assert missing == set()
+
+
+def test_pinned_variables_are_exactly_the_documented_exceptions() -> None:
+    """Wer eine Variable fest verdrahtet, nimmt ihr den Uebergang.
+
+    Das ist dreimal Absicht (s. `PINNED_ENV`) — jede weitere waere eine
+    stille Ausnahme und faellt hier auf.
+    """
+    pinned = {
+        name for name, value in APP_ENV.items() if name.startswith("MMO_") and "${" not in value
+    }
+    assert pinned == PINNED_ENV
+
+
+def test_compose_env_names_exist_in_the_bootstrap_schema() -> None:
+    """Tippfehlerwache: `AOFF_INDEX_NAM` wuerde sonst lautlos nichts tun."""
+    from shared.env import ENV_PREFIX, LEGACY_ENV_PREFIX, EnvSettings
+
+    known = {name.upper() for name in EnvSettings.model_fields}
+    for name in APP_ENV:
+        for prefix in (ENV_PREFIX, LEGACY_ENV_PREFIX):
+            if name.startswith(prefix):
+                assert name[len(prefix) :] in known, name
+
+
+def test_the_published_port_falls_back_to_the_old_variable() -> None:
+    """Compose loest das Port-Mapping auf dem HOST auf.
+
+    Ein Uebergangslesen im Container kaeme dafuer zu spaet: der Waechter
+    lauschte drinnen auf 9090, veroeffentlicht wuerde weiter 8080.
+    """
+    ports = APP_SERVICE["ports"]
+    assert ports
+    for entry in ports:
+        assert "${MMO_PORT:-${AOFF_PORT:-8080}}" in entry
+
+
+_PORT_EXPR = re.compile(r"port\s*=\s*(os\.environ[^;]+)")
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({"MMO_PORT": "7070", "AOFF_PORT": "9090"}, "7070"),
+        ({"MMO_PORT": "", "AOFF_PORT": "9090"}, "9090"),
+        ({"MMO_PORT": "", "AOFF_PORT": ""}, "8080"),
+        ({}, "8080"),
+    ],
+)
+def test_the_healthcheck_resolves_the_port_like_the_application(
+    environ: dict[str, str], expected: str
+) -> None:
+    """Der Healthcheck muss `or` statt eines `get`-Defaults benutzen.
+
+    Compose setzt die Variablen oben **gesetzt, aber leer**;
+    `os.environ.get("MMO_PORT", "8080")` lieferte dann den Leerstring, der
+    Healthcheck liefe gegen ``http://127.0.0.1:/status`` und meldete einen
+    gesunden Container dauerhaft als unhealthy. Geprueft wird die
+    ausgelieferte Zeichenkette selbst, nicht ihr Abbild.
+    """
+    command = " ".join(APP_SERVICE["healthcheck"]["test"])
+    match = _PORT_EXPR.search(command)
+    assert match, command
+
+    resolved = eval(match.group(1), {"os": SimpleNamespace(environ=environ)})
+
+    assert resolved == expected

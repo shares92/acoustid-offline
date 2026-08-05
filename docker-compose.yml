@@ -61,32 +61,77 @@ services:
     # Containers. Bei Exponierung nach aussen zwingend auth.mode=apikey +
     # TLS-Proxy davor.
     ports:
-      - "${MMO_PORT:-8080}:${MMO_PORT:-8080}"
+      # **Die Fallback-Kette muss hier stehen, nicht nur im Container.**
+      # Compose loest das Port-Mapping auf dem HOST auf; ein Uebergangslesen
+      # im Container kaeme dafuer zu spaet. Ohne die verschachtelte Vorgabe
+      # veroeffentlichte eine Bestands-.env mit `AOFF_PORT=9090` still
+      # weiter 8080 — der Waechter lauschte drinnen auf 9090, und niemand
+      # kaeme mehr an die Instanz.
+      - "${MMO_PORT:-${AOFF_PORT:-8080}}:${MMO_PORT:-${AOFF_PORT:-8080}}"
     environment:
-      MMO_PORT: ${MMO_PORT:-8080}
-      MMO_LOG_LEVEL: ${MMO_LOG_LEVEL:-INFO}
-      # Die Pfade der Mounts unten. Sie stehen hier ausdruecklich, obwohl
-      # sie den Vorgabewerten entsprechen: wer einen Mount verlegt, sieht
-      # an einer Stelle, was mitzuziehen ist.
-      MMO_DATA_DIR: /config
-      MMO_DUMP_DIR: /import
-      MMO_DB_DATA_ROOT: /data/db
-      # Bewusst OHNE Default: leer heisst „nicht gesetzt", und dann leitet
-      # `EnvSettings` den Wert ab bzw. der Entrypoint erzeugt ihn
-      # (Leerstring-Konvention, DECISIONS 2026-08-04 M1a).
-      MMO_API_BASE_URL: ${MMO_API_BASE_URL:-}
-      MMO_API_HEALTH_URL: ${MMO_API_HEALTH_URL:-}
-      MMO_API_PORT: ${MMO_API_PORT:-}
+      # --- Uebergangslesen AOFF_ -> MMO_ (M2, eine Release-Runde; E5) ------
+      #
+      # Beide Namen werden durchgereicht, statt den alten host-seitig auf den
+      # neuen zu mappen. Der Grund ist die Meldung: entschiede Compose die
+      # Sache hier, saehe der Container nur noch den neuen Namen und die
+      # zugesagte Deprecation-Warnung fiele aus — der Betreiber erfuehre nie,
+      # dass er auf einem auslaufenden Weg faehrt. So entscheidet
+      # `shared/shared/env.py` (MMO_ gewinnt) und warnt dabei.
+      #
+      # Leerer Wert heisst durchgehend „nicht gesetzt": `EnvSettings` und der
+      # Entrypoint behandeln ihn so, und nur deshalb kann der Altwert
+      # ueberhaupt greifen (Leerstring-Konvention, DECISIONS 2026-08-04 M1a).
+      MMO_PORT: ${MMO_PORT:-}
+      AOFF_PORT: ${AOFF_PORT:-}
+      MMO_LOG_LEVEL: ${MMO_LOG_LEVEL:-}
+      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-}
+      MMO_DB_NAME: ${MMO_DB_NAME:-}
+      AOFF_DB_NAME: ${AOFF_DB_NAME:-}
+      MMO_DB_USER: ${MMO_DB_USER:-}
+      AOFF_DB_USER: ${AOFF_DB_USER:-}
       MMO_DB_PASSWORD: ${MMO_DB_PASSWORD:-}
+      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:-}
       # Wer das Passwort als Docker-Secret einhaengt, setzt hier den Pfad —
       # der Entrypoint schreibt dann DIESE Datei, und die Anwendung liest
       # sie (ohne Durchreichung liefen beide auf verschiedene Dateien).
       MMO_DB_PASSWORD_FILE: ${MMO_DB_PASSWORD_FILE:-}
-      MMO_INDEX_NAME: ${MMO_INDEX_NAME:-main}
+      AOFF_DB_PASSWORD_FILE: ${AOFF_DB_PASSWORD_FILE:-}
+      MMO_API_BASE_URL: ${MMO_API_BASE_URL:-}
+      AOFF_API_BASE_URL: ${AOFF_API_BASE_URL:-}
+      MMO_API_HEALTH_URL: ${MMO_API_HEALTH_URL:-}
+      AOFF_API_HEALTH_URL: ${AOFF_API_HEALTH_URL:-}
+      MMO_API_PORT: ${MMO_API_PORT:-}
+      AOFF_API_PORT: ${AOFF_API_PORT:-}
+      MMO_INDEX_NAME: ${MMO_INDEX_NAME:-}
+      AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-}
+      # --- Fest verdrahtet: KEINE Betreiber-Schalter ----------------------
+      #
+      # Die Pfade der Mounts unten. Sie stehen hier ausdruecklich, obwohl sie
+      # den Vorgabewerten entsprechen: wer einen Mount verlegt, sieht an
+      # einer Stelle, was mitzuziehen ist.
+      #
+      # Sie nehmen **bewusst keinen** Altwert an — anders als alles darueber.
+      # In v1 war `/data` das Waechter-Verzeichnis, in v2 ist es das Array:
+      # eine Bestands-.env mit `AOFF_DATA_DIR=/data` legte SQLite, Keys und
+      # Lookup-Cache auf die Spindeln, das Array schliefe nie und kein Test
+      # merkte es (Risiko R1). Ein durchgereichter Altwert waere hier also
+      # nicht Kompatibilitaet, sondern der Fehler, den die Migration
+      # beseitigen soll.
+      MMO_DATA_DIR: /config
+      MMO_DUMP_DIR: /import
+      MMO_DB_DATA_ROOT: /data/db
       # Container-Werte ohne MMO_-Praefix (sie gehoeren nicht ins Schema
       # der Anwendung, s. .env.example).
       ACOUSTID_INDEX_DIR: /index
       ACOUSTID_BACKUP_DIR: /backup
+      #
+      # Nicht durchgereicht und daher hier auch nicht aufgefuehrt:
+      # MMO_CONFIG_PATH (folgt dem Datenverzeichnis, s. o.), MMO_DB_HOST /
+      # MMO_DB_PORT / MMO_INDEX_URL (containerinterner Loopback — die
+      # v1-Werte waren Compose-DNS-Namen wie `acoustid-db` und brechen den
+      # Ein-Container-Betrieb) sowie MMO_PG_MAJOR / MMO_INDEX_COMMIT (das
+      # Dockerfile setzt sie; sie beschreiben das Artefakt, nicht den
+      # Betrieb).
     volumes:
       # Die Pfade sind ueber Variablen umstellbar (Muster aus v1:
       # ACOUSTID_WATCHDOG_DATA) — auf Unraid stehen hier Share-Pfade, im
@@ -110,12 +155,18 @@ services:
       # Containers. **unhealthy heisst: der Waechter ist tot, NICHT: das
       # System schlaeft** (K8 der M0-Analyse). Das Basisimage bringt Python
       # mit; curl und wget nicht.
+      #
+      # Die Portsuche spiegelt das Uebergangslesen und muss `or` statt eines
+      # `get`-Defaults benutzen: die Variablen oben sind gesetzt, aber ggf.
+      # **leer**, und `os.environ.get('MMO_PORT','8080')` lieferte dann den
+      # Leerstring — der Healthcheck liefe gegen `http://127.0.0.1:/status`
+      # und meldete den gesunden Container dauerhaft als unhealthy.
       test:
         [
           "CMD",
           "/app/.venv/bin/python",
           "-c",
-          "import urllib.request,os,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('MMO_PORT','8080')+'/status', timeout=5).status==200 else 1)",
+          "import urllib.request,os,sys; port=os.environ.get('MMO_PORT') or os.environ.get('AOFF_PORT') or '8080'; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+port+'/status', timeout=5).status==200 else 1)",
         ]
       interval: 30s
       timeout: 10s

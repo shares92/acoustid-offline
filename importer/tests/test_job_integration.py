@@ -351,7 +351,7 @@ def test_the_disk_guard_stops_the_run_with_its_own_exit_code(
     assert report.exit_code is ExitCode.DISK_GUARD
     assert report.files.imported == 0
     assert report.error is not None
-    assert "update.min_free_gb" in report.error.message
+    assert "disk.min_free_gb" in report.error.message
     # Vor dem ersten Byte — und vor der ersten Migration: die Datenbank ist
     # unberuehrt geblieben (§8.8 „vor jedem Import").
     assert index_names(empty_db) == set()
