@@ -1,5 +1,16 @@
 # Handoff: acoustid-offline Admin-UI
 
+> **Vermerk 2026-08-05 (M2):** Dieses Verzeichnis ist das **unveränderte
+> Lieferpaket** einer separaten Claude-Design-Session — Prototyp,
+> Screenshots, Ausgangsspezifikation. Der Projektname darin
+> (`acoustid-offline`, auch im Dateinamen des Prototyps) bleibt deshalb
+> stehen: er beschreibt, was geliefert wurde. Das Projekt heißt seit M2
+> **musicmeta-offline** (siehe ../../README.md „Umbenennung"), und die
+> v2-Fassung des Designs entsteht für M8 in einer neuen Design-Session
+> (docs/DESIGN_HANDOFF.md). Erst sie ersetzt dieses Paket — bis dahin
+> wird hier nichts umgeschrieben, weil ein nachträglich umbenanntes
+> Lieferpaket keine Lieferung mehr belegt.
+
 ## Overview
 
 Admin-Oberfläche für das Selfhosting-Projekt **acoustid-offline**. Sie läuft im

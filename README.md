@@ -1,9 +1,13 @@
-# acoustid-offline
+# musicmeta-offline
 
-Selbst gehostete, offline-fähige [AcoustID](https://acoustid.org)-Instanz als
-**ein** Docker-Container: Audio-Fingerprint-Lookup (Chromaprint →
-AcoustID-UUID → MusicBrainz-Recording inkl. Metadaten) ohne Abhängigkeit von
-`api.acoustid.org`.
+Selbst gehostetes Offline-Gateway für Musik-Metadaten als **ein**
+Docker-Container. Gebaut ist bisher der
+[AcoustID](https://acoustid.org)-Teil: Audio-Fingerprint-Lookup
+(Chromaprint → AcoustID-UUID → MusicBrainz-Recording inkl. Metadaten) ohne
+Abhängigkeit von `api.acoustid.org`. Daneben kommen Discogs, das Cover Art
+Archive und TheAudioDB ([docs/HANDOFF.md](docs/HANDOFF.md) §1) — daher der
+Name: bis M2 hieß das Projekt **acoustid-offline**
+(siehe [Umbenennung](#umbenennung-acoustid-offline--musicmeta-offline)).
 
 Ziele (ARCHITECTURE.md §1):
 
@@ -25,6 +29,49 @@ Stand, Phasenplan und Fortschritt: [PROGRESS.md](PROGRESS.md)
 Eine vollständige Setup-Anleitung (Unraid und generisch, Bootstrap des
 Datenbestands) folgt zum Release. Wer von einer v1-Installation kommt:
 [docs/migration-v1-v2.md](docs/migration-v1-v2.md).
+
+## Umbenennung: acoustid-offline → musicmeta-offline
+
+Mit der Scope-Erweiterung auf vier Quellen heißt das Projekt seit M2
+**musicmeta-offline** ([docs/HANDOFF.md](docs/HANDOFF.md) §16). Umbenannt
+sind Repo, Image, der Env-Prefix (`AOFF_` → `MMO_`) und die
+Config-Schlüssel ([ARCHITECTURE.md](ARCHITECTURE.md) §6).
+
+**Für Betreiber ändert sich nichts abrupt:** Alte `AOFF_`-Variablen und
+alte `config.yaml`-Schlüssel werden **eine Release-Runde** weitergelesen
+und melden sich dabei mit einer Warnung, die den neuen Namen nennt; die
+`config.yaml` schreibt der Wächter beim ersten Start einmalig um. Ein
+Upgrade bricht also nichts — umstellen sollte man trotzdem bei der
+Gelegenheit, denn danach fallen die alten Namen ersatzlos weg.
+
+**Reihenfolge der Umstellung** — sie ist bindend, nicht Geschmackssache:
+
+1. **Repo-Inhalte zuerst:** Paketnamen, LICENSE-Zeile, `.env.example`,
+   Compose/CI/Release-Workflow, Doku, Badge- und Clone-URLs. Erledigt in
+   M2; ab hier zeigt alles im Repo auf `shares92/musicmeta-offline`.
+2. **Dann der GitHub-Rename** `shares92/acoustid-offline` →
+   `shares92/musicmeta-offline`. GitHub legt dabei eine Weiterleitung an,
+   alte Klon-URLs und Links funktionieren also weiter. **Den alten Namen
+   nie neu belegen:** ein neues Repo unter `shares92/acoustid-offline`
+   schaltet die Weiterleitung sofort ab und lässt jeden Alt-Link ins Leere
+   zeigen.
+3. **Lokale Klone nachziehen:**
+   ```bash
+   git remote set-url origin https://github.com/shares92/musicmeta-offline.git
+   ```
+   Die Weiterleitung erledigt es zwar auch — aber nur, solange sie steht.
+4. **GHCR-Paket beim ersten Push von Hand auf öffentlich stellen.** GHCR
+   legt ein neues Paket **privat** an, und ein privates Image kann niemand
+   ziehen; der erste Release liefe sonst ins Leere.
+5. **Alte `acoustid-offline-*`-Pakete als „eingestellt" markieren — nie
+   löschen** (DECISIONS E16): bestehende Installationen ziehen sie noch.
+6. **Der erste `v*`-Tag kommt NACH dem Rename.** `release.yml` erzwingt
+   das mit einem Guard, der den Lauf abbricht, solange
+   `github.repository` noch auf den alten Namen zeigt: die Image-Namen
+   leiten sich aus `github.repository` ab, ein Tag davor erzeugte also ein
+   Image unter dem alten Paketnamen — während die `docker-compose.yml`
+   längst `ghcr.io/shares92/musicmeta-offline` zieht. Herauskäme ein
+   Release, das niemand findet.
 
 ## Architektur in einem Satz
 
@@ -56,7 +103,7 @@ schläft"**. Schlafen ist der Gutzustand.
 ## Projektstruktur
 
 ```
-acoustid-offline/
+musicmeta-offline/
 ├── Dockerfile            # das eine Image: App + PostgreSQL + acoustid-index
 ├── docker-compose.yml    # der eine Service
 ├── supervisor/           # Prozessdefinitionen und Container-Vorlauf

@@ -1,10 +1,19 @@
 # DESIGN_HANDOFF.md — Admin-UI acoustid-offline (v1)
 
-**Vermerk 2026-08-04 (M0):** HANDOFF v2 (musicmeta-offline) kündigt eine
-v2-Fassung dieses Dokuments aus einer separaten Design-Session an (§13.5);
-sie wird für M8 gebraucht. Bis dahin bleibt dieses v1-Dokument samt
-abgenommenem Designpaket unter docs/design/ die Referenz; was davon
-trägt, klärt M8.
+**Vermerk 2026-08-04 (M0), ergänzt 2026-08-05 (M2):** Das Projekt heißt
+seit M2 **musicmeta-offline**; der alte Name im Titel oben bleibt stehen,
+weil dieses Dokument die **v1-Spezifikation** ist und unter diesem Namen
+abgenommen wurde. HANDOFF v2 kündigt eine v2-Fassung aus einer separaten
+Design-Session an (§13.5); sie wird für M8 gebraucht und deckt dann auch
+die drei neuen Quellen (Discogs, CAA, TheAudioDB) ab. Bis dahin bleibt
+dieses v1-Dokument samt abgenommenem Designpaket unter docs/design/ die
+Referenz; was davon trägt, klärt M8.
+
+Was hier „Wächter-Container" und „Stack" heißt, ist seit dem
+Ein-Container-Umbau (M1b) ein **Prozess** bzw. eine **Prozessgruppe**
+(ARCHITECTURE §3). An der UI ändert das nichts: die Zustände und Texte
+aus §3 bleiben wörtlich gültig — `/status` behält dafür sein Feld
+`stack` (DECISIONS E16).
 
 Input für die Claude-Design-Session. Beschreibt Screens, Komponenten,
 Zustände und Interaktionen der Admin-UI. Technische Rahmenbedingungen
