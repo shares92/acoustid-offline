@@ -1,20 +1,28 @@
-# ARCHITECTURE.md — acoustid-offline
+# ARCHITECTURE.md — musicmeta-offline
 
-Statische technische Referenz. Quelle: [docs/HANDOFF.md](docs/HANDOFF.md) (Gesamtspezifikation)
-und [docs/DESIGN_HANDOFF.md](docs/DESIGN_HANDOFF.md) (Admin-UI). Bei Widerspruch gilt das Handoff.
-Änderungen an dieser Datei nur mit DECISIONS.md-Eintrag.
+Statische technische Referenz. Quelle: [docs/HANDOFF.md](docs/HANDOFF.md) (Gesamtspezifikation,
+**v2**; v1 archiviert unter docs/archive/HANDOFF-v1.md) und
+[docs/DESIGN_HANDOFF.md](docs/DESIGN_HANDOFF.md) (Admin-UI, noch v1). Bei Widerspruch gilt
+das Handoff. Änderungen an dieser Datei nur mit DECISIONS.md-Eintrag.
 
-Stand: 2026-07-25 (aus Architektur-Session; exaktes DB-Spaltenschema folgt aus Phase 0).
+Stand: 2026-08-05 (v2-Stand nach M0/M1a/M1b/M2; DB-Spaltenschema aus Phase 0).
 
-> **Vermerk 2026-08-04 (M0, v2-Migration läuft):** docs/HANDOFF.md ist
-> jetzt **v2** („musicmeta-offline", Ein-Container-Modell; v1 unter
-> docs/archive/HANDOFF-v1.md). Diese Datei beschreibt bis auf Weiteres
-> den **gebauten v1-Stand**; §3/§4/§6/§8/§10 werden phasenweise mit
-> M1/M2 ersetzt (Plan: PROGRESS.md, Analyse:
-> docs/research/m0-impact-analyse.md). **Unverändert und testgekoppelt
-> bleiben §5.1 (Ströme-Tabelle) und §5.2 (DDL)** — v2 §8 bestätigt das
-> Schema `acoustid`; Discogs/Covers kommen später als neue Abschnitte
-> daneben, nie als Edit an §5.2.
+> **Vermerk 2026-08-05 (M2, Umbenennung):** Das Projekt hieß bis M2
+> **acoustid-offline**; mit der Scope-Erweiterung auf vier Quellen
+> (AcoustID, Discogs, Cover Art Archive, TheAudioDB) heißt es
+> **musicmeta-offline** (HANDOFF v2 §16, DECISIONS 2026-08-04).
+> §3/§4/§6/§10 beschreiben seit M2 den **gebauten v2-Stand** — ein
+> Container, `supervisord` unter `tini`, Prozess- statt
+> Container-Steuerung, eine Compose-Datei. Der frühere Vermerk „diese
+> Datei beschreibt den v1-Stand" ist damit hinfällig.
+>
+> **Unverändert und testgekoppelt bleiben §5.1 (Ströme-Tabelle) und §5.2
+> (DDL)** — v2 §8 bestätigt das Schema `acoustid`; Discogs/Covers kommen
+> mit M3–M5 als **neue** Abschnitte daneben, nie als Edit an §5.2.
+>
+> Noch **nicht gebaut** und deshalb hier als Plan zu lesen: Scheduler,
+> Notifications, Backup und Metrics (M2.5) sowie alles zu Discogs,
+> Covern, CAA und TheAudioDB (M3–M7) und die Admin-UI (M8).
 
 ---
 
@@ -47,49 +55,104 @@ inkl. Metadaten) ohne Abhängigkeit vom öffentlichen api.acoustid.org.
   MusicBrainz-AcoustID-Mapping Public Domain.
 - **Netz:** Primär LAN/VPN. Bei Exponierung nach außen zwingend
   `apikey`-Modus + Reverse-Proxy mit TLS (Doku-Hinweis).
-- **Repo:** Öffentlich auf GitHub; GitHub Actions bauen alle Images nach
-  GHCR; gemeinsamer Release-Tag für alle Images pro Release.
+- **Repo:** Öffentlich auf GitHub; GitHub Actions bauen **ein** Image nach
+  GHCR; ein Release = ein Image = ein Tag.
 - **Kein Fingerprint-Berechnen serverseitig** (Chromaprint läuft im Client).
 
 ## 3. Architektur-Überblick
 
-Ein Repo, fünf Container, zwei Compose-Dateien.
+Ein Repo, **ein Image, ein Container, eine Compose-Datei**. Was in v1 fünf
+Container waren, sind seit M1b Prozesse in diesem einen Container; gesteuert
+werden sie von `supervisord` unter `tini` als PID 1
+(`supervisor/supervisord.conf`). **Kein docker.sock mehr** — der Wächter
+spricht mit `supervisord` über dessen Unix-Socket (`/run/supervisor.sock`,
+0700, kein `inet_http_server`).
 
-**Immer an (Cache-Pool):**
-| Container | Image | Aufgabe |
-|---|---|---|
-| `acoustid-watchdog` | eigenes Image | Reverse-Proxy mit Weck-Logik, Scheduler, Admin-UI, Lookup-Cache, Notifications, Metrics |
+**Prozesse im Container:**
 
-**Stack, schlafend (Array):**
-| Container | Image | Aufgabe |
+| Prozess | Aufgabe | Lebenszyklus | Benutzer |
+|---|---|---|---|
+| `watchdog` | Reverse-Proxy mit Weck-Logik, Scheduler, Admin-UI, Lookup-Cache, Notifications, Metrics | läuft immer (`autorestart=true`) | root — er steuert supervisord (§8.1) |
+| `index` | acoustid-index (`fpindex`) — Fingerprint-Suchindex, Matching-Kern | **resident** (E12): sein Kaltstart liest den gesamten Index, und auf dem Cache-Pool hält er kein Array wach | `acoustid` (6081) |
+| `db` | PostgreSQL: AcoustID-Datenbestand + lokale Submissions | schläft; der Wächter startet und stoppt ihn | `postgres` (999) |
+| `api` | `/v2/lookup`, `/v2/submit`, Batch-Endpoint, MB-Metadaten-Auflösung | schläft; der Wächter startet und stoppt ihn | `api` — der einzige Prozess mit Fremdeingaben läuft **unprivilegiert** |
+
+**Jobs stehen bewusst nicht in der supervisord-Konfiguration** (E10):
+Importer, Crawler und Backup brauchen Per-Lauf-Argumente, die
+`[program:*]` nicht übergeben kann — sie laufen ab M2.5 als direkte
+Subprozesse des Wächters (Argumente, Returncode und Report ohne Umweg).
+
+**Volumes** — die Aufteilung entscheidet, ob das Array je schläft:
+
+| Mount | Ablage | Inhalt |
 |---|---|---|
-| `acoustid-api` | eigenes Image | `/v2/lookup`, `/v2/submit`, Batch-Endpoint, MB-Metadaten-Auflösung |
-| `acoustid-importer` | eigenes Image | One-Shot-Job: Delta-Download, Import, Index-Feed, Backup |
-| `acoustid-db` | offizielles Postgres-Image (neueste stabile Major) | AcoustID-Datenbestand + lokale Submissions |
-| `acoustid-index` | `ghcr.io/acoustid/acoustid-index` (Zig-`main`, per Digest gepinnt) | Fingerprint-Suchindex (Matching-Kern). Keine Auth — Port nie veröffentlichen, nur Compose-intern. Daten auf dem SSD-Cache-Pool (Entscheid 2026-07-25), NICHT auf dem Array |
+| `/config` | **Cache** | `config.yaml`, Wächter-SQLite, Lookup-Cache, Logs, DB-Passwort |
+| `/index` | **Cache** | acoustid-index (~70 GB einplanen; Kaltstart auf Spindeln = Timeout) |
+| `/data/db` | Array | PostgreSQL (`/data/db/<major>`, E14) |
+| `/import` | Array | Dump-Downloads und Staging |
+| `/backup` | Array | Sicherungen (Job ab M2.5) |
+
+In v2 ist `/data` das **Array** — Wächter-Daten gehören nach `/config`
+(Risiko R1 der M0-Analyse). Das Docker-Image selbst gehört ebenfalls auf
+den Cache, sonst hält der laufende Container das Array wach. Im Release
+sind es **Bind-Mounts**, keine benannten Volumes (E13): `docker compose
+down -v` nähme sonst später bis zu 2 TB Bestand mit.
+
+**Ports:** genau **ein** veröffentlichter Port (Default `8080`) für
+API-Proxy und Admin-UI unter `/admin`. Postgres (5432), Suchindex (6081)
+und API-Dienst (8081) lauschen nur auf dem containerinternen Loopback; der
+Suchindex hat keine Auth und darf nie nach außen.
+
+**Schlaf-Logik (prozessintern):** „schlafend" heißt, dass `db` und `api`
+gestoppt sind; auf `/data/db` passiert kein I/O, die Array-Platten dürfen
+herunterfahren. Der Wächter beantwortet `/status` und die Admin-UI
+ausschließlich aus `/config`. Eine eingehende API-Anfrage oder ein fälliger
+Job lässt ihn die Prozesse der Reihe nach starten — sequenzieller Start mit
+Readiness-Gates, die Datenbank hart über `pg_isready`; die Anfrage wird
+währenddessen gehalten (§7).
 
 **Datenflüsse:**
-- Client → Wächter (Proxy) → API → Index (Match) + eigene Postgres
-  (Mappings) + MB-Postgres (Metadaten, read-only).
-- Scheduler (Wächter) → weckt Stack → startet Importer-Job → Deltas
-  einspielen → Stack schläft wieder.
-- Admin-UI läuft vollständig im Wächter; Aktionen, die den Stack brauchen,
-  zeigen den Schlafzustand und bieten einen Weck-Button.
+- Client → Wächter (Rate-Limit → Auth → Lookup-Cache) → API-Prozess →
+  Suchindex (Match) + eigene Postgres (Mappings) + MB-Postgres
+  (Metadaten, read-only).
+- Scheduler (Wächter) → weckt die Prozesse → startet den Importer-Job als
+  Subprozess → Deltas einspielen → Lookup-Cache invalidieren → wieder
+  schlafen legen (M2.5).
+- Admin-UI läuft vollständig im Wächter; Aktionen, die die Datenbank
+  brauchen, zeigen den Schlafzustand und bieten einen Weck-Button.
 
-**Grundsatzentscheidungen:** siehe DECISIONS.md (Einträge 2026-07-25).
+**Ab M3 kommen dazu** (v2 §3/§4): Discogs-Dump-Spiegel, Cover-Ablage
+(`/data/covers`), TheAudioDB-Cache (`/data/tadb`) und der CAA-Crawler.
+
+**Grundsatzentscheidungen:** siehe DECISIONS.md — 2026-07-25 für den
+AcoustID-Kern, 2026-08-04 für die Übernahme von HANDOFF v2 und die
+Ein-Container-Entscheide E1–E16.
 
 ## 4. Technologie-Stack
 
 Immer neueste stabile Version zum Implementierungszeitpunkt:
 
-- **Sprache:** Python (API-Layer, Importer, Wächter — eine Sprache für alles)
+- **Sprache:** Python 3.14 (API, Importer, Wächter — eine Sprache für alles)
 - **Web-Framework:** FastAPI (API + Admin-UI-Routen)
 - **UI:** Server-rendered — Jinja2-Templates + HTMX, kein Frontend-Build,
   kein SPA-Framework, kein npm
-- **Datenbanken:** PostgreSQL (AcoustID-Daten), SQLite (Wächter-Zustand)
-- **Suchindex:** acoustid-index (offizielles Image)
-- **Deployment:** Docker Compose (zwei Dateien), Images via GHCR
-- **CI:** GitHub Actions (Build, Tests, Multi-Image-Release mit einem Tag)
+- **Prozess-Supervisor:** `supervisord` unter `tini` als PID 1 (gewählt
+  gegen s6-overlay, DECISIONS 2026-08-04 E1; Kriterium war das saubere
+  Start/Stopp einzelner Dienste zur Laufzeit über einen Socket).
+  Supervision-Politik E15: `autostart=false` + `autorestart=unexpected`
+  für `db`/`index`/`api` — Gestopptes bleibt gestoppt (kein
+  Idle-Stopp-Loop), Abstürze werden geheilt
+- **Datenbanken:** PostgreSQL (eingebacken, genau **eine** Major je Image
+  mit Versions-Drift-Guard, E14), SQLite (Wächter-Zustand + Lookup-Cache)
+- **Suchindex:** acoustid-index (`fpindex`), aus der Quelle gebaut und mit
+  Commit-Pin eingebacken — GPL-3.0-or-later, deshalb
+  THIRD-PARTY-NOTICES.md + Quelltext im Image (E7)
+- **Paketierung:** uv-Workspace, ruff + pytest
+- **Deployment:** ein Docker-Image, **eine** Compose-Datei (ein Service),
+  Bind-Mounts statt benannter Volumes (E13); Image via GHCR
+- **CI:** GitHub Actions — `ci.yml` (Lint, Unit-, Integrations- und
+  Image-Tests, Bit-Verifikation der Extension), `release.yml` (ein Tag →
+  **ein** Image → GHCR; vorerst `linux/amd64` only, E3)
 
 ## 5. Datenmodell
 
@@ -409,7 +472,7 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
   `max(0, min(clean_size − max_hashes, 80))`; der Offset zeigt in den
   **Rohvektor** (Stille wird gezählt, nicht entfernt). Ab dort:
   Silence-Hash 627964279 überspringen, 28-Bit-Maske `& 0xFFFFFFF0`,
-  dedupliziert, max. `index.query_hashes` Hashes (Default 120),
+  dedupliziert, max. `acoustid.index.query_hashes` Hashes (Default 120),
   unsigned. Änderung der Hash-Anzahl erfordert Index-Neuaufbau.
 - **Index-Feed:** aufsteigend nach `fingerprint.id` (~15 % kleinerer
   Index), Batches à 1000 via `_update` (atomar; `expected_version`
@@ -481,69 +544,115 @@ Details: [docs/research/phase1-mb-schema.md](docs/research/phase1-mb-schema.md).
 
 ### config.yaml (Wächter, Cache)
 Alle Laufzeit-Einstellungen (siehe §6). Vom Wächter gelesen/geschrieben;
-der API-Layer erhält die relevante Teilmenge beim Start bzw. per
+der API-Dienst erhält die relevante Teilmenge beim Start bzw. per
 Reload-Signal vom Wächter. Das Reload-Signal ist eine Markierungsdatei
 `config.yaml.reload` neben der Konfiguration (JSON mit monoton
 wachsendem Zähler, atomar geschrieben; Sendeseite Phase 14,
-`watchdog/app/reload.py`) — sie läuft über denselben read-only-Mount,
-aus dem der Stack die config.yaml liest. Empfangsseite seit Phase 15:
-`api/app/reload.py` prüft alle 10 s und übernimmt die zur Anfragezeit
-gelesene Teilmenge (`submit.mode`, `submit.upstream_app_key`,
-`mb.keep_submitted_mbid`); `index.query_hashes` und `mb.dsn` werden
-bewusst nicht übernommen, sondern auf den laufenden Wert
+`watchdog/app/reload.py`) — beide Prozesse sehen dieselbe Datei auf dem
+`/config`-Mount. Empfangsseite seit Phase 15: `api/app/reload.py` prüft
+alle 10 s und übernimmt die zur Anfragezeit gelesene Teilmenge
+(`acoustid.submit.mode`, `acoustid.submit.upstream_app_key`,
+`mb.keep_submitted_mbid`); `acoustid.index.query_hashes` und `mb.dsn`
+werden bewusst nicht übernommen, sondern auf den laufenden Wert
 zurückgeschrieben und als Warnung geloggt.
 
 ## 6. Konfiguration — Schlüssel, Defaults, feste Werte
 
-Laufzeit-Einstellungen in `config.yaml` (Cache-Volume des Wächters,
-editierbar über die Admin-UI). Env-Variablen (Prefix `MMO_`) nur für
-Bootstrap (Pfade, Ports, DB-/Index-/API-Adressen).
+Laufzeit-Einstellungen in `config.yaml` auf `/config` (Cache-Mount des
+Wächters, editierbar über die Admin-UI). Env-Variablen (Prefix `MMO_`) nur
+für Bootstrap (Pfade, Ports, DB-/Index-/API-Adressen) — verbindliches
+Schema: `shared/shared/env.py`, Vorlage `.env.example`.
+
+**Umbenennung der Schlüssel in M2 (E9).** Mit der Scope-Erweiterung bekam
+der AcoustID-Teil einen eigenen Ast, und der Plattenplatz-Guard wurde
+quellenneutral (gemessen wird ein Dateisystem, nicht eine Quelle):
+
+| bis M1 | seit M2 |
+|---|---|
+| `submit.mode`, `submit.upstream_app_key` | `acoustid.submit.*` |
+| `update.time` | `acoustid.update.time` |
+| `update.min_free_gb` (Default 50) | `disk.min_free_gb` (Default **100**) |
+| `index.query_hashes` | `acoustid.index.query_hashes` |
+
+Die alten Pfade werden **eine Release-Runde** weitergelesen — der neue Pfad
+gewinnt, jeder Fund erzeugt eine Warnung mit dem neuen Namen, und der
+Wächter schreibt die Datei beim ersten Start einmalig auf das neue Schema
+um (`shared.config.migrate_legacy_keys`, `acoustid_watchdog.config_store`).
+Ohne diesen Übergang wäre ein bestehendes `submit.mode: off` kommentarlos
+auf den Default `local` zurückgefallen und die Instanz hätte Einreichungen
+angenommen, die der Betreiber abgeschaltet hatte — stille Config-Amnesie,
+Risiko R7 der M0-Analyse. Dieselbe Regel gilt für den Env-Prefix
+(`AOFF_` → `MMO_`, E5).
 
 | Schlüssel | Default | Bedeutung |
 |---|---|---|
 | `auth.mode` | `none` | `none` \| `apikey` |
-| `submit.mode` | `local` | `off` \| `local` \| `local+upstream` |
-| `submit.upstream_app_key` | leer | Application-Key für api.acoustid.org |
+| `auth.allow_known_client_keys` | `false` | `apikey`-Modus: fest einkodierte Keys bekannter Drittclients (Picard `v8pQ6oyB`, beets `1vOwZtEn`) zulassen — bewusst default aus, da öffentlich bekannt |
+| `ratelimit.per_ip_per_min` | `120` | Anfragen pro IP pro Minute |
+| `acoustid.submit.mode` | `local` | `off` \| `local` \| `local+upstream` |
+| `acoustid.submit.upstream_app_key` | leer | Application-Key für api.acoustid.org (Secret) |
+| `acoustid.update.time` | `04:00` | Täglicher Delta-Import (lokale Zeit) |
+| `acoustid.index.query_hashes` | `120` | Query-Hashes je Fingerprint im Suchindex; RAM-abhängig pro Host einstellbar (z. B. 80 bei wenig RAM). Änderung erfordert Index-Neuaufbau; Empfehlungstabelle entsteht aus dem Probelauf |
+| `disk.min_free_gb` | `100` | Mindest-Plattenreserve vor jedem Import-/Crawl-Segment (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab). **Ein** Grenzwert, geprüft gegen **jeden** Schreib-/Staging-Pfad: die Mounts aus §3 sind mehrere Dateisysteme, und ein freies `/import` sagt nichts über `/data/db` (E11) |
 | `wake.hold_timeout_s` | `90` | Max. Haltezeit einer Anfrage beim Wecken |
 | `idle.timeout_min` | `15` | Auto-Stopp nach Inaktivität |
-| `update.time` | `04:00` | Täglicher Delta-Import (lokale Zeit) |
-| `update.min_free_gb` | `50` | Mindest-Plattenreserve vor Import (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab; gemessen wird das Dump-Verzeichnis, Phase 8) |
 | `cache.enabled` | `true` | Lookup-Cache an/aus |
 | `cache.max_size_mb` | `512` | Obergrenze Lookup-Cache |
-| `ratelimit.per_ip_per_min` | `120` | Anfragen pro IP pro Minute |
 | `metrics.enabled` | `false` | Prometheus-Endpoint |
 | `notify.ntfy.url` | leer | ntfy/Webhook-Ziel (leer = aus) |
-| `notify.smtp.*` | leer | Host, Port, User, Pass, From, To (leer = aus) |
+| `notify.smtp.*` | leer, `port` `587` | `host`, `port`, `user`, `pass`, `from`, `to` (leerer Host = aus) |
 | `backup.dir` | leer | Backup-Ziel (leer = Backup aus) |
 | `backup.time` | `04:45` | Backup nach dem Update-Lauf |
-| `mb.dsn` | leer | Read-only-DSN der MusicBrainz-Postgres |
+| `backup.include_covers` | `false` | Cover mitsichern (v2 §6.12). Aus, weil die Bilder aus den Quellen rekonstruierbar sind — anders als `local_submission`, das es nirgends sonst gibt |
+| `mb.dsn` | leer | Read-only-DSN der MusicBrainz-Postgres (Secret) |
+| `mb.keep_submitted_mbid` | `false` | Redirect-Auflösung (§5.4): `false` = Antwort trägt die kanonische MBID, `true` = die eingereichte wird durchgereicht (Phase 10) |
 
-**Projekt-Ergänzungen zur Config (entschieden 2026-07-25):**
+**Platzhalter der Scope-Erweiterung (v2 §7, seit M2 im Schema).** Diese
+Schlüssel stehen ab M2 in `config.yaml` und Admin-UI, damit ein Betreiber
+seine Zugänge schon hinterlegen kann; die auswertende Fachlogik kommt mit
+M3–M6. Bis dahin sind es reine Trägerwerte — alle so vorbelegt, dass die
+Quelle **aus** ist (v2 §2 „Repo-Defaults sind konservativ"):
 
 | Schlüssel | Default | Bedeutung |
 |---|---|---|
-| `index.query_hashes` | `120` | Query-Hashes je Fingerprint im Suchindex; RAM-abhängig pro Host einstellbar (z. B. 80 bei wenig RAM). Änderung erfordert Index-Neuaufbau; Empfehlungstabelle entsteht aus dem Probelauf (Phase 8) |
-| `auth.allow_known_client_keys` | `false` | `apikey`-Modus: fest einkodierte Keys bekannter Drittclients (Picard `v8pQ6oyB`, beets `1vOwZtEn`) zulassen — bewusst default aus, da öffentlich bekannt |
-| `mb.keep_submitted_mbid` | `false` | Redirect-Auflösung (§5.4): `false` = Antwort trägt die kanonische MBID, `true` = die eingereichte wird durchgereicht (Phase 10) |
+| `discogs.update.check_time` | `05:00` | Täglicher Check auf einen neuen Monats-Dump (M3) |
+| `discogs.token` | leer | Discogs-API-Token für die Bilder-API (Secret); leer = Discogs-Bildquelle aus |
+| `tadb.api_key` | leer | TheAudioDB-Key (Secret); leer = Quelle aus (M6) |
+| `caa.crawl.enabled` | `false` | Voll-Spiegel-Crawler des Cover Art Archive (M5). Default aus: ein Erst-Crawl läuft Wochen und hält das Array so lange wach — das ist eine Betreiber-Entscheidung, keine Repo-Vorgabe |
+| `caa.crawl.rate_per_s` | `2` | Crawler-Drossel; gilt auch für Lazy-Abrufe derselben Queue |
+| `covers.negative_retry_days` | `30` | Wiederholung, wenn keine der drei Quellen ein Cover hatte (M4) |
+
+**Secrets** (`acoustid.submit.upstream_app_key`, `notify.smtp.pass`,
+`mb.dsn`, `discogs.token`, `tadb.api_key`) sind `SecretStr`: in `repr()`,
+`str()` und Logs maskiert, im Klartext nur beim Schreiben der Datei. Die
+`config.yaml` bekommt Modus **0640** — nicht 0600, weil der API-Dienst sie
+lesen muss und seit M1b unprivilegiert läuft; die Gruppe trägt im Container
+genau diesen Dienst.
 
 **Feste Werte:**
-- **Port:** Wächter lauscht auf einem Port (default `8080`) für API-Proxy
-  und Admin-UI unter `/admin`; Port per Env änderbar.
-- **Container-Namen:** `acoustid-watchdog`, `acoustid-api`,
-  `acoustid-importer`, `acoustid-db`, `acoustid-index`.
-- **API-Adresse (seit M1a Bootstrap-Wert, nicht mehr Codekonstante):**
-  `MMO_API_BASE_URL` (Default `http://acoustid-api:8080`) ist das Ziel
-  des Proxys, `MMO_API_HEALTH_URL` die Bereitschaftsfrage des Weckens
-  (folgt der Basis-URL, wenn nicht gesetzt); `MMO_API_PORT` (Default
-  `8080`) ist im Compose-Stack Dokumentation und wird erst im
-  Ein-Container-Betrieb bindend.
+- **Port:** ein veröffentlichter Port (Default `8080`, `MMO_PORT`) für
+  API-Proxy und Admin-UI unter `/admin`.
+- **Container und Prozesse:** ein Container (heißt `<projekt>-app-1` —
+  einen festen `container_name` vergibt die Compose-Datei bewusst nicht)
+  mit den vier supervisord-Prozessen `watchdog`, `index`, `db`, `api`
+  (§3).
+- **Interne Adressen (Bootstrap-Werte, keine Codekonstanten):**
+  `MMO_API_BASE_URL` (Default `http://127.0.0.1:8081`) ist das Ziel des
+  Proxys, `MMO_API_HEALTH_URL` die Bereitschaftsfrage des Weckens (folgt
+  der Basis-URL, wenn nicht gesetzt), `MMO_API_PORT` (Default `8081`) der
+  Lauschport des API-Dienstes; `MMO_INDEX_URL` (Default
+  `http://127.0.0.1:6081`) und `MMO_INDEX_NAME` (Default `main`) der
+  Suchindex, `MMO_DB_*` die Datenbank. Das DB-Passwort steht in
+  `MMO_DB_PASSWORD_FILE` (Default `/config/db-password`) und wird beim
+  ersten Start vom Entrypoint erzeugt (E16).
 - **Batch-Limit:** max. 100 Einträge pro `/v2/lookup/batch`-Request.
 - **Upstream-Retries:** nach 7 Fehlversuchen Notification + manueller
   Retry über die Admin-UI.
 - **Idle-Definition:** keine API-Anfrage im Timeout-Fenster UND kein
-  laufender Import-/Backup-Job.
+  laufender Import-/Backup-Job (ab M5 zusätzlich: Crawler inaktiv).
 - **Admin-Login:** ein Benutzer; Passwort-Hash (argon2) in der SQLite;
-  Erst-Passwort beim ersten Start generiert und geloggt.
+  Erst-Passwort beim ersten Start generiert und ins Containerlog
+  geschrieben (der Weg dorthin ist `docker compose logs app`).
 - **UI-Polling:** Statuskarte und laufende Jobs 5 s (HTMX); statische
   Seiten pollen nicht.
 
@@ -558,7 +667,7 @@ Bootstrap (Pfade, Ports, DB-/Index-/API-Adressen).
   wird `client` ignoriert, aber akzeptiert.
 - **`POST /v2/submit`** — Parameter gemäß Original (`client`, `user`,
   `fingerprint.N`, `duration.N`, MBID/Metadaten-Felder). Verhalten je
-  nach `submit.mode`; Antwortformat identisch zum Original.
+  nach `acoustid.submit.mode`; Antwortformat identisch zum Original.
 
 ### Kompatibilitätsvertrag (verifiziert in Phase 1)
 
@@ -598,14 +707,23 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
   Teilfehler einzelner Einträge bei HTTP 200. Obergrenze 100 Einträge
   ⇒ 19/413. Details: [docs/api-lookup.md](docs/api-lookup.md).
   (Zusätzlich gilt das Original-Batchprotokoll mit max. 20, s. o.)
-- **`GET /status`** — Wächter-Endpoint, weckt nie: Stack-Zustand
-  (schlafend/startend/bereit/Fehler), Datenstand (letzte Delta-Sequenz),
-  letzter Update-Lauf, Version.
-- **`GET /_health`** (api-Container, **intern**, kein Vertragsteil,
+- **`GET /status`** — Wächter-Endpoint, weckt nie: Zustand
+  (schlafend/startend/bereit/stoppt/Fehler), Datenstand (letzte
+  Delta-Sequenz), letzter Update-Lauf, Version. Seit M2 zusätzlich
+  `components` mit den **eingebackenen** Fremdkomponenten dieses
+  Artefakts (`postgresql_major`, `acoustid_index_commit`; v2 §12) —
+  wer den Versions-Drift-Guard (E14) debuggt, muss die Major sehen
+  können, ohne an das Image heranzukommen. **Erweiterungen sind
+  ausschließlich additiv:** das Feld `stack` behält Namen und Form,
+  auch wenn im Ein-Container-Betrieb kein Stack im Wortsinn mehr
+  existiert — Container-Healthcheck und Betreiber-Skripte hängen daran
+  (E16). Der Endpunkt ist bewusst offen (kein Key, kein Rate-Limit).
+- **`GET /_health`** (API-Dienst, **intern**, kein Vertragsteil,
   Phase 15) — Bereitschaftsprüfung für das Wake-on-request des
   Wächters: DB (`SELECT 1`) + Index (`/<name>/_health`), bewusst ohne
-  MusicBrainz (§8.7); nur im Compose-Netz erreichbar (kein
-  veröffentlichter Port, der Proxy reicht nur `/v2/*` weiter).
+  MusicBrainz (§8.7); erreichbar nur containerintern (der Dienst hat
+  keinen veröffentlichten Port, und der Proxy reicht nur `/v2/*`
+  weiter — der Pfad wird zusätzlich abgewiesen).
 - **`GET /metrics`** — Prometheus-Format, nur wenn `metrics.enabled`.
 - **`/admin/...`** — Admin-UI (server-rendered), Passwort-geschützt.
 
@@ -692,8 +810,13 @@ Format-Schicht.
 
 ## 8. Verhaltensregeln & Invarianten
 
-1. **Der Wächter weckt, sonst niemand.** Nur der Wächter startet/stoppt
-   Stack-Container (docker.sock). API/Importer steuern nie Docker.
+1. **Der Wächter weckt, sonst niemand.** Nur der Wächter startet und
+   stoppt die schlafenden Prozesse — über den supervisord-Socket, nicht
+   über Docker: **docker.sock ist ersatzlos entfallen** (E1). Präzisierung
+   aus E10: **Dauerdienste** (`db`, `api`, `index`) laufen unter
+   supervisord, **Jobs** (Importer, Backup, ab M3 Dump-Import und
+   Crawler) sind direkte Subprozesse des Wächters. API und Jobs steuern
+   selbst nie Prozesse.
 2. **Kein UI-Aufruf weckt das Array.** Admin-UI und `/status` arbeiten
    ausschließlich mit Wächter-Daten; Array-Aktionen nur nach explizitem
    Weck-Button bzw. eingehender API-Anfrage.
@@ -712,21 +835,23 @@ Format-Schicht.
 7. **Degradierter Betrieb bei MB-Ausfall.** Ist die MB-Postgres nicht
    erreichbar, liefert Lookup AcoustID-UUIDs + MBIDs ohne Metadaten
    (kein Fehler); Ereignis wird geloggt.
-8. **Plattenplatz-Guard.** Vor jedem Import: freier Platz ≥
-   `update.min_free_gb`, sonst Abbruch + Notification.
+8. **Plattenplatz-Guard.** Vor jedem Import-/Crawl-Segment: freier Platz ≥
+   `disk.min_free_gb`, sonst Abbruch + Notification — geprüft gegen
+   **jeden** Schreib-/Staging-Pfad, nicht nur gegen einen (E11).
 9. **Upstream-Queue.** Fehlgeschlagene Upstream-Submits bleiben in
    `local_submission` (`forward_failed`) und werden beim nächsten
    Update-Lauf erneut versucht; nach 7 Fehlversuchen Notification und
    manueller Retry über die Admin-UI.
 10. **Secrets nie im Repo.** Alle Zugänge über `.env`/`config.yaml`;
     `.env.example` dokumentiert alles.
-11. **Ein Release = ein Tag = alle Images.** Wächter, API und Importer
-    werden immer gemeinsam getaggt und veröffentlicht.
+11. **Ein Release = ein Image = ein Tag.** Seit dem Ein-Container-Umbau
+    gibt es genau ein Artefakt; `release.yml` baut es aus einem
+    SemVer-Tag und schiebt es nach GHCR.
 
 ## 9. Admin-UI (Referenz: docs/DESIGN_HANDOFF.md)
 
 - **Technischer Rahmen (fix):** FastAPI + Jinja2 + HTMX im
-  Wächter-Container unter `/admin`; ein Admin-Benutzer, Passwort-Login,
+  Wächter-Prozess unter `/admin`; ein Admin-Benutzer, Passwort-Login,
   Session-Cookie; responsive (Desktop primär, Tablet/Smartphone
   benutzbar); CSS ohne Build-Schritt; kein WebSocket.
 - **Routen:** `/admin/login`, `/admin/` (Dashboard), `/admin/config`,
@@ -745,44 +870,58 @@ Format-Schicht.
 ## 10. Filestruktur (Repo)
 
 ```
-acoustid-offline/
-├── docker-compose.yml            # Stack: api, importer (Profil: job), db, index
-├── docker-compose.watchdog.yml   # Wächter (immer an)
+musicmeta-offline/
+├── Dockerfile                    # das eine Image: App + PostgreSQL + acoustid-index
+├── docker-compose.yml            # der eine Service (Bind-Mounts, Healthcheck /status)
 ├── .env.example                  # Alle Bootstrap-Env-Variablen (MMO_*), dokumentiert
 ├── README.md                     # Setup Unraid + generisch, Bootstrap-Anleitung, Lizenzhinweis Daten
+├── THIRD-PARTY-NOTICES.md        # GPL-Pflichten des eingebackenen fpindex (E7)
+├── supervisor/                   # supervisord.conf (+ .dev), entrypoint.sh,
+│                                 #   mmo-postgres / mmo-fpindex (Startskripte)
 ├── unraid/                       # Unraid-Community-App-Template (XML)
 ├── watchdog/
-│   ├── Dockerfile                # Wächter-Image (klein, Dauerläufer auf Cache)
-│   └── app/                      # Module: Proxy, Weck-/Docker-Steuerung, Scheduler,
+│   └── app/                      # Module: Proxy, Weck-/Prozess-Steuerung, Scheduler,
 │       ├── ...                   #   Admin-Routen, Auth, Lookup-Cache, Notify, Metrics
 │       ├── templates/            # Jinja2-Templates der Admin-UI
 │       └── static/               # CSS/JS (HTMX) der Admin-UI, kein Build
 ├── api/
-│   ├── Dockerfile                # API-Image
 │   └── app/                      # /v2/lookup, /v2/submit, /v2/lookup/batch,
-│                                 #   Index-Client-Nutzung, MB-Resolver
+│                                 #   /v2/submission_status, Index-Client, MB-Resolver
 ├── importer/
-│   ├── Dockerfile                # Importer-Image (One-Shot-Job)
 │   └── app/                      # Delta-Download, Parser, DB-Import,
 │                                 #   Index-Feed, Backup-Job
-├── shared/                       # Python-Paket: Config-Schema, Modelle, Logging
+├── shared/                       # Python-Paket: Config-/Env-Schema, Modelle, Logging,
+│                                 #   DB-Migrationen, Index-Client, Fingerprint-Codec, MB-Queries
 ├── docs/
-│   ├── HANDOFF.md                # Gesamtspezifikation (Quelle dieser Datei)
-│   └── DESIGN_HANDOFF.md         # UI-Spezifikation für Claude Design
-├── tests/                        # Unit- + Integrationstests (Compose-basiert)
-└── .github/workflows/            # ci.yml (Tests), release.yml (3 Images → GHCR, ein Tag)
+│   ├── HANDOFF.md                # Gesamtspezifikation v2 (Quelle dieser Datei)
+│   ├── DESIGN_HANDOFF.md         # UI-Spezifikation (noch v1; v2 kommt zu M8)
+│   ├── migration-v1-v2.md        # Volume-Migration aus dem v1-Stack
+│   └── ...                       # api-lookup/api-submit, importer-job, probelauf-unraid,
+│                                 #   design/, research/, archive/
+├── tests/                        # paketübergreifende Tests, Fixtures, pg_acoustid
+└── .github/workflows/            # ci.yml (Lint/Tests/Image), release.yml (ein Image → GHCR)
 ```
+
+Es gibt **kein** `docker-compose.watchdog.yml` und keine drei Dockerfiles
+mehr; `tests/test_repo_layout.py` hält beides fest, damit eine alte
+Anleitung sie nicht versehentlich zurückbringt.
 
 Der Dateischnitt unterhalb der `app/`-Verzeichnisse ist im Handoff nicht
 festgelegt und wird in den jeweiligen Phasen konkretisiert (dann hier
 nachtragen).
 
-**Paketierung (Phase 2):** uv-Workspace, Python 3.14, ruff + pytest.
-Verzeichnisse wie oben; installierte Import-Namen weichen ab:
-`acoustid_api`, `acoustid_importer`, `acoustid_watchdog`, `shared`
-(Details/Begründung in DECISIONS 2026-07-25). Echte Dump-Fixtures sind
-nicht committet — `tests/fixtures/fetch_fixtures.py` beschafft sie
-reproduzierbar. Repo: https://github.com/shares92/acoustid-offline
+**Paketierung (Phase 2, fortgeschrieben in M2):** uv-Workspace, Python
+3.14, ruff + pytest. Verzeichnisse wie oben; installierte Import-Namen
+weichen ab: `acoustid_api`, `acoustid_importer`, `acoustid_watchdog`,
+`shared` (Details/Begründung in DECISIONS 2026-07-25), die
+Distributionsnamen tragen seit M2 den neuen Projektnamen
+(`musicmeta-offline-api`, `-importer`, `-watchdog`, `-shared`). Ab M3
+kommen die neuen Subsysteme als eigene Workspace-Member dazu
+(`mmo_discogs_dump`, `mmo_covers`, `mmo_tadb`, `mmo_mbref`, E6). Echte
+Dump-Fixtures sind nicht committet —
+`tests/fixtures/fetch_fixtures.py` beschafft sie reproduzierbar.
+Repo: https://github.com/shares92/musicmeta-offline (Reihenfolge der
+Umbenennung: README „Repo-Umbenennung").
 
 ## 11. Bewusst ausgeschlossen
 
@@ -802,7 +941,8 @@ Offene Punkte:
    Dauer wird per Probelauf in Phase 8 gemessen (nirgends existiert
    eine belegte E2E-Importdauer).
 3. ~~acoustid-index~~ — erledigt Phase 1 (§5.3, DECISIONS: Cache-Pool,
-   zweistufiges Rescoring, Digest-Pin, `index.query_hashes`).
+   zweistufiges Rescoring, `acoustid.index.query_hashes`; aus dem
+   Digest-Pin wurde mit M1b ein Quell-/Commit-Pin, E7).
 4. ~~Upstream-Submit~~ — erledigt Phase 1 (§7,
    docs/research/phase1-api-formate.md).
 5. ~~MB-Schema~~ — erledigt Phase 1 (§5.4,
@@ -820,7 +960,7 @@ Offene Punkte:
 10. acoustid-index `ng` beobachten (wire-kompatibel, aber
     Index-Neuaufbau beim Umstieg; kein Release-Datum).
 11. Reale Index-Größe und RAM-Empfehlungstabelle je
-    `index.query_hashes`-Wert: aus dem Probelauf (Phase 8) ableiten.
+    `acoustid.index.query_hashes`-Wert: aus dem Probelauf ableiten.
 12. Index-Restore-Prozedur (`_snapshot` → tar) einmal manuell testen
     und dokumentieren (kein Restore-Endpoint; `manifest.backup` wird
     vom Code nie gelesen).
