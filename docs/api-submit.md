@@ -470,7 +470,7 @@ uv run pytest api/tests/test_submit_params.py api/tests/test_submit_http.py \
               api/tests/test_status_http.py                              # ohne Dienste
 
 docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
-AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
+MMO_DB_HOST=127.0.0.1 MMO_INDEX_URL=http://127.0.0.1:6081 \
   uv run pytest api/tests/test_submit_integration.py --integration=require
 ```
 

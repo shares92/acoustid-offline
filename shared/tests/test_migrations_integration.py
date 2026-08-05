@@ -215,7 +215,7 @@ def _scratch_database(settings: EnvSettings, *, autocommit: bool = False) -> Ite
 
 @pytest.fixture(scope="session")
 def env_settings() -> EnvSettings:
-    """Zugang aus den `AOFF_DB_*`-Variablen — derselbe Weg wie im Betrieb."""
+    """Zugang aus den `MMO_DB_*`-Variablen — derselbe Weg wie im Betrieb."""
     return EnvSettings.from_env()
 
 
@@ -435,11 +435,11 @@ def test_core_group_leaves_the_secondary_indexes_out(empty: Scratch) -> None:
 def test_apply_from_env_uses_the_bootstrap_variables(
     empty: Scratch, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("AOFF_DB_NAME", empty.settings.db_name)
-    monkeypatch.setenv("AOFF_DB_HOST", empty.settings.db_host)
-    monkeypatch.setenv("AOFF_DB_PORT", str(empty.settings.db_port))
-    monkeypatch.setenv("AOFF_DB_USER", empty.settings.db_user)
-    monkeypatch.setenv("AOFF_DB_PASSWORD", empty.settings.db_password.get_secret_value())
+    monkeypatch.setenv("MMO_DB_NAME", empty.settings.db_name)
+    monkeypatch.setenv("MMO_DB_HOST", empty.settings.db_host)
+    monkeypatch.setenv("MMO_DB_PORT", str(empty.settings.db_port))
+    monkeypatch.setenv("MMO_DB_USER", empty.settings.db_user)
+    monkeypatch.setenv("MMO_DB_PASSWORD", empty.settings.db_password.get_secret_value())
 
     report = apply_from_env(groups=[CORE])
 

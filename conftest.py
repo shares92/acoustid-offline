@@ -7,7 +7,7 @@ Compose-Stack. Welchen, sagen weitere Marker:
 nur ``integration``                Postgres (Compose-Service `db`) — der
                                    Vorgabefall seit Phase 4.
 ``integration`` + ``index``        acoustid-index (Compose-Service `index`,
-                                   ``AOFF_INDEX_URL``) — seit Phase 5.
+                                   ``MMO_INDEX_URL``) — seit Phase 5.
 ``integration`` + ``db`` +         beide zugleich — der Index-Feed liest aus
 ``index``                          der Postgres und schreibt in den Index
                                    (Phase 7). Der Marker ``db`` ist nur
@@ -33,7 +33,7 @@ Ob sie laufen, entscheidet fuer jeden Dienst einzeln derselbe Schalter:
 ===========================  =============================================
 
 Alternativ ueber die Umgebungsvariable ``ACOUSTID_INTEGRATION_TESTS``
-(gleiche Werte). Bewusst ohne `AOFF_`-Praefix: das sind Bootstrap-Variablen
+(gleiche Werte). Bewusst ohne `MMO_`-Praefix: das sind Bootstrap-Variablen
 der Anwendung, deren Satz gegen `.env.example` geprueft wird.
 
 Davon unabhaengig gibt es den Marker ``network`` (seit Phase 6): Tests, die
@@ -50,7 +50,7 @@ jedem CI-Runner vorhanden, `--integration=require` wuerde diese Tests dort
 also erzwingen — und ein E2E-Lauf mit Image-Bau gehoert nicht in den
 Unit-Job.
 
-Die Zugaenge kommen aus denselben `AOFF_`-Variablen wie im Betrieb
+Die Zugaenge kommen aus denselben `MMO_`-Variablen wie im Betrieb
 (`shared.env.EnvSettings`); fuer den lokalen Lauf gegen Compose siehe
 `tests/docker-compose.test.yml`.
 """
@@ -174,7 +174,7 @@ def _probe_extension() -> tuple[bool, str]:
     Der Container dazu wird aus `tests/pg_acoustid/Dockerfile` gebaut und
     laeuft ausschliesslich fuer die Bit-Verifikation des Rescorings; er hat
     mit dem Compose-Stack nichts zu tun und bekommt deshalb eine eigene
-    Variable statt der `AOFF_DB_*`.
+    Variable statt der `MMO_DB_*`.
     """
     import psycopg
 
@@ -254,7 +254,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             # Kein stilles Ueberspringen: mit require ist das ein Fehler.
             raise pytest.UsageError(
                 f"--integration=require, aber {detail}. Erwartet werden die "
-                f"AOFF_-Variablen eines erreichbaren Dienstes ({label})."
+                f"MMO_-Variablen eines erreichbaren Dienstes ({label})."
             )
         notes.append(f"{len(group)}x {label} abgewaehlt — {detail}")
         unavailable[service] = detail

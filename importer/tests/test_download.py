@@ -272,7 +272,7 @@ def test_fetch_all_keeps_the_order(downloader: DeltaDownloader) -> None:
 
 
 def test_from_env_uses_the_dump_dir(tmp_path: Path) -> None:
-    env = EnvSettings.from_env({"AOFF_DUMP_DIR": str(tmp_path / "deltas")})
+    env = EnvSettings.from_env({"MMO_DUMP_DIR": str(tmp_path / "deltas")})
     with DeltaDownloader.from_env(env) as instance:
         assert instance.dest_dir == tmp_path / "deltas"
         assert instance.base_url == "https://data.acoustid.org"

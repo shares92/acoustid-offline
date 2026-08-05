@@ -2,12 +2,12 @@
 
 Marker `integration`: laeuft nur mit erreichbarer Datenbank — Steuerung ueber
 `--integration` bzw. `ACOUSTID_INTEGRATION_TESTS` (siehe conftest.py im
-Repo-Wurzelverzeichnis), Zugang aus den `AOFF_DB_*`-Variablen.
+Repo-Wurzelverzeichnis), Zugang aus den `MMO_DB_*`-Variablen.
 
 Lokal::
 
     docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db
-    AOFF_DB_HOST=127.0.0.1 uv run pytest importer/tests --integration=require
+    MMO_DB_HOST=127.0.0.1 uv run pytest importer/tests --integration=require
 
 Die Quelle ist ein lokaler HTTP-Server (stdlib), der die Original-Fixtures
 ausliefert — echtes Netz braucht hier niemand, echte Daten dagegen schon:
@@ -166,7 +166,7 @@ def publish_empty_day(server: _Source, day: date) -> None:
 
 
 def settings_for(conn: psycopg.Connection, env: EnvSettings, dump_dir: Path) -> EnvSettings:
-    """`AOFF_`-Umgebung, die auf die Wegwerf-Datenbank des Tests zeigt."""
+    """`MMO_`-Umgebung, die auf die Wegwerf-Datenbank des Tests zeigt."""
     return env.model_copy(update={"db_name": conn.info.dbname, "dump_dir": dump_dir})
 
 

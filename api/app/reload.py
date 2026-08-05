@@ -119,7 +119,7 @@ class ConfigReloader:
         """
         Args:
             service: Laufzeitumgebung, deren ``config`` ersetzt wird.
-            config_path: Pfad der ``config.yaml`` (``AOFF_CONFIG_PATH``).
+            config_path: Pfad der ``config.yaml`` (``MMO_CONFIG_PATH``).
             interval_s: Abstand zweier Blicke auf die Marke.
         """
         self.service = service

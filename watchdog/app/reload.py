@@ -48,7 +48,7 @@ _LOG = logging.getLogger(__name__)
 #: Die Marke heisst wie die Konfiguration plus dieser Endung
 #: (``config.yaml`` -> ``config.yaml.reload``). So liegt sie garantiert im
 #: selben Verzeichnis und damit im selben Mount wie die Datei, um die es
-#: geht — auch wenn ``AOFF_CONFIG_PATH`` woandershin zeigt.
+#: geht — auch wenn ``MMO_CONFIG_PATH`` woandershin zeigt.
 RELOAD_SUFFIX: Final = ".reload"
 
 #: Die Marke ist oeffentlich lesbar; der API-Container laeuft nicht

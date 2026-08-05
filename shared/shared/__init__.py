@@ -4,7 +4,7 @@ Inhalt ab Phase 3:
 
 * `shared.config` — Schema, Laden und atomares Schreiben der `config.yaml`
   (ARCHITECTURE §6).
-* `shared.env` — Bootstrap ueber `AOFF_`-Umgebungsvariablen (Pfade, Ports,
+* `shared.env` — Bootstrap ueber `MMO_`-Umgebungsvariablen (Pfade, Ports,
   DB-/Index-Zugaenge), bewusst getrennt von der config.yaml.
 * `shared.logging_setup` — strukturiertes JSON-Logging nach stderr.
 * `shared.models` — gemeinsame Enums (Auth-/Submit-Modus, Submission-Status,

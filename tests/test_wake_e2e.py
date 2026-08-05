@@ -108,9 +108,9 @@ print("bootstrap ok")
 def _env(data_dir: Path) -> dict[str, str]:
     return {
         **os.environ,
-        "AOFF_PORT": str(WATCHDOG_PORT),
-        "AOFF_INDEX_NAME": INDEX_NAME,
-        "AOFF_LOG_LEVEL": "INFO",
+        "MMO_PORT": str(WATCHDOG_PORT),
+        "MMO_INDEX_NAME": INDEX_NAME,
+        "MMO_LOG_LEVEL": "INFO",
         "MUSICMETA_IMAGE": "musicmeta-offline:e2e",
         "MUSICMETA_CONFIG_DIR": str(data_dir / "config"),
         "MUSICMETA_INDEX_DIR": str(data_dir / "index"),

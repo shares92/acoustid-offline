@@ -1,7 +1,7 @@
 """Downloader der Tagesdeltas (ARCHITECTURE §5.1).
 
 Holt die Dateien von ``data.acoustid.org`` in ein lokales Arbeitsverzeichnis
-(``AOFF_DUMP_DIR``) — robust genug fuer den Bootstrap, der 38.178 Dateien
+(``MMO_DUMP_DIR``) — robust genug fuer den Bootstrap, der 38.178 Dateien
 mit zusammen 414 GB ziehen muss:
 
 * **Atomar:** geladen wird nach ``<name>.part``, erst die vollstaendige und
@@ -140,7 +140,7 @@ class DeltaDownloader:
     ) -> None:
         """
         Args:
-            dest_dir: Arbeitsverzeichnis (``AOFF_DUMP_DIR``); wird bei Bedarf
+            dest_dir: Arbeitsverzeichnis (``MMO_DUMP_DIR``); wird bei Bedarf
                 angelegt.
             base_url: Wurzel der Quelle; in Tests ein lokaler Server.
             client: Vorhandener ``httpx.Client`` (Tests, gemeinsamer Pool).
@@ -167,7 +167,7 @@ class DeltaDownloader:
 
     @classmethod
     def from_env(cls, env: EnvSettings | None = None, **kwargs: Any) -> Self:
-        """Baut den Downloader mit ``AOFF_DUMP_DIR`` als Zielverzeichnis."""
+        """Baut den Downloader mit ``MMO_DUMP_DIR`` als Zielverzeichnis."""
         settings = env or EnvSettings.from_env()
         return cls(settings.dump_dir, **kwargs)
 

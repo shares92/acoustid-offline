@@ -42,11 +42,11 @@ uv run python -m acoustid_importer --help
 ```
 
 Das Datenbank-Passwort muss dabei **nicht** mitgegeben werden: es steht in
-`AOFF_DB_PASSWORD_FILE` (Default `/config/db-password`), und die liest jeder
+`MMO_DB_PASSWORD_FILE` (Default `/config/db-password`), und die liest jeder
 Prozess selbst — auch einer, der per `exec` dazukommt und die Umgebung des
 Entrypoints nicht erbt.
 
-Der Job liest seine Zugänge aus den `AOFF_`-Variablen (ARCHITECTURE §6) und
+Der Job liest seine Zugänge aus den `MMO_`-Variablen (ARCHITECTURE §6) und
 aus der `config.yaml` des Wächters — von dort genau zwei Werte:
 `update.min_free_gb` (Plattenplatz-Guard) und `index.query_hashes`
 (Query-Extrakt für den Suchindex). Fehlt die Datei, gelten die Defaults.
@@ -97,7 +97,7 @@ neuere Upsert-Stände überschreiben.
 |---:|---|---|---|
 | 0 | `ok` | Alles eingespielt (auch: nichts zu tun) | — |
 | 1 | `failed` | Unerwarteter Fehler | Log ansehen; Wiederholung meist zwecklos |
-| 2 | `usage_error` | Aufruf, `AOFF_`-Umgebung oder `config.yaml` fehlerhaft | Konfiguration korrigieren |
+| 2 | `usage_error` | Aufruf, `MMO_`-Umgebung oder `config.yaml` fehlerhaft | Konfiguration korrigieren |
 | 3 | `disk_guard` | Freier Platz unter `update.min_free_gb` (§8.8) | Platz schaffen, Lauf wiederholen; Benachrichtigung |
 | 4 | `download_failed` | Tagesdatei kam nicht sauber vom Server | Nächster Zyklus wiederholt automatisch (§8.4) |
 | 5 | `gaps` | Fehlende Tagesdatei in der Vergangenheit (Regel 5) | **Nicht** automatisch reparieren — Betreiber entscheidet |
@@ -221,7 +221,7 @@ Bezugsgröße wiederholen (die Historie wächst um ~58 MB/Tag).
 
 ## 4. Plattenplatz-Guard (§8.8)
 
-Geprüft wird das Arbeitsverzeichnis der Tagesdateien (`AOFF_DUMP_DIR`) —
+Geprüft wird das Arbeitsverzeichnis der Tagesdateien (`MMO_DUMP_DIR`) —
 einmal **vor** dem Lauf (vor der ersten Migration und dem ersten Byte) und
 danach in Abständen: nach je 25 Dateien oder 2 GiB, je nachdem was zuerst
 eintritt. `update.min_free_gb` wird als **GiB** gelesen (1024³ Byte), also

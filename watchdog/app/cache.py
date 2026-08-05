@@ -134,8 +134,8 @@ __all__ = [
 
 _LOG = logging.getLogger(__name__)
 
-#: Dateiname des Caches im Datenverzeichnis (``AOFF_DATA_DIR``). Wie bei der
-#: Zustandsdatenbank **keine** eigene ``AOFF_``-Variable: der Pfad ist eine
+#: Dateiname des Caches im Datenverzeichnis (``MMO_DATA_DIR``). Wie bei der
+#: Zustandsdatenbank **keine** eigene ``MMO_``-Variable: der Pfad ist eine
 #: Eigenschaft des Waechters, kein Bootstrap-Wert (DECISIONS 2026-08-01,
 #: Phase 14, Punkt 7).
 CACHE_FILENAME: Final = "lookup-cache.sqlite3"

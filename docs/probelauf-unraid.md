@@ -46,7 +46,7 @@ cd /mnt/user/appdata/acoustid-offline/repo
 cp .env.example .env
 ```
 
-`AOFF_DB_PASSWORD` bleibt **leer**: der Entrypoint erzeugt das Passwort
+`MMO_DB_PASSWORD` bleibt **leer**: der Entrypoint erzeugt das Passwort
 beim ersten Start selbst und legt es unter `/config/db-password` ab.
 
 Die fünf Mounts zeigen per Vorgabe auf Verzeichnisse neben der

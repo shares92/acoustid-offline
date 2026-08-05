@@ -103,8 +103,8 @@ Artefakt, das ausgeliefert wird:
 
 ```bash
 docker compose -f tests/docker-compose.test.yml up -d --build --wait
-AOFF_DB_HOST=127.0.0.1 AOFF_DB_PASSWORD=test-wegwerf-passwort \
-  AOFF_INDEX_URL=http://127.0.0.1:6081 uv run pytest --integration=require
+MMO_DB_HOST=127.0.0.1 MMO_DB_PASSWORD=test-wegwerf-passwort \
+  MMO_INDEX_URL=http://127.0.0.1:6081 uv run pytest --integration=require
 docker compose -f tests/docker-compose.test.yml down -v
 ```
 

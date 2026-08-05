@@ -8,7 +8,7 @@ Suche nicht). Steuerung ueber `--integration` bzw.
 Lokal::
 
     docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db
-    AOFF_DB_HOST=127.0.0.1 uv run pytest api/tests/test_meta_integration.py \\
+    MMO_DB_HOST=127.0.0.1 uv run pytest api/tests/test_meta_integration.py \\
         --integration=require
 
 Der Nachweis, um den es geht: unser SQL passt zum echten MB-Schema, die

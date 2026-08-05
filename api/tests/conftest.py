@@ -10,7 +10,7 @@ Zwei Welten, die sich nicht vermischen sollen:
   Marker ``integration`` + ``db`` + ``index`` und stehen in
   `test_lookup_integration.py`. Sie bekommen eine **frisch angelegte,
   leere** Datenbank mit vollstaendigem Schema — die konfigurierte Datenbank
-  aus den `AOFF_DB_*`-Variablen dient nur zum Anlegen und Loeschen.
+  aus den `MMO_DB_*`-Variablen dient nur zum Anlegen und Loeschen.
 
 Steuerung ueber `--integration` bzw. `ACOUSTID_INTEGRATION_TESTS`, siehe
 conftest.py im Repo-Wurzelverzeichnis.
@@ -56,7 +56,7 @@ def client(service: StubService) -> Iterator[TestClient]:
 
 @pytest.fixture(scope="session")
 def env_settings() -> EnvSettings:
-    """Zugang aus den `AOFF_`-Variablen — derselbe Weg wie im Betrieb."""
+    """Zugang aus den `MMO_`-Variablen — derselbe Weg wie im Betrieb."""
     return EnvSettings.from_env()
 
 

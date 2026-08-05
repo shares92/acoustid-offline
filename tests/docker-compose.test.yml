@@ -11,12 +11,12 @@
 # insbesondere den aus der Quelle gebauten fpindex (M0-Analyse §2.3).
 #
 #   docker compose -f tests/docker-compose.test.yml up -d --build
-#   AOFF_DB_HOST=127.0.0.1 AOFF_DB_PASSWORD=test-wegwerf-passwort \
-#     AOFF_INDEX_URL=http://127.0.0.1:6081 uv run pytest --integration=require
+#   MMO_DB_HOST=127.0.0.1 MMO_DB_PASSWORD=test-wegwerf-passwort \
+#     MMO_INDEX_URL=http://127.0.0.1:6081 uv run pytest --integration=require
 #   docker compose -f tests/docker-compose.test.yml down -v
 #
 # Ist der Host-Port 5432 belegt (eine andere Instanz auf demselben Rechner),
-# beide Seiten umstellen:  AOFF_DB_PORT=15432 docker compose … up -d
+# beide Seiten umstellen:  MMO_DB_PORT=15432 docker compose … up -d
 # und denselben Wert an pytest weiterreichen.
 #
 # Bewusst OHNE `--wait` in der Anleitung: der Index legt seinen Index nicht
@@ -43,12 +43,12 @@ services:
       # Loopback-Interface — im Betrieb ist genau das unerwuenscht, hier
       # unvermeidlich.
       ACOUSTID_BIND_ADDRESS: "0.0.0.0"
-      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:-test-wegwerf-passwort}
-      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
+      MMO_DB_PASSWORD: ${MMO_DB_PASSWORD:-test-wegwerf-passwort}
+      MMO_LOG_LEVEL: ${MMO_LOG_LEVEL:-INFO}
     ports:
       # Nur auf dem Loopback des Wirts: die Dienste haben weder Auth noch
       # TLS (ARCHITECTURE §3, §5.3).
-      - "127.0.0.1:${AOFF_DB_PORT:-5432}:5432"
+      - "127.0.0.1:${MMO_DB_PORT:-5432}:5432"
       - "127.0.0.1:6081:6081"
     volumes:
       # Benannte Volumes sind hier richtig: `down -v` SOLL sie abraeumen —

@@ -3,7 +3,7 @@
 Der Waechter ist der einzige Dienst mit einem veroeffentlichten Port: er
 traegt API-Proxy, `/status`, `/metrics` und die Admin-UI unter `/admin` —
 alles auf **einem** Port (ARCHITECTURE §6 „Feste Werte"). Anders als beim
-API-Dienst ist der Port deshalb konfigurierbar: ``AOFF_PORT``, Default 8080.
+API-Dienst ist der Port deshalb konfigurierbar: ``MMO_PORT``, Default 8080.
 
 Er laeuft als Dauerlaeufer auf dem SSD-Cache-Pool; der Stack darunter darf
 schlafen (ARCHITECTURE §3).

@@ -214,8 +214,8 @@ def run(
 
     Args:
         options: Steuerung des Laufs; per Vorgabe ein Update-Lauf.
-        settings: Bootstrap-Umgebung; per Vorgabe aus den `AOFF_`-Variablen.
-        config: Laufzeit-Konfiguration; per Vorgabe aus ``AOFF_CONFIG_PATH``.
+        settings: Bootstrap-Umgebung; per Vorgabe aus den `MMO_`-Variablen.
+        config: Laufzeit-Konfiguration; per Vorgabe aus ``MMO_CONFIG_PATH``.
         stop: Wird zwischen zwei Tagesdateien gefragt; ``True`` beendet den
             Lauf geordnet (Signalbehandlung des Containers).
     """

@@ -18,7 +18,7 @@ Grundregeln (aus ARCHITECTURE §6 und den DECISIONS vom 2026-07-25):
   sind `SecretStr`: in `repr()`, `str()` und Log-Ausgaben maskiert, im
   Klartext nur ueber `get_secret_value()` bzw. beim Schreiben der Datei.
 * **Bootstrap-Werte** (Pfade, Ports, DB-Zugaenge) stehen bewusst NICHT
-  hier, sondern in den `AOFF_`-Env-Variablen (siehe `shared.env`).
+  hier, sondern in den `MMO_`-Env-Variablen (siehe `shared.env`).
 """
 
 from __future__ import annotations

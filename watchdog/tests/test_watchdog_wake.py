@@ -38,7 +38,7 @@ from shared.env import EnvSettings
 from shared.models import StackState
 
 #: Adresse des internen Healthchecks — seit M1a ein Bootstrap-Wert
-#: (``AOFF_API_HEALTH_URL``) und keine Modulkonstante des Waechters mehr.
+#: (``MMO_API_HEALTH_URL``) und keine Modulkonstante des Waechters mehr.
 HEALTH_URL = EnvSettings().api_health_url
 
 

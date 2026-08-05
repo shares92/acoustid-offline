@@ -71,7 +71,7 @@ __all__ = [
 _LOG = logging.getLogger(__name__)
 
 #: Name des Suchindex im Server. Ein Server kann mehrere halten; wir fahren
-#: genau einen. Aenderbar ueber ``AOFF_INDEX_NAME``.
+#: genau einen. Aenderbar ueber ``MMO_INDEX_NAME``.
 DEFAULT_INDEX_NAME: Final = "main"
 
 #: Leseschranke fuer alles ausser der Suche (Sekunden).
@@ -134,7 +134,7 @@ class FpIndexClient:
         connect_timeout_s: float = DEFAULT_CONNECT_TIMEOUT_S,
         client: httpx.Client | None = None,
     ) -> Self:
-        """Baut den Client aus ``AOFF_INDEX_URL`` und ``AOFF_INDEX_NAME``."""
+        """Baut den Client aus ``MMO_INDEX_URL`` und ``MMO_INDEX_NAME``."""
         settings = env or EnvSettings.from_env()
         return cls(
             settings.index_url,

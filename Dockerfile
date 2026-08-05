@@ -129,7 +129,7 @@ LABEL org.musicmeta.postgresql.major="18" \
 
 ENV PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:/opt/supervisor/bin:${PATH}" \
-    AOFF_PG_MAJOR=18
+    MMO_PG_MAJOR=18
 
 # Feste UIDs, bevor Postgres installiert wird: Bind-Mounts auf Unraid-Shares
 # brauchen berechenbare Eigentuemer (R14). 6081 ist die UID des

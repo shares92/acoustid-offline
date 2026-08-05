@@ -5,7 +5,7 @@ Warum: Diese Dateien sind **testgekoppelt**, nicht bloss Prosa.
 ``shared/tests/test_migrations.py`` liest den SQL-Block aus ARCHITECTURE §5.2
 direkt ein und vergleicht ihn anweisungsgleich mit den Migrationen;
 ``importer/tests/test_streams.py`` liest die Stroeme-Tabelle aus §5.1;
-``shared/tests/test_env.py`` haelt den AOFF_-Variablensatz (§6) und
+``shared/tests/test_env.py`` haelt den MMO_-Variablensatz (§6) und
 ``tests/test_repo_layout.py`` das Verzeichnis-Layout (§10) — derselbe Test
 prueft auch die .gitignore-Zeile, die die Dump-Fixtures aussperrt, weshalb
 ``.gitignore`` hier mit haengt (Laufzeit ~0,4 s).

@@ -2,12 +2,12 @@
 
 Marker `integration` + `index`: laeuft nur mit erreichbarem Index — Steuerung
 ueber `--integration` bzw. `ACOUSTID_INTEGRATION_TESTS` (siehe conftest.py im
-Repo-Wurzelverzeichnis), Adresse aus `AOFF_INDEX_URL`.
+Repo-Wurzelverzeichnis), Adresse aus `MMO_INDEX_URL`.
 
 Lokal::
 
     docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d index
-    AOFF_INDEX_URL=http://127.0.0.1:6081 uv run pytest -m "integration and index" \\
+    MMO_INDEX_URL=http://127.0.0.1:6081 uv run pytest -m "integration and index" \\
         --integration=require
 
 Gearbeitet wird mit **echten** Fingerprint-Vektoren aus den Tages-Deltas

@@ -2,12 +2,12 @@
 
 Marker `integration`: laeuft nur mit erreichbarer Datenbank — Steuerung ueber
 `--integration` bzw. `ACOUSTID_INTEGRATION_TESTS` (siehe conftest.py im
-Repo-Wurzelverzeichnis), Zugang aus den `AOFF_DB_*`-Variablen.
+Repo-Wurzelverzeichnis), Zugang aus den `MMO_DB_*`-Variablen.
 
 Lokal::
 
     docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db
-    AOFF_DB_HOST=127.0.0.1 uv run pytest importer/tests --integration=require
+    MMO_DB_HOST=127.0.0.1 uv run pytest importer/tests --integration=require
 
 Zwei Sorten Eingabedaten, mit Absicht:
 

@@ -436,7 +436,7 @@ class FakeProbe:
 def probe(handler: Callable[[httpx.Request], httpx.Response]) -> ReadinessProbe:
     """Echte :class:`ReadinessProbe` auf einem Attrappen-Transport.
 
-    Die Adresse ist der Bootstrap-Vorgabewert (``AOFF_API_HEALTH_URL``) —
+    Die Adresse ist der Bootstrap-Vorgabewert (``MMO_API_HEALTH_URL``) —
     der Transport ist ohnehin eine Attrappe, aber so steht im Test dieselbe
     URL wie im Betrieb.
     """

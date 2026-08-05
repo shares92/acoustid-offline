@@ -2,12 +2,12 @@
 
 Marker `integration` + `db` + `index`: braucht beide Dienste — Steuerung
 ueber `--integration` bzw. `ACOUSTID_INTEGRATION_TESTS` (siehe conftest.py im
-Repo-Wurzelverzeichnis), Adressen aus `AOFF_DB_*` und `AOFF_INDEX_URL`.
+Repo-Wurzelverzeichnis), Adressen aus `MMO_DB_*` und `MMO_INDEX_URL`.
 
 Lokal::
 
     docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
-    AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \\
+    MMO_DB_HOST=127.0.0.1 MMO_INDEX_URL=http://127.0.0.1:6081 \\
         uv run pytest api/tests --integration=require
 
 Der Nachweis, um den es geht, ist die Definition of Done der Phase 11: eine

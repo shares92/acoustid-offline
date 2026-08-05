@@ -90,7 +90,7 @@ class ApiService:
         min_size: int = DEFAULT_POOL_MIN_SIZE,
         max_size: int = DEFAULT_POOL_MAX_SIZE,
     ) -> Self:
-        """Baut den Dienst aus den ``AOFF_``-Variablen und der config.yaml.
+        """Baut den Dienst aus den ``MMO_``-Variablen und der config.yaml.
 
         Der Pool wird **noch nicht** geoeffnet — das macht :meth:`open`, damit
         ein Start ohne laufende Datenbank nicht schon beim Import scheitert.

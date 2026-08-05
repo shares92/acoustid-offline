@@ -15,7 +15,7 @@ supervisord steht bewusst getrennt in ``test_watchdog_supervisor.py`` und
 startet sich seine eigene Gegenstelle.)
 
 Jeder Test bekommt ein frisches Datenverzeichnis unter ``tmp_path``; die
-``AOFF_``-Umgebung wird nie gelesen, sondern als
+``MMO_``-Umgebung wird nie gelesen, sondern als
 :class:`~shared.env.EnvSettings` direkt gebaut — so haengt kein Ergebnis an
 der Umgebung des Entwicklerrechners.
 """

@@ -9,8 +9,8 @@
 # Ende ein SIGKILL (R10).
 set -eu
 
-PGDATA="${PGDATA:-${AOFF_DB_DATA_ROOT:-/data/db}/${AOFF_PG_MAJOR:-18}}"
-PGBIN="/usr/lib/postgresql/${AOFF_PG_MAJOR:-18}/bin"
+PGDATA="${PGDATA:-${MMO_DB_DATA_ROOT:-/data/db}/${MMO_PG_MAJOR:-18}}"
+PGBIN="/usr/lib/postgresql/${MMO_PG_MAJOR:-18}/bin"
 
 # Loopback im Betrieb; die Test-Zusammenstellung (tests/docker-compose.test.yml)
 # setzt 0.0.0.0, weil ein veroeffentlichter Port die Container-Adresse trifft
@@ -20,4 +20,4 @@ BIND="${ACOUSTID_BIND_ADDRESS:-127.0.0.1}"
 exec "${PGBIN}/postgres" \
     -D "${PGDATA}" \
     -c listen_addresses="${BIND}" \
-    -p "${AOFF_DB_PORT:-5432}"
+    -p "${MMO_DB_PORT:-5432}"

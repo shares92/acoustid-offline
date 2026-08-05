@@ -62,8 +62,8 @@ __all__ = [
 
 _LOG = logging.getLogger(__name__)
 
-#: Dateiname der Zustandsdatenbank im Datenverzeichnis (``AOFF_DATA_DIR``).
-#: Bewusst keine eigene ``AOFF_``-Variable: der Pfad ist eine Eigenschaft des
+#: Dateiname der Zustandsdatenbank im Datenverzeichnis (``MMO_DATA_DIR``).
+#: Bewusst keine eigene ``MMO_``-Variable: der Pfad ist eine Eigenschaft des
 #: Waechters, kein Bootstrap-Wert, den jemand anders kennen muesste.
 DB_FILENAME: Final = "watchdog.sqlite3"
 

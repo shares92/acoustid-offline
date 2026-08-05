@@ -108,7 +108,7 @@ def test_update_config_writes_the_file_signal_and_event(service: WatchdogService
 def test_service_holds_no_connection_to_the_array(service: WatchdogService) -> None:
     """Kein Postgres-Pool, kein Index-Client — das ist die Invariante §8.2.
 
-    Der Waechter kommt ohne ``AOFF_DB_PASSWORD`` aus; wuerde hier je eine
+    Der Waechter kommt ohne ``MMO_DB_PASSWORD`` aus; wuerde hier je eine
     Datenbankressource entstehen, waere die Zusage „die Admin-UI arbeitet
     bei schlafendem Stack" gebrochen.
 

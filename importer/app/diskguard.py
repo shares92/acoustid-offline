@@ -6,7 +6,7 @@ Vielfaches in die Postgres — ohne Wachhund laeuft irgendwann die Platte
 voll, und zwar mitten in einer Transaktion.
 
 **Was geprueft wird.** Der Guard sieht nur das Dateisystem *seines eigenen
-Containers*: das Arbeitsverzeichnis der Tagesdateien (``AOFF_DUMP_DIR``).
+Containers*: das Arbeitsverzeichnis der Tagesdateien (``MMO_DUMP_DIR``).
 Das Datenverzeichnis der Postgres liegt in einem anderen Container und ist
 von hier aus nicht messbar — liegen beide auf demselben Unraid-Share (der
 Regelfall), misst der Guard trotzdem denselben Pool. Weitere Pfade kann der
@@ -237,7 +237,7 @@ class DiskGuard:
     ) -> None:
         """
         Args:
-            path: Zu ueberwachendes Verzeichnis (``AOFF_DUMP_DIR``).
+            path: Zu ueberwachendes Verzeichnis (``MMO_DUMP_DIR``).
             min_free_gb: Geforderte Reserve; 0 schaltet den Guard ab.
             every_files: Erneut pruefen nach so vielen Dateien.
             every_bytes: Erneut pruefen nach so vielen gz-Bytes.

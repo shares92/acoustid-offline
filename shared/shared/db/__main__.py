@@ -5,7 +5,7 @@
     python -m shared.db --groups indexes    # Bootstrap: nach dem Massenimport
     python -m shared.db --list              # nur zeigen, nichts anwenden
 
-Zugangsdaten kommen aus den `AOFF_DB_*`-Variablen (ARCHITECTURE §6).
+Zugangsdaten kommen aus den `MMO_DB_*`-Variablen (ARCHITECTURE §6).
 """
 
 from __future__ import annotations

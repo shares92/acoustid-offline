@@ -316,7 +316,7 @@ def default_gates(
     """Die Bereitschaftsfragen des Betriebs, aus den Bootstrap-Werten gebaut.
 
     Args:
-        settings: Adressen und Zugaenge (``AOFF_*``).
+        settings: Adressen und Zugaenge (``MMO_*``).
         timeouts: Fristen je Prozess; ohne Angabe
             :data:`DEFAULT_GATE_TIMEOUTS`.
         pg_isready: Pfad des ``pg_isready``-Programms; ohne Angabe wird es

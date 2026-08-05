@@ -2,7 +2,7 @@
 
 Jeder Test bekommt eine **frisch angelegte, leere Datenbank** mit
 vollstaendig angewendetem Schema; die konfigurierte Datenbank aus den
-`AOFF_DB_*`-Variablen dient nur zum Anlegen und Loeschen. Damit sind die
+`MMO_DB_*`-Variablen dient nur zum Anlegen und Loeschen. Damit sind die
 Tests voneinander unabhaengig und koennen ohne Aufraeum-Logik Zeilen
 zaehlen.
 
@@ -76,7 +76,7 @@ def full_day(dumps: Path) -> tuple[Path, ...]:
 
 @pytest.fixture(scope="session")
 def env_settings() -> EnvSettings:
-    """Zugang aus den `AOFF_DB_*`-Variablen — derselbe Weg wie im Betrieb."""
+    """Zugang aus den `MMO_DB_*`-Variablen — derselbe Weg wie im Betrieb."""
     return EnvSettings.from_env()
 
 

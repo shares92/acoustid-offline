@@ -10,9 +10,9 @@ die Kollision faellt erst beim ersten Wecken auf (`EADDRINUSE`, Risiko R9
 der M0-Analyse), also lange nach dem Start. Und ``0.0.0.0`` waere in dieser
 Aufstellung eine echte Oeffnung nach aussen: die API kennt weder Auth noch
 Rate-Limit, beides setzt der Waechter durch (§7 „Durchsetzungsort Auth &
-Rate-Limit"). Deshalb ``127.0.0.1:<AOFF_API_PORT>``.
+Rate-Limit"). Deshalb ``127.0.0.1:<MMO_API_PORT>``.
 
-Zugaenge und Log-Level kommen wie ueberall aus den ``AOFF_``-Variablen
+Zugaenge und Log-Level kommen wie ueberall aus den ``MMO_``-Variablen
 (``shared.env``), die Laufzeit-Konfiguration aus der ``config.yaml``.
 """
 

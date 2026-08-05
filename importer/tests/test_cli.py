@@ -242,7 +242,7 @@ def test_an_unwritable_report_path_still_shows_the_report(
 def test_an_invalid_environment_ends_with_the_usage_code(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setenv("AOFF_PORT", "keine-zahl")
+    monkeypatch.setenv("MMO_PORT", "keine-zahl")
     assert cli.main([]) == int(ExitCode.USAGE)
     assert "Fehler" in capsys.readouterr().err
 

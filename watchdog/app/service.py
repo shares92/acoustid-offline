@@ -172,7 +172,7 @@ class WatchdogService:
         self.state.on_transition = self._log_transition
 
         self.supervisor = supervisor if supervisor is not None else SupervisorClient()
-        # Beide Adressen kommen aus den Bootstrap-Werten (``AOFF_API_*``)
+        # Beide Adressen kommen aus den Bootstrap-Werten (``MMO_API_*``)
         # und nicht mehr aus Modulkonstanten: im Ein-Container-Betrieb ist
         # der API-Dienst nicht mehr ``acoustid-api:8080``, sondern ein
         # Loopback-Port — das ist ein Umgebungswert, keine Codekonstante.
@@ -220,7 +220,7 @@ class WatchdogService:
 
     @classmethod
     def from_env(cls, env: EnvSettings | None = None) -> Self:
-        """Baut den Dienst aus den ``AOFF_``-Variablen.
+        """Baut den Dienst aus den ``MMO_``-Variablen.
 
         Nichts wird dabei geoeffnet oder angelegt — das macht :meth:`open`,
         damit ein Importfehler nicht schon beim Modulimport Dateien anfasst.

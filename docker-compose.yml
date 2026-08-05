@@ -61,36 +61,36 @@ services:
     # Containers. Bei Exponierung nach aussen zwingend auth.mode=apikey +
     # TLS-Proxy davor.
     ports:
-      - "${AOFF_PORT:-8080}:${AOFF_PORT:-8080}"
+      - "${MMO_PORT:-8080}:${MMO_PORT:-8080}"
     environment:
-      AOFF_PORT: ${AOFF_PORT:-8080}
-      AOFF_LOG_LEVEL: ${AOFF_LOG_LEVEL:-INFO}
+      MMO_PORT: ${MMO_PORT:-8080}
+      MMO_LOG_LEVEL: ${MMO_LOG_LEVEL:-INFO}
       # Die Pfade der Mounts unten. Sie stehen hier ausdruecklich, obwohl
       # sie den Vorgabewerten entsprechen: wer einen Mount verlegt, sieht
       # an einer Stelle, was mitzuziehen ist.
-      AOFF_DATA_DIR: /config
-      AOFF_DUMP_DIR: /import
-      AOFF_DB_DATA_ROOT: /data/db
+      MMO_DATA_DIR: /config
+      MMO_DUMP_DIR: /import
+      MMO_DB_DATA_ROOT: /data/db
       # Bewusst OHNE Default: leer heisst „nicht gesetzt", und dann leitet
       # `EnvSettings` den Wert ab bzw. der Entrypoint erzeugt ihn
       # (Leerstring-Konvention, DECISIONS 2026-08-04 M1a).
-      AOFF_API_BASE_URL: ${AOFF_API_BASE_URL:-}
-      AOFF_API_HEALTH_URL: ${AOFF_API_HEALTH_URL:-}
-      AOFF_API_PORT: ${AOFF_API_PORT:-}
-      AOFF_DB_PASSWORD: ${AOFF_DB_PASSWORD:-}
+      MMO_API_BASE_URL: ${MMO_API_BASE_URL:-}
+      MMO_API_HEALTH_URL: ${MMO_API_HEALTH_URL:-}
+      MMO_API_PORT: ${MMO_API_PORT:-}
+      MMO_DB_PASSWORD: ${MMO_DB_PASSWORD:-}
       # Wer das Passwort als Docker-Secret einhaengt, setzt hier den Pfad —
       # der Entrypoint schreibt dann DIESE Datei, und die Anwendung liest
       # sie (ohne Durchreichung liefen beide auf verschiedene Dateien).
-      AOFF_DB_PASSWORD_FILE: ${AOFF_DB_PASSWORD_FILE:-}
-      AOFF_INDEX_NAME: ${AOFF_INDEX_NAME:-main}
-      # Container-Werte ohne AOFF_-Praefix (sie gehoeren nicht ins Schema
+      MMO_DB_PASSWORD_FILE: ${MMO_DB_PASSWORD_FILE:-}
+      MMO_INDEX_NAME: ${MMO_INDEX_NAME:-main}
+      # Container-Werte ohne MMO_-Praefix (sie gehoeren nicht ins Schema
       # der Anwendung, s. .env.example).
       ACOUSTID_INDEX_DIR: /index
       ACOUSTID_BACKUP_DIR: /backup
     volumes:
       # Die Pfade sind ueber Variablen umstellbar (Muster aus v1:
       # ACOUSTID_WATCHDOG_DATA) — auf Unraid stehen hier Share-Pfade, im
-      # E2E-Test Wegwerf-Verzeichnisse. Bewusst OHNE `AOFF_`-Praefix: das
+      # E2E-Test Wegwerf-Verzeichnisse. Bewusst OHNE `MMO_`-Praefix: das
       # ist der Variablensatz der Anwendung, und der Container bekaeme sie
       # sonst als „unbekannt" gemeldet.
       # --- Cache-Pool ---
@@ -115,7 +115,7 @@ services:
           "CMD",
           "/app/.venv/bin/python",
           "-c",
-          "import urllib.request,os,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('AOFF_PORT','8080')+'/status', timeout=5).status==200 else 1)",
+          "import urllib.request,os,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('MMO_PORT','8080')+'/status', timeout=5).status==200 else 1)",
         ]
       interval: 30s
       timeout: 10s

@@ -422,7 +422,7 @@ Details: [docs/research/phase1-acoustid-index.md](docs/research/phase1-acoustid-
   Dateikopie im Stillstand.
 - **Umsetzung (Phase 5):** Client in `shared/shared/fpindex/`
   (query/wire/client/errors); Indexname via Bootstrap-Variable
-  `AOFF_INDEX_NAME` (Default `main`). Compose-Healthcheck prüft
+  `MMO_INDEX_NAME` (Default `main`). Compose-Healthcheck prüft
   `/<name>/_health` und wird erst nach `ensure_index()` gesund —
   importer hängt mit `service_started` ab, api mit `service_healthy`.
   Empirische API-Befunde: Addendum in
@@ -496,7 +496,7 @@ zurückgeschrieben und als Warnung geloggt.
 ## 6. Konfiguration — Schlüssel, Defaults, feste Werte
 
 Laufzeit-Einstellungen in `config.yaml` (Cache-Volume des Wächters,
-editierbar über die Admin-UI). Env-Variablen (Prefix `AOFF_`) nur für
+editierbar über die Admin-UI). Env-Variablen (Prefix `MMO_`) nur für
 Bootstrap (Pfade, Ports, DB-/Index-/API-Adressen).
 
 | Schlüssel | Default | Bedeutung |
@@ -532,9 +532,9 @@ Bootstrap (Pfade, Ports, DB-/Index-/API-Adressen).
 - **Container-Namen:** `acoustid-watchdog`, `acoustid-api`,
   `acoustid-importer`, `acoustid-db`, `acoustid-index`.
 - **API-Adresse (seit M1a Bootstrap-Wert, nicht mehr Codekonstante):**
-  `AOFF_API_BASE_URL` (Default `http://acoustid-api:8080`) ist das Ziel
-  des Proxys, `AOFF_API_HEALTH_URL` die Bereitschaftsfrage des Weckens
-  (folgt der Basis-URL, wenn nicht gesetzt); `AOFF_API_PORT` (Default
+  `MMO_API_BASE_URL` (Default `http://acoustid-api:8080`) ist das Ziel
+  des Proxys, `MMO_API_HEALTH_URL` die Bereitschaftsfrage des Weckens
+  (folgt der Basis-URL, wenn nicht gesetzt); `MMO_API_PORT` (Default
   `8080`) ist im Compose-Stack Dokumentation und wird erst im
   Ein-Container-Betrieb bindend.
 - **Batch-Limit:** max. 100 Einträge pro `/v2/lookup/batch`-Request.
@@ -748,7 +748,7 @@ Format-Schicht.
 acoustid-offline/
 ├── docker-compose.yml            # Stack: api, importer (Profil: job), db, index
 ├── docker-compose.watchdog.yml   # Wächter (immer an)
-├── .env.example                  # Alle Bootstrap-Env-Variablen (AOFF_*), dokumentiert
+├── .env.example                  # Alle Bootstrap-Env-Variablen (MMO_*), dokumentiert
 ├── README.md                     # Setup Unraid + generisch, Bootstrap-Anleitung, Lizenzhinweis Daten
 ├── unraid/                       # Unraid-Community-App-Template (XML)
 ├── watchdog/

@@ -43,8 +43,8 @@ erfolgreichen lokalen Submission und nach jedem erfolgreichen Delta-Import
 (Invariante §8.6) — eine `/v2/submit`-Einreichung wird also nie von einer
 veralteten Lookup-Antwort verdeckt.
 
-Env-Variablen: `AOFF_DB_*`, `AOFF_INDEX_URL`, `AOFF_INDEX_NAME`,
-`AOFF_CONFIG_PATH`, `AOFF_LOG_LEVEL` (siehe `.env.example`). Aus der
+Env-Variablen: `MMO_DB_*`, `MMO_INDEX_URL`, `MMO_INDEX_NAME`,
+`MMO_CONFIG_PATH`, `MMO_LOG_LEVEL` (siehe `.env.example`). Aus der
 `config.yaml` liest der Dienst drei Werte:
 
 | Schlüssel | Bedeutung |
@@ -56,7 +56,7 @@ Env-Variablen: `AOFF_DB_*`, `AOFF_INDEX_URL`, `AOFF_INDEX_NAME`,
 Lokal ohne Container:
 
 ```bash
-AOFF_DB_HOST=127.0.0.1 AOFF_DB_PASSWORD=… AOFF_INDEX_URL=http://127.0.0.1:6081 \
+MMO_DB_HOST=127.0.0.1 MMO_DB_PASSWORD=… MMO_INDEX_URL=http://127.0.0.1:6081 \
   uv run python -m acoustid_api
 ```
 
@@ -457,7 +457,7 @@ das Image wird nie veröffentlicht (pg_acoustid hat keine Lizenzdatei).
 uv run pytest api/tests                       # HTTP-Schicht, ohne Dienste
 
 docker compose -f docker-compose.yml -f tests/docker-compose.test.yml up -d db index
-AOFF_DB_HOST=127.0.0.1 AOFF_INDEX_URL=http://127.0.0.1:6081 \
+MMO_DB_HOST=127.0.0.1 MMO_INDEX_URL=http://127.0.0.1:6081 \
   uv run pytest api/tests --integration=require
 ```
 

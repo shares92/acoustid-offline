@@ -232,10 +232,10 @@ def apply_from_env(
     """Wie :func:`apply`, oeffnet die Verbindung aber selbst aus der Umgebung.
 
     Der uebliche Aufruf beim Start eines Containers: die Zugangsdaten kommen
-    aus den `AOFF_DB_*`-Variablen (`shared.env.EnvSettings.db_dsn`).
+    aus den `MMO_DB_*`-Variablen (`shared.env.EnvSettings.db_dsn`).
 
     Raises:
-        shared.env.EnvError: `AOFF_DB_PASSWORD` fehlt oder die Umgebung ist
+        shared.env.EnvError: `MMO_DB_PASSWORD` fehlt oder die Umgebung ist
             ungueltig.
     """
     resolved = EnvSettings.from_env() if settings is None else settings

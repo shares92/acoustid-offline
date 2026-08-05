@@ -84,7 +84,7 @@ class ExitCode(IntEnum):
     OK = 0
     #: Unerwarteter Fehler — ein Fall, den der Job nicht vorgesehen hat.
     ERROR = 1
-    #: Aufruf- oder Umgebungsfehler (CLI-Argumente, `AOFF_`-Variablen, Config).
+    #: Aufruf- oder Umgebungsfehler (CLI-Argumente, `MMO_`-Variablen, Config).
     USAGE = 2
     #: Plattenplatz-Guard hat abgebrochen (Invariante §8.8).
     DISK_GUARD = 3

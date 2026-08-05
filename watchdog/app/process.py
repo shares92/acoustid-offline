@@ -82,7 +82,7 @@ _LOG = logging.getLogger(__name__)
 
 #: Pfad des supervisord-Sockets im Container. Fest verdrahtet wie zuvor der
 #: Docker-Socket (ARCHITECTURE §6 „Feste Werte"): er steht in
-#: ``supervisor/supervisord.conf``, und eine eigene ``AOFF_``-Variable haette
+#: ``supervisor/supervisord.conf``, und eine eigene ``MMO_``-Variable haette
 #: keinen zweiten moeglichen Wert (Muster aus DECISIONS 2026-08-01, Punkt 7).
 #: Bewusst kurz — AF_UNIX-Namen sind auf ~104 Byte begrenzt, und ein Pfad
 #: unter ``/config`` waere auf manchen Wirten schon zu lang.

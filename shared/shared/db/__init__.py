@@ -5,7 +5,7 @@ Ab Phase 4 enthaelt sie den Migrations-Runner samt Schema-Dateien:
 * :func:`shared.db.apply` — ausstehende Migrationen auf einer offenen
   Verbindung anwenden (idempotent, je Migration eine Transaktion).
 * :func:`shared.db.apply_from_env` — dasselbe mit Verbindung aus den
-  `AOFF_DB_*`-Variablen; der uebliche Aufruf beim Start eines Containers.
+  `MMO_DB_*`-Variablen; der uebliche Aufruf beim Start eines Containers.
 * Gruppen :data:`shared.db.CORE` (Tabellen) und :data:`shared.db.INDEXES`
   (Sekundaerindizes) — beim Bootstrap wird `indexes` erst nach dem
   Massenimport angewendet (ARCHITECTURE §5.2).

@@ -6,7 +6,7 @@ Der Kern des On-Demand-Betriebs. Zwei Bausteine, bewusst getrennt:
   (interner Healthcheck, DECISIONS 2026-08-01). Sie ist der einzige
   verlaessliche Punkt, an dem „bereit" mehr heisst als „Prozess laeuft":
   der Endpunkt prueft Datenbank **und** Suchindex. Ihre Adresse ist ein
-  Bootstrap-Wert (``AOFF_API_HEALTH_URL``, :mod:`shared.env`) und keine
+  Bootstrap-Wert (``MMO_API_HEALTH_URL``, :mod:`shared.env`) und keine
   Modulkonstante — im Ein-Container-Betrieb ist sie eine andere.
 * :class:`WakeCoordinator` — haelt Anfragen, waehrend gestartet wird,
   sorgt dafuer, dass gleichzeitige Anfragen **einen** Weckvorgang ausloesen,
@@ -115,7 +115,7 @@ class ReadinessProbe:
         """
         Args:
             url: Adresse des internen Healthchecks
-                (``AOFF_API_HEALTH_URL``). Bewusst ohne Vorgabewert — wie
+                (``MMO_API_HEALTH_URL``). Bewusst ohne Vorgabewert — wie
                 bei :class:`~acoustid_watchdog.proxy.ReverseProxy`: eine
                 hier eingebaute Adresse waere ein zweiter Ort, an dem die
                 Umgebung steht, und wuerde bei einer Umstellung still die

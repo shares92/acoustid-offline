@@ -75,7 +75,7 @@ def recording(response: httpx.Response) -> tuple[list[httpx.Request], Handler]:
 
 def test_from_env_uses_the_bootstrap_variables() -> None:
     env = EnvSettings.from_env(
-        {"AOFF_INDEX_URL": "http://beispiel:6081/", "AOFF_INDEX_NAME": "probe"}
+        {"MMO_INDEX_URL": "http://beispiel:6081/", "MMO_INDEX_NAME": "probe"}
     )
     with FpIndexClient.from_env(env) as client:
         assert client.base_url == "http://beispiel:6081"

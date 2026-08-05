@@ -41,7 +41,7 @@ ihre Antwort geht unveraendert zurueck (auch das nackte HTTP 405 auf
 im Proxy waere eine zweite Vertragsquelle mit eigener Fehlermenge.
 
 Es folgen ``/metrics`` (Phase 22) und die Admin-UI unter ``/admin``
-(Phasen 23-27). Alles laeuft ueber **einen** Port (``AOFF_PORT``, Default
+(Phasen 23-27). Alles laeuft ueber **einen** Port (``MMO_PORT``, Default
 8080; ARCHITECTURE §6 „Feste Werte"), weil der Waechter der einzige nach
 aussen sichtbare Dienst ist.
 
