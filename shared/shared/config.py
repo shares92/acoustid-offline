@@ -530,7 +530,7 @@ _LEGACY_SECTIONS: Final = ("submit", "update", "index")
 class LegacyKey:
     """Ein in der Datei gefundener Alt-Schluessel."""
 
-    #: Punktnotation, wie er in der Datei steht (z. B. `acoustid.submit.mode`).
+    #: Punktnotation, wie er in der Datei steht (z. B. `submit.mode`).
     old: str
     #: Punktnotation des neuen Pfades (z. B. `acoustid.submit.mode`).
     new: str

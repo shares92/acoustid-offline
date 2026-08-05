@@ -2,7 +2,8 @@
 #
 # In v1 baute die CI drei Images unter einem gemeinsamen Tag; seit dem
 # Ein-Container-Umbau (M1b) gibt es genau eines. Dieser Workflow ist der
-# Weg dorthin: ein `v*`-Tag erzeugt das Image und schiebt es nach GHCR.
+# Weg dorthin: ein SemVer-Tag (`v1.2.3`, auch mit Vorabteil) erzeugt das
+# Image und schiebt es nach GHCR.
 #
 # **Nur linux/amd64** (E3): der acoustid-index ist bislang nur dort erprobt
 # und haengt unter QEMU still. Die Multi-Arch-Zusage aus v2 §12 ist auf
@@ -19,7 +20,11 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      # Bewusst eng: `v*` liesse auch `v2` oder `v1.2` durch. Das ist kein
+      # gueltiges SemVer, `docker/metadata-action` erzeugt daraus keinen
+      # Versionstag (nur eine Warnung im Log) — herauskaeme ein Push, der
+      # ausschliesslich `latest` verschiebt.
+      - "v[0-9]+.[0-9]+.[0-9]+*"
 
 permissions:
   contents: read
@@ -31,6 +36,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # `images:` unten leitet sich aus `github.repository` ab. Vor dem
+      # GitHub-Rename zeigt das noch auf das alte Paket, waehrend die
+      # docker-compose.yml bereits `musicmeta-offline` zieht — ein Tag in
+      # diesem Fenster erzeugte ein Image, das niemand findet. Der Guard
+      # erledigt sich nach dem Rename von selbst.
+      - name: Rename-Reihenfolge erzwingen
+        if: github.repository != 'shares92/musicmeta-offline'
+        run: |
+          echo "v*-Tag erst NACH dem GitHub-Rename (PROGRESS M2)"; exit 1
+
       - name: Repo auschecken
         uses: actions/checkout@v7
 
@@ -49,13 +64,18 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
-          # `latest` nur fuer echte Versionstags, nie fuer Vorabversionen:
-          # ein `v2.0.0-rc1` als `latest` waere genau die Falle, in die ein
-          # Betreiber ohne Pin laeuft.
+          # `latest` kommt aus dem Vorgabeverhalten `flavor: latest=auto`:
+          # es setzt die Marke genau bei einem stabilen SemVer-Treffer und
+          # laesst Vorabversionen aus — ein `v2.0.0-rc1` als `latest` waere
+          # die Falle, in die ein Betreiber ohne Pin laeuft.
+          #
+          # Eine eigene `type=raw`-Regel dafuer waere gefaehrlicher als
+          # nuetzlich: sie greift auch dann, wenn die semver-Muster gar
+          # nicht zuenden, und schoebe `latest` auf einen Stand, zu dem es
+          # keinen Versionstag gibt.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Image bauen und schieben
         uses: docker/build-push-action@v6

@@ -39,15 +39,31 @@ die() {
 # Ein halb umgezogener Container ist schlimmer als ein klar abgelehnter.
 #
 # `MMO_` gewinnt immer; uebernommen wird nur, was leer oder ungesetzt ist.
+#
+# **Genau eine Meldung je Altvariable.** Der Altname wird nach der
+# Auswertung geloescht — sonst saehe ihn `shared/shared/env.py` in jedem
+# Kindprozess erneut und meldete dieselbe Sache ein zweites Mal, im
+# uebernommenen Fall sogar mit der falschen Aussage „wird ignoriert",
+# obwohl der Wert gerade wirkt. Umgekehrt blieb der Fall „beide gesetzt"
+# hier bisher voellig stumm: der Entrypoint uebersprang ihn, und env.py
+# bekam den Altnamen wegen des `unset` nie zu sehen.
+#
+# Nur die Variablen dieser Liste werden hier verbraucht; alle uebrigen
+# (PORT, LOG_LEVEL, API_*, INDEX_NAME) reicht der Vorlauf unangetastet
+# weiter, damit env.py sie sieht und dort genau einmal warnt.
 for name in DATA_DIR DUMP_DIR DB_DATA_ROOT PG_MAJOR DB_NAME DB_USER DB_PORT \
             DB_PASSWORD DB_PASSWORD_FILE; do
     eval "current=\${MMO_${name}:-}"
     eval "previous=\${AOFF_${name}:-}"
-    if [ -z "${current}" ] && [ -n "${previous}" ]; then
+    [ -n "${previous}" ] || continue
+    if [ -z "${current}" ]; then
         eval "MMO_${name}=\${AOFF_${name}}"
         eval "export MMO_${name}"
         log "veraltete Variable AOFF_${name} wird noch gelesen — bitte in MMO_${name} umbenennen"
+    else
+        log "veraltete Variable AOFF_${name} wird ignoriert, MMO_${name} ist gesetzt"
     fi
+    eval "unset AOFF_${name}"
 done
 unset name current previous
 
