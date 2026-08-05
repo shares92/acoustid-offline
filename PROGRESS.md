@@ -144,6 +144,13 @@ Orchestrator fahren. Serena-Symboltools NIE in Worktrees verwenden
   Beschaffung über fetch_fixtures.py. `pg_acoustid` nie ausliefern.
 - Skripte/Container nie mit CWD=Repo-Root starten (Namespace-Falle);
   psycopg in shared bewusst lazy.
+- **Compose-Tests haben Netz.** Der Marker `network` wählt nur Tests ab;
+  der Container hängt am genatteten Default-Bridge-Netz. Wer in einem
+  E2E-Test „ohne Netz" braucht, klemmt die Quelle selbst ab (`/etc/hosts`
+  → 127.0.0.1) — sonst zieht ein Delta-Lauf echte Dumps von
+  data.acoustid.org (Fair-Use, §12 Punkt 9). Dazu: ein unbegrenzter
+  `update`-Lauf auf leerer `import_state` ist gesperrt (Kaltstart-Sperre,
+  DECISIONS 2026-08-05).
 - Lokale Integrationstests auf Apple Silicon: colima mit
   `--vz-rosetta`; CI-Flakes durch Docker-Hub-Timeouts → `gh run rerun
   --failed`.

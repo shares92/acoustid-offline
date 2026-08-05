@@ -615,6 +615,54 @@ machen.
 
 ---
 
+## [Bug] „Compose-Test" heißt nicht „ohne Netz" — der Container hat eine Route
+
+Was: Der E2E-Zyklus-Test war ausdrücklich „ohne Netz" geschrieben und
+erwartete deshalb, dass der Delta-Import mit `download_failed` endet.
+Compose hängt den Container aber an sein Default-Bridge-Netz, und das ist
+nach draußen genattet — der Lauf zog echte Tagesdateien von
+data.acoustid.org und endete nie (Testlauf 05.08.: „zweiter Lauf beendet
+nicht binnen 900 s"). Der pytest-Marker `network` wählt nur **Tests** ab;
+einem Container nimmt er keine Route.
+Warum: Zwei Schäden auf einmal — Fair-Use gegenüber der fremden Quelle
+(§12 Punkt 9) und ein Test, der nicht terminiert. Der Folgeschaden traf
+den **nächsten** Test des Moduls: der laufende Job hielt den Stack wach,
+der Wächter-Neustart des Kennzahlen-Tests erschlug ihn mitten im Lauf, und
+danach legte niemand mehr den Stack schlafen außer dem Idle-Stopp (15 min).
+Ein Fehlschlag lief so die ganze Testreihe hinunter.
+Anwenden: (1) „Kein Netz" ist eine Zusage, die der Test **herstellen**
+muss — z. B. Namen im Container auf `127.0.0.1` zeigen lassen —, keine
+Eigenschaft, die man aus dem Testrahmen ableitet. (2) Solche Zusagen nie
+nur dem Prüflings-Code überlassen, sondern zusätzlich am Ergebnis prüfen
+(hier: das Dump-Verzeichnis bleibt leer). (3) Tests, die einen teuren
+Aufbau modulweit teilen, brauchen eine autouse-Nachbereitung, die den
+definierten Zustand wiederherstellt — sonst erbt der nächste Test den
+Scherbenhaufen des vorigen.
+
+---
+
+## [Bug] Ein „täglicher" Job, der bei leerem Zustand die ganze Historie zieht
+
+Was: Der Delta-Importer nimmt seine Arbeitsliste aus `import_state`. Ist die
+Tabelle leer, ist die Liste die **gesamte** Historie ab 2011-08-19 (38.178
+Dateien, 414 GB) — im Update-Weg, also ohne Bulk-Modus. Da der Wächter den
+Job unbeaufsichtigt zum Termin startet, begänne auf jeder frischen Instanz
+zum ersten 04:00 ein wochenlanger Voll-Replay, den niemand angeordnet hat.
+Gefunden wurde das nicht durch Nachdenken, sondern weil ein E2E-Test genau
+dort hineinlief.
+Warum: Der Unterschied zwischen „Erst-Import" und „täglicher Lauf" steckte
+nur im Modus-Schalter (`--mode bootstrap`) — der Zustand „noch nie etwas
+importiert" war für den Update-Weg kein Sonderfall, sondern nur eine sehr
+lange Liste. Genau so entstehen ungefragte Großlasten.
+Anwenden: Bei resumierbaren Jobs den **Kaltstart** als eigenen Fall
+behandeln und ihn dem Automaten verbieten, solange kein Mensch eine Grenze
+gesetzt hat (hier: `ColdStartError` → `usage_error`, aufgehoben durch
+`--end-date`/`--max-days`/`--max-files`). Faustregel: Wenn die Arbeitsmenge
+eines wiederkehrenden Jobs aus einem *leeren* Zustand um Größenordnungen
+wächst, gehört dort eine Sperre hin.
+
+---
+
 ## Messwert-Rubriken v2-Migration (HANDOFF v2 §16: „LEARNINGS.md sammelt Messwerte")
 
 Korrigiert v2-§15.1 und die E12-/R15-Vorbehalte

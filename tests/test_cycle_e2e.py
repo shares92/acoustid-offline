@@ -9,12 +9,21 @@ Report → ``update_run`` → Schlafen legen.
 eine Anfrage, hier ein Termin. Der Unterschied ist der ganze Punkt von
 M2.5 — bis dahin konnte die Instanz nur reagieren.
 
-**Ohne Netz.** Der Delta-Import braucht data.acoustid.org, und dieser Test
-laeuft (wie alle Compose-Tests) ohne Netz-Zusage. Deshalb wird der
-**erfolgreiche** Zyklus am Backup-Job gefahren — er ist derselbe Ablauf mit
-demselben Wecken, Report und Schlafen, nur ohne Download. Der
-**Fehler-Retry-Pfad** wird am Delta-Import gefahren, wo ein
-Plattenplatz-Guard deterministisch abbricht.
+**Die Quelle wird abgeklemmt — der Container hat naemlich Netz.** Compose
+haengt ihn an sein Default-Bridge-Netz, und das ist nach draussen genattet:
+„Compose-Test" heisst gerade **nicht** „ohne Netz" (der Marker ``network``
+waehlt Tests ab, er nimmt keinem Container die Route). Der Delta-Import
+zoege hier also echte Tagesdateien von data.acoustid.org — Fair-Use
+gegenueber AcoustID OUe (§12 Punkt 9) und ein Lauf, der nie endet. Deshalb
+zeigt der Aufbau den Namen im Container auf ``127.0.0.1``
+(:func:`_cut_the_source`).
+
+Der **erfolgreiche** Zyklus laeuft trotzdem am Backup-Job — er ist derselbe
+Ablauf mit demselben Wecken, Report und Schlafen, nur ohne Download. Die
+beiden **Fehlerpfade** laufen am Delta-Import: einmal bricht der
+Plattenplatz-Guard ab, einmal die Kaltstart-Sperre des Importers (leere
+``import_state``, kein Bootstrap gelaufen). Beide sind deterministisch und
+in Sekunden vorbei; auf einen Netz-Timeout wartet dieser Test nirgends.
 
 **Zeitreisen gibt es nicht.** Statt auf 04:00 zu warten, setzt der Test die
 Termine auf „gerade eben" und startet den Waechter-**Prozess** neu (nicht
@@ -60,6 +69,10 @@ INDEX_NAME = "cycle"
 
 #: Prozesse, die beim Idle-Stopp stehen (der Index ist resident, E12).
 SLEEPING_PROGRAMS = ("db", "api")
+
+#: Wurzel der echten Tagesdeltas (``acoustid_importer.streams.BASE_URL``).
+#: Dieser Test faehrt sie nie an — :func:`_cut_the_source` sperrt sie.
+DELTA_SOURCE_HOST = "data.acoustid.org"
 
 PROJECT = f"musicmeta-cycle-{uuid.uuid4().hex[:8]}"
 
@@ -185,6 +198,30 @@ def _configure(data_dir: Path, **changes: object) -> dict[str, str]:
     return json.loads(output.strip().splitlines()[-1])
 
 
+def _cut_the_source(data_dir: Path) -> None:
+    """Macht ``data.acoustid.org`` im Container unerreichbar.
+
+    Der Eintrag in ``/etc/hosts`` zeigt den Namen auf den Loopback; ein
+    Download-Versuch scheitert dort sofort mit „Connection refused" statt in
+    einem Timeout zu haengen — und vor allem geht kein Byte an die echte
+    Quelle.
+
+    **Das ist das Netz unter dem Code, nicht sein Ersatz.** Der Importer
+    verweigert einen unbegrenzten Lauf auf leerer Buchfuehrung ohnehin
+    (``ColdStartError``, docs/importer-job.md). Ein Test darf sich fuer eine
+    Zusage wie „hier wird nichts geladen" aber nicht auf den Prueflings-Code
+    verlassen: faellt die Sperre, laedt sonst wieder der Test.
+    """
+    _exec(
+        data_dir,
+        "/bin/sh",
+        "-c",
+        f"printf '127.0.0.1 {DELTA_SOURCE_HOST}\\n' >> /etc/hosts",
+    )
+    hosts = _exec(data_dir, "/bin/sh", "-c", "grep acoustid /etc/hosts", check=False)
+    assert f"127.0.0.1 {DELTA_SOURCE_HOST}" in hosts, hosts
+
+
 def _states(data_dir: Path) -> dict[str, str]:
     output = _exec(data_dir, *_SUPERVISORCTL, "status", check=False)
     states: dict[str, str] = {}
@@ -268,6 +305,7 @@ def sleeping_stack(data_dir: Path) -> Iterator[Path]:
     try:
         _compose(data_dir, "up", "-d", "--build", "--wait", "--wait-timeout", "600")
         _wait("Waechter erreichbar", _status, timeout_s=120)
+        _cut_the_source(data_dir)
 
         _exec(data_dir, *_SUPERVISORCTL, "start", "db")
         _wait(
@@ -283,6 +321,27 @@ def sleeping_stack(data_dir: Path) -> Iterator[Path]:
     finally:
         _compose(data_dir, "logs", "--tail", "120", check=False)
         _compose(data_dir, "down", "--remove-orphans", check=False)
+
+
+@pytest.fixture(autouse=True)
+def defined_state(sleeping_stack: Path) -> Iterator[None]:
+    """Kein Test erbt den Zustand eines gescheiterten Vorgaengers.
+
+    Alle Tests dieses Moduls teilen **einen** Container (Modul-Fixture) —
+    ohne dieses Aufraeumen laeuft ein Fehlschlag die Reihe hinunter. Genau
+    das ist im E2E-Lauf vom 05.08. passiert: der Retry-Test lief in seinen
+    Timeout, der Waechter-Neustart des naechsten Tests erschlug den noch
+    laufenden Job, und danach legte niemand mehr den Stack schlafen — ausser
+    dem Idle-Stopp nach 15 Minuten (§8.5). Der Kennzahlen-Test scheiterte
+    also an einem Zustand, mit dem er nichts zu tun hatte.
+
+    Aufgeraeumt wird **nach** dem Test; jeder Test, der das Schlafen selbst
+    zusichert, prueft es vorher in seinem eigenen Rumpf.
+    """
+    yield
+    if _sleeping(sleeping_stack):
+        return
+    _exec(sleeping_stack, *_SUPERVISORCTL, "stop", *SLEEPING_PROGRAMS, check=False)
 
 
 # --- Der erfolgreiche Zyklus ------------------------------------------------
@@ -392,9 +451,17 @@ def test_the_next_cycle_repeats_the_failed_run(sleeping_stack: Path) -> None:
     Statt einen Tag zu warten, bekommt der Zeitplan einen **neuen** Termin
     — fachlich derselbe Fall: „seit diesem Termin lief noch keiner".
     Diesmal ohne Guard, also startet der Importer wirklich als Subprozess.
-    Ohne Netz endet er mit ``download_failed``; der Nachweis ist, dass der
-    Zyklus ihn ueberhaupt wieder angefasst hat — und dass die Historie
-    **zwei** Laeufe zeigt, nicht einen ueberschriebenen.
+    Der Nachweis ist, dass der Zyklus ihn ueberhaupt wieder angefasst hat —
+    und dass die Historie **zwei** Laeufe zeigt, nicht einen
+    ueberschriebenen.
+
+    **Woran der zweite Lauf endet.** In diesem Container wurde nie eine
+    Tagesdatei importiert, ``import_state`` ist leer — ein unbegrenzter
+    ``update``-Lauf muesste also die ganze Historie ab 2011-08-19 holen.
+    Genau das verweigert der Importer (``ColdStartError`` ->
+    ``usage_error``, docs/importer-job.md), und zwar bevor er die Quelle
+    auch nur fragt. Damit ist dieser Test schnell und deterministisch: kein
+    Download, kein Timeout, keine Fair-Use-Frage.
 
     **Der neue Termin muss nach dem ersten Lauf liegen** (``update_after``).
     „Faellig" heisst *„seit diesem Termin lief noch keiner"*; ein Termin
@@ -425,9 +492,12 @@ def test_the_next_cycle_repeats_the_failed_run(sleeping_stack: Path) -> None:
         timeout_s=900,
         interval_s=5.0,
     )
-    # Ohne Netz kommt keine Tagesdatei — der Lauf ist trotzdem einer.
+    # Ohne Bestand kommt keine Tagesdatei — der Lauf ist trotzdem einer.
     assert finished["id"] == second["id"]
-    assert finished["result"] in ("failed", "aborted", "success"), finished
+    assert finished["result"] == "failed", finished
+    assert "bootstrap" in (finished["error"] or ""), finished
+    # Und es wurde nichts geladen: das Dump-Verzeichnis ist unberuehrt.
+    assert list((sleeping_stack / "import").iterdir()) == []
 
     # Und wieder: der Zyklus raeumt hinter sich auf.
     _wait(
