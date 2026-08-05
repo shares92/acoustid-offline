@@ -139,9 +139,11 @@ Immer neueste stabile Version zum Implementierungszeitpunkt:
 - **Prozess-Supervisor:** `supervisord` unter `tini` als PID 1 (gewählt
   gegen s6-overlay, DECISIONS 2026-08-04 E1; Kriterium war das saubere
   Start/Stopp einzelner Dienste zur Laufzeit über einen Socket).
-  Supervision-Politik E15: `autostart=false` + `autorestart=unexpected`
-  für `db`/`index`/`api` — Gestopptes bleibt gestoppt (kein
-  Idle-Stopp-Loop), Abstürze werden geheilt
+  Supervision-Politik E15: `autorestart=unexpected` für `db`, `index` und
+  `api` — per Stopp-Befehl Gestopptes bleibt gestoppt (kein
+  Idle-Stopp-Loop), Abstürze werden geheilt; `autostart=false` für die
+  Schlafgruppe `db`/`api`, während `index` mit dem Container startet
+  (resident, E12) und der Wächter mit `autorestart=true` läuft
 - **Datenbanken:** PostgreSQL (eingebacken, genau **eine** Major je Image
   mit Versions-Drift-Guard, E14), SQLite (Wächter-Zustand + Lookup-Cache)
 - **Suchindex:** acoustid-index (`fpindex`), aus der Quelle gebaut und mit
@@ -593,7 +595,7 @@ Risiko R7 der M0-Analyse. Dieselbe Regel gilt für den Env-Prefix
 | `acoustid.submit.upstream_app_key` | leer | Application-Key für api.acoustid.org (Secret) |
 | `acoustid.update.time` | `04:00` | Täglicher Delta-Import (lokale Zeit) |
 | `acoustid.index.query_hashes` | `120` | Query-Hashes je Fingerprint im Suchindex; RAM-abhängig pro Host einstellbar (z. B. 80 bei wenig RAM). Änderung erfordert Index-Neuaufbau; Empfehlungstabelle entsteht aus dem Probelauf |
-| `disk.min_free_gb` | `100` | Mindest-Plattenreserve vor jedem Import-/Crawl-Segment (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab). **Ein** Grenzwert, geprüft gegen **jeden** Schreib-/Staging-Pfad: die Mounts aus §3 sind mehrere Dateisysteme, und ein freies `/import` sagt nichts über `/data/db` (E11) |
+| `disk.min_free_gb` | `100` | Mindest-Plattenreserve vor jedem Import-/Crawl-Segment (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab). **Ein** Grenzwert, aber zu prüfen gegen **jeden** Schreib-/Staging-Pfad: die Mounts aus §3 sind mehrere Dateisysteme, und ein freies `/import` sagt nichts über `/data/db` (E11). Gemessen wird bislang nur das Dump-Verzeichnis; die Ausweitung kommt mit M2.5 |
 | `wake.hold_timeout_s` | `90` | Max. Haltezeit einer Anfrage beim Wecken |
 | `idle.timeout_min` | `15` | Auto-Stopp nach Inaktivität |
 | `cache.enabled` | `true` | Lookup-Cache an/aus |
@@ -836,8 +838,10 @@ Format-Schicht.
    erreichbar, liefert Lookup AcoustID-UUIDs + MBIDs ohne Metadaten
    (kein Fehler); Ereignis wird geloggt.
 8. **Plattenplatz-Guard.** Vor jedem Import-/Crawl-Segment: freier Platz ≥
-   `disk.min_free_gb`, sonst Abbruch + Notification — geprüft gegen
-   **jeden** Schreib-/Staging-Pfad, nicht nur gegen einen (E11).
+   `disk.min_free_gb`, sonst Abbruch + Notification. Zu prüfen ist
+   **jeder** Schreib-/Staging-Pfad, nicht nur einer (E11) — gebaut ist
+   bisher die Prüfung des Dump-Verzeichnisses, die Ausweitung kommt mit
+   M2.5.
 9. **Upstream-Queue.** Fehlgeschlagene Upstream-Submits bleiben in
    `local_submission` (`forward_failed`) und werden beim nächsten
    Update-Lauf erneut versucht; nach 7 Fehlversuchen Notification und
