@@ -14,6 +14,6 @@ def test_public_names_are_reexported() -> None:
 
 
 def test_config_and_logging_are_reachable_from_the_package_root() -> None:
-    assert shared.Config().index.query_hashes == 120
+    assert shared.Config().acoustid.index.query_hashes == 120
     assert shared.EnvSettings.from_env({}).port == 8080
     assert callable(shared.setup_logging)

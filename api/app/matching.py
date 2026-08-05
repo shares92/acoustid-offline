@@ -95,7 +95,7 @@ class Matcher:
 
     Args:
         index: Client des acoustid-index (Stufe 1).
-        query_hashes: ``index.query_hashes`` aus der Laufzeit-Konfiguration.
+        query_hashes: ``acoustid.index.query_hashes`` aus der Laufzeit-Konfiguration.
             **Muss** derselbe Wert sein, mit dem der Importer indexiert hat —
             sonst passt der Extrakt der Anfrage nicht zu den Dokumenten.
         candidate_limit: Kandidatenzahl je Suche.

@@ -14,11 +14,12 @@ import stat
 from pathlib import Path
 
 import pytest
+import yaml
 
 from acoustid_watchdog.config_store import ConfigStore
 from acoustid_watchdog.reload import RELOAD_SUFFIX, ReloadSignal
-from shared.config import Config, load_config
-from shared.models import AuthMode
+from shared.config import Config, load_config, read_legacy_keys
+from shared.models import AuthMode, SubmitMode
 
 # --- ConfigStore ------------------------------------------------------------
 
@@ -65,6 +66,85 @@ def test_load_rereads_the_file_from_disk(config_store: ConfigStore) -> None:
     config_store.load()
     config_store.path.write_text("auth:\n  mode: apikey\n", encoding="utf-8")
     assert config_store.load().auth.mode is AuthMode.APIKEY
+
+
+# --- Einmaliger Umschreiber auf das M2-Schema (E9) --------------------------
+
+#: Eine v1-`config.yaml`, wie sie auf einer Bestandsinstanz liegt.
+V1_TEXT = """\
+submit:
+  mode: 'off'
+update:
+  time: '03:15'
+  min_free_gb: 50
+index:
+  query_hashes: 80
+"""
+
+
+def test_a_v1_file_is_rewritten_on_the_first_start(config_store: ConfigStore) -> None:
+    """Der Waechter ist der einzige Schreiber — also schreibt er sie um."""
+    config_store.path.parent.mkdir(parents=True, exist_ok=True)
+    config_store.path.write_text(V1_TEXT, encoding="utf-8")
+
+    config = config_store.load()
+
+    # Die Werte haben den Umzug ueberlebt …
+    assert config.acoustid.submit.mode is SubmitMode.OFF
+    assert config.acoustid.update.time == "03:15"
+    assert config.acoustid.index.query_hashes == 80
+    assert config.disk.min_free_gb == 50
+    # … und die Datei traegt jetzt die neuen Namen.
+    raw = yaml.safe_load(config_store.path.read_text(encoding="utf-8"))
+    assert raw["acoustid"]["submit"]["mode"] == "off"
+    assert raw["disk"]["min_free_gb"] == 50
+    assert "submit" not in raw
+    assert "update" not in raw
+
+
+def test_the_rewrite_happens_only_once(config_store: ConfigStore) -> None:
+    """Sonst nutzte jeder Start die Datei ab, ohne dass sich etwas aendert."""
+    config_store.path.parent.mkdir(parents=True, exist_ok=True)
+    config_store.path.write_text(V1_TEXT, encoding="utf-8")
+    config_store.load()
+
+    after_first = config_store.path.read_text(encoding="utf-8")
+    config_store.load()
+
+    assert config_store.path.read_text(encoding="utf-8") == after_first
+    assert read_legacy_keys(config_store.path) == []
+
+
+def test_a_current_file_is_not_touched(config_store: ConfigStore) -> None:
+    config_store.load()
+    before = config_store.path.read_text(encoding="utf-8")
+    stamp = config_store.path.stat().st_mtime_ns
+
+    config_store.load()
+
+    assert config_store.path.read_text(encoding="utf-8") == before
+    assert config_store.path.stat().st_mtime_ns == stamp
+
+
+def test_a_failed_rewrite_does_not_stop_the_start(
+    config_store: ConfigStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ein schreibgeschuetztes /config darf die Instanz nicht lahmlegen.
+
+    Das Uebergangslesen traegt weiter; der Betreiber sieht die Warnung.
+    """
+    config_store.path.parent.mkdir(parents=True, exist_ok=True)
+    config_store.path.write_text(V1_TEXT, encoding="utf-8")
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("acoustid_watchdog.config_store.save_config", boom)
+
+    config = config_store.load()
+
+    assert config.acoustid.submit.mode is SubmitMode.OFF
+    assert read_legacy_keys(config_store.path) != []
 
 
 # --- Reload-Signal ----------------------------------------------------------

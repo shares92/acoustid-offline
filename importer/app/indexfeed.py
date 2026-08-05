@@ -9,7 +9,7 @@ Suchindex kennt sie noch nicht. Dieses Modul schliesst die Luecke:
    dadurch rund 15 % kleiner (§5.3).
 2. **Query-Extrakt statt Vollvektor.** In den Index geht nie der volle
    Vektor, sondern das Ergebnis von
-   :func:`shared.fpindex.extract_query` (Offset 80, ``index.query_hashes``
+   :func:`shared.fpindex.extract_query` (Offset 80, ``acoustid.index.query_hashes``
    Hashes, 28-Bit-Maske, Silence-Hash gefiltert, unsigned). Vollvektoren im
    Index bedeuten dokumentiert ~50 s statt ~50 ms je Suche.
 3. **Batches à :data:`DEFAULT_BATCH_SIZE`** per ``_update`` — der Server
@@ -137,7 +137,7 @@ def feed_index(
             dieselben Dokumente noch einmal, gleiche ID und gleiche Hashes),
             nur eben nutzlos.
         client: Index-Client (:class:`shared.fpindex.FpIndexClient`).
-        max_hashes: ``index.query_hashes`` aus der Konfiguration (Default
+        max_hashes: ``acoustid.index.query_hashes`` aus der Konfiguration (Default
             120). **Muss** derselbe Wert sein wie beim spaeteren Suchen —
             eine Aenderung erfordert einen Index-Neuaufbau (DECISIONS).
         batch_size: Dokumente je ``_update``.

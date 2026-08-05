@@ -21,7 +21,7 @@ einmal beim Start:
   Er gehoert genau deshalb hierher und nicht in die Anfrage: die Grenze von
   drei Anfragen je Sekunde gilt fuer den ganzen Prozess, nicht je Thread
   (:mod:`acoustid_api.upstream`).
-* **Laufzeit-Konfiguration.** Aus ihr kommt ``index.query_hashes`` — der
+* **Laufzeit-Konfiguration.** Aus ihr kommt ``acoustid.index.query_hashes`` — der
   Wert **muss** derselbe sein, mit dem der Importer indexiert hat; deshalb
   liest die API dieselbe ``config.yaml`` (im Container read-only gemountet)
   und nicht etwa eine eigene Env-Variable. Dazu ``mb.dsn`` und
@@ -80,7 +80,7 @@ class ApiService:
         #: Upstream-Weiterleitung; ``None`` ausserhalb von ``local+upstream``.
         #: Ein Prozess, ein Weiterleiter — die Drossel gilt prozessweit.
         self.upstream = upstream or UpstreamForwarder.from_config(config)
-        self.matcher = Matcher(index, query_hashes=config.index.query_hashes)
+        self.matcher = Matcher(index, query_hashes=config.acoustid.index.query_hashes)
 
     @classmethod
     def from_env(
@@ -102,10 +102,10 @@ class ApiService:
             extra={
                 "index_url": settings.index_url,
                 "index_name": settings.index_name,
-                "query_hashes": config.index.query_hashes,
+                "query_hashes": config.acoustid.index.query_hashes,
                 "mb_configured": config.mb.configured,
                 # Der Modus, nie der Schluessel (ARCHITECTURE §6).
-                "submit_mode": config.submit.mode.value,
+                "submit_mode": config.acoustid.submit.mode.value,
             },
         )
         pool = ConnectionPool(

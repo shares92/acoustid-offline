@@ -122,7 +122,7 @@ class RunOptions:
     #: Eingespielte Tagesdateien behalten. Per Vorgabe werden sie geloescht —
     #: 414 GB Bootstrap-Dateien aufzuheben, waere teuer und nutzlos.
     keep_dumps: bool = False
-    #: Ueberschreibt ``update.min_free_gb`` aus der config.yaml.
+    #: Ueberschreibt ``disk.min_free_gb`` aus der config.yaml.
     min_free_gb: int | None = None
     #: Platzpruefung nach je so vielen Dateien bzw. gz-Bytes.
     guard_every_files: int = DEFAULT_EVERY_FILES
@@ -271,7 +271,7 @@ def _execute(
     """Der eigentliche Lauf; Fehler gehen an :func:`run` zurueck."""
     env = settings or EnvSettings.from_env()
     conf = config or load_config(env.config_path)
-    min_free_gb = opts.min_free_gb if opts.min_free_gb is not None else conf.update.min_free_gb
+    min_free_gb = opts.min_free_gb if opts.min_free_gb is not None else conf.disk.min_free_gb
 
     guard = DiskGuard(
         env.dump_dir,
@@ -441,7 +441,7 @@ def _feed(
         state.feed = feed_index(
             conn,
             client,
-            max_hashes=conf.index.query_hashes,
+            max_hashes=conf.acoustid.index.query_hashes,
             batch_size=opts.index_batch_size,
         )
         after = index_size(client, data_dir=opts.index_data_dir)

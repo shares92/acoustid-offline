@@ -49,7 +49,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = REPO_ROOT / "tests/fixtures/acoustid-dumps/2026-07-22-fingerprint-update.jsonl.gz"
 
 #: Wie in ARCHITECTURE §6 (`index.query_hashes`, Default 120).
-QUERY_HASHES = Config().index.query_hashes
+QUERY_HASHES = Config().acoustid.index.query_hashes
 
 DAY = date(2026, 7, 22)
 STAMP = "2026-07-22T12:00:00+00:00"

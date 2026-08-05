@@ -9,20 +9,63 @@ import pytest
 import yaml
 
 from shared.config import (
+    LEGACY_KEYS,
     Config,
     ConfigFileError,
     ConfigValidationError,
     config_to_dict,
     load_config,
+    migrate_legacy_keys,
+    read_legacy_keys,
     save_config,
 )
+from shared.models import AuthMode, SubmitMode
 
 FULL_CONFIG = {
     "auth": {"mode": "apikey", "allow_known_client_keys": True},
-    "submit": {"mode": "local+upstream", "upstream_app_key": "app-key"},
+    "acoustid": {
+        "submit": {"mode": "local+upstream", "upstream_app_key": "app-key"},
+        "update": {"time": "03:15"},
+        "index": {"query_hashes": 80},
+    },
+    "discogs": {"update": {"check_time": "06:20"}, "token": "discogs-geheim"},
+    "caa": {"crawl": {"enabled": True, "rate_per_s": 4}},
+    "covers": {"negative_retry_days": 14},
+    "tadb": {"api_key": "tadb-geheim"},
     "wake": {"hold_timeout_s": 45},
     "idle": {"timeout_min": 30},
-    "update": {"time": "03:15", "min_free_gb": 100},
+    "disk": {"min_free_gb": 100},
+    "cache": {"enabled": False, "max_size_mb": 1024},
+    "ratelimit": {"per_ip_per_min": 60},
+    "metrics": {"enabled": True},
+    "notify": {
+        "ntfy": {"url": "https://ntfy.example/acoustid"},
+        "smtp": {
+            "host": "mail.example",
+            "port": 465,
+            "user": "acoustid",
+            "pass": "smtp-geheim",
+            "from": "acoustid@example",
+            "to": "admin@example",
+        },
+    },
+    "backup": {"dir": "/mnt/backup", "time": "05:30", "include_covers": True},
+    "mb": {
+        "dsn": "postgresql://acoustid_ro:dsn-geheim@mb/musicbrainz",
+        "keep_submitted_mbid": True,
+    },
+}
+
+#: Eine echte v1-`config.yaml`, wie sie auf einer Bestandsinstanz liegt —
+#: der Ausgangspunkt der M2-Migration (E9). Bewusst mit `submit.mode: off`:
+#: das ist der Wert, dessen stiller Verlust (Risiko R7) angefangen haette,
+#: Einreichungen anzunehmen, die der Betreiber abgeschaltet hatte.
+V1_CONFIG = {
+    "auth": {"mode": "apikey", "allow_known_client_keys": True},
+    "submit": {"mode": "off", "upstream_app_key": ""},
+    "wake": {"hold_timeout_s": 45},
+    "idle": {"timeout_min": 30},
+    "update": {"time": "03:15", "min_free_gb": 50},
     "cache": {"enabled": False, "max_size_mb": 1024},
     "ratelimit": {"per_ip_per_min": 60},
     "metrics": {"enabled": True},
@@ -94,11 +137,11 @@ def test_empty_file_yields_defaults(tmp_path: Path) -> None:
 
 
 def test_partial_file_is_filled_with_defaults(tmp_path: Path) -> None:
-    path = _write(tmp_path / "config.yaml", {"index": {"query_hashes": 80}})
+    path = _write(tmp_path / "config.yaml", {"acoustid": {"index": {"query_hashes": 80}}})
     config = load_config(path)
-    assert config.index.query_hashes == 80
+    assert config.acoustid.index.query_hashes == 80
     assert config.wake.hold_timeout_s == 90
-    assert config.update.time == "04:00"
+    assert config.acoustid.update.time == "04:00"
 
 
 def test_full_file_is_read_completely(tmp_path: Path) -> None:
@@ -113,7 +156,7 @@ def test_unknown_keys_are_ignored_with_a_warning(
     path = _write(
         tmp_path / "config.yaml",
         {
-            "index": {"query_hashes": 80, "shard_count": 4},
+            "acoustid": {"index": {"query_hashes": 80, "shard_count": 4}},
             "kaffee": {"sorte": "filter"},
             "notify": {"smtp": {"pasword": "tippfehler"}},
         },
@@ -121,9 +164,9 @@ def test_unknown_keys_are_ignored_with_a_warning(
     with caplog.at_level(logging.WARNING, logger="shared.config"):
         config = load_config(path)
 
-    assert config.index.query_hashes == 80
+    assert config.acoustid.index.query_hashes == 80
     reported = {record.config_key for record in caplog.records}
-    assert reported == {"index.shard_count", "kaffee", "notify.smtp.pasword"}
+    assert reported == {"acoustid.index.shard_count", "kaffee", "notify.smtp.pasword"}
 
 
 def test_validation_error_names_the_key_path(tmp_path: Path) -> None:
@@ -144,7 +187,7 @@ def test_broken_yaml_raises_config_file_error(tmp_path: Path) -> None:
 
 
 def test_non_mapping_yaml_raises_config_file_error(tmp_path: Path) -> None:
-    path = _write(tmp_path / "config.yaml", ["auth", "submit"])
+    path = _write(tmp_path / "config.yaml", ["auth", "acoustid"])
     with pytest.raises(ConfigFileError, match="YAML-Mapping"):
         load_config(path)
 
@@ -187,7 +230,7 @@ def test_written_file_is_readable_yaml_with_header(tmp_path: Path) -> None:
     save_config(Config(), path)
     text = path.read_text(encoding="utf-8")
     assert text.startswith("# config.yaml")
-    assert yaml.safe_load(text)["index"]["query_hashes"] == 120
+    assert yaml.safe_load(text)["acoustid"]["index"]["query_hashes"] == 120
 
 
 def test_secrets_are_written_in_clear_text(tmp_path: Path) -> None:
@@ -271,5 +314,145 @@ def test_failed_write_keeps_the_previous_file(
 def test_overwriting_replaces_the_content(tmp_path: Path) -> None:
     path = tmp_path / "config.yaml"
     save_config(Config(), path)
-    save_config(Config.model_validate({"index": {"query_hashes": 80}}), path)
-    assert load_config(path).index.query_hashes == 80
+    save_config(Config.model_validate({"acoustid": {"index": {"query_hashes": 80}}}), path)
+    assert load_config(path).acoustid.index.query_hashes == 80
+
+
+# --- Schluessel-Umbenennung M2 (E9) ----------------------------------------
+#
+# Risiko R7 („stille Config-Amnesie") in Testform. Der teuerste Fall ist
+# nicht der Absturz, sondern das lautlose Weiterlaufen mit Vorgabewerten.
+
+
+def test_a_v1_config_file_is_read_completely(tmp_path: Path) -> None:
+    """Der Migrationsfall am echten Bestand: kein Wert geht verloren."""
+    path = _write(tmp_path / "config.yaml", V1_CONFIG)
+    config = load_config(path)
+
+    # Die vier umbenannten Pfade.
+    assert config.acoustid.submit.mode is SubmitMode.OFF
+    assert config.acoustid.update.time == "03:15"
+    assert config.acoustid.index.query_hashes == 80
+    assert config.disk.min_free_gb == 50
+    # Und alles, was NICHT umbenannt wurde, steht unveraendert daneben.
+    assert config.auth.mode is AuthMode.APIKEY
+    assert config.wake.hold_timeout_s == 45
+    assert config.idle.timeout_min == 30
+    assert config.cache.max_size_mb == 1024
+    assert config.ratelimit.per_ip_per_min == 60
+    assert config.backup.dir == "/mnt/backup"
+    assert config.mb.keep_submitted_mbid is True
+    assert config.notify.smtp.password.get_secret_value() == "smtp-geheim"
+
+
+def test_submit_mode_off_survives_the_migration(tmp_path: Path) -> None:
+    """Der Kern von R7, als eigener Satz.
+
+    Faellt `submit.mode` auf den Default zurueck, nimmt eine Instanz
+    Einreichungen an, die der Betreiber ausdruecklich abgeschaltet hatte —
+    und niemand merkt es, weil unbekannte Schluessel nur warnen.
+    """
+    path = _write(tmp_path / "config.yaml", {"submit": {"mode": "off"}})
+
+    assert load_config(path).acoustid.submit.mode is SubmitMode.OFF
+
+
+def test_the_min_free_gb_default_rises_only_where_nothing_was_set(tmp_path: Path) -> None:
+    """Ein gesetzter Altwert bleibt; erst das Fehlen zieht den neuen Default."""
+    with_value = _write(tmp_path / "gesetzt.yaml", {"update": {"min_free_gb": 50}})
+    without = _write(tmp_path / "leer.yaml", {"auth": {"mode": "none"}})
+
+    assert load_config(with_value).disk.min_free_gb == 50
+    assert load_config(without).disk.min_free_gb == 100
+
+
+def test_legacy_keys_are_reported_with_their_replacement(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = _write(tmp_path / "config.yaml", V1_CONFIG)
+    with caplog.at_level(logging.WARNING, logger="shared.config"):
+        load_config(path)
+
+    reported = {record.config_key: record.config_key_replacement for record in caplog.records}
+    assert reported == dict(LEGACY_KEYS)
+
+
+def test_legacy_keys_are_not_reported_as_unknown(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Sonst saehe der Betreiber die Meldung „wird ignoriert" — das Gegenteil."""
+    path = _write(tmp_path / "config.yaml", V1_CONFIG)
+    with caplog.at_level(logging.WARNING, logger="shared.config"):
+        load_config(path)
+
+    assert all("Unbekannter" not in record.getMessage() for record in caplog.records)
+
+
+def test_the_new_key_wins_over_the_old_one(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Wer den neuen Schluessel eintraegt und den alten stehen laesst, meint den neuen."""
+    path = _write(
+        tmp_path / "config.yaml",
+        {"submit": {"mode": "off"}, "acoustid": {"submit": {"mode": "local"}}},
+    )
+    with caplog.at_level(logging.WARNING, logger="shared.config"):
+        config = load_config(path)
+
+    assert config.acoustid.submit.mode is SubmitMode.LOCAL
+    assert any("ignoriert" in record.getMessage() for record in caplog.records)
+
+
+def test_a_v1_file_needs_no_second_migration_after_being_written(tmp_path: Path) -> None:
+    """Nach dem Umschreiben ist die Datei sauber — sonst warnte jeder Start."""
+    path = _write(tmp_path / "config.yaml", V1_CONFIG)
+    save_config(load_config(path), path)
+
+    assert read_legacy_keys(path) == []
+
+
+def test_read_legacy_keys_finds_exactly_the_old_paths(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.yaml", V1_CONFIG)
+
+    assert {entry.old for entry in read_legacy_keys(path)} == set(LEGACY_KEYS)
+    assert all(not entry.superseded for entry in read_legacy_keys(path))
+
+
+def test_read_legacy_keys_is_quiet_about_a_current_file(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.yaml", FULL_CONFIG)
+
+    assert read_legacy_keys(path) == []
+
+
+def test_read_legacy_keys_survives_a_broken_file(tmp_path: Path) -> None:
+    """Die Fehlermeldung gehoert `load_config`, das gleich danach laeuft."""
+    path = tmp_path / "config.yaml"
+    path.write_text("auth: {mode: none\n", encoding="utf-8")
+
+    assert read_legacy_keys(path) == []
+
+
+def test_migrate_leaves_the_callers_mapping_alone() -> None:
+    """Rein: derselbe Aufruf laeuft im Validator bei jedem `model_validate`."""
+    original = {"submit": {"mode": "off"}}
+    migrated, found = migrate_legacy_keys(original)
+
+    assert original == {"submit": {"mode": "off"}}
+    assert migrated == {"acoustid": {"submit": {"mode": "off"}}}
+    assert [entry.old for entry in found] == ["submit.mode"]
+
+
+def test_migrate_is_idempotent() -> None:
+    once, _ = migrate_legacy_keys(V1_CONFIG)
+    twice, found = migrate_legacy_keys(once)
+
+    assert once == twice
+    assert found == []
+
+
+def test_a_legacy_section_that_is_not_a_mapping_stays_untouched() -> None:
+    """`submit: local` ist kein Blattpfad — stilles Wegwerfen waere schlimmer."""
+    migrated, found = migrate_legacy_keys({"submit": "local"})
+
+    assert migrated == {"submit": "local"}
+    assert found == []

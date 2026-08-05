@@ -1,6 +1,6 @@
 """Plattenplatz-Guard des Importers (Invariante §8.8).
 
-„Vor jedem Import: freier Platz >= ``update.min_free_gb``, sonst Abbruch mit
+„Vor jedem Import: freier Platz >= ``disk.min_free_gb``, sonst Abbruch mit
 klarem Ergebnis." Der Bootstrap laedt 414 GB gz und schreibt daraus ein
 Vielfaches in die Postgres — ohne Wachhund laeuft irgendwann die Platte
 voll, und zwar mitten in einer Transaktion.
@@ -19,7 +19,7 @@ eintritt. Dazwischen zu pruefen kostet nur Syscalls, aber eine einzelne
 Fingerprint-Tagesdatei kann mehrere GB gross sein — deshalb zusaetzlich die
 Byte-Schranke.
 
-**Einheit.** ``update.min_free_gb`` wird hier als **GiB** gelesen
+**Einheit.** ``disk.min_free_gb`` wird hier als **GiB** gelesen
 (:data:`BYTES_PER_GB` = 1024^3), also die strengere Lesart: wer 50 fordert,
 bekommt 53,7 SI-GB Reserve, nie weniger (LEARNINGS „Einheiten-Falle GB vs.
 GiB").
@@ -54,7 +54,7 @@ __all__ = [
 
 _LOG = logging.getLogger(__name__)
 
-#: 1 „GB" im Sinne von ``update.min_free_gb`` — bewusst binaer (GiB).
+#: 1 „GB" im Sinne von ``disk.min_free_gb`` — bewusst binaer (GiB).
 BYTES_PER_GB: Final = 1 << 30
 
 #: Wiederholungspruefung nach so vielen Dateien.
@@ -179,7 +179,7 @@ def require_free_space(
 
     Args:
         path: Zu pruefendes Verzeichnis.
-        min_free_gb: ``update.min_free_gb``; 0 schaltet den Guard ab.
+        min_free_gb: ``disk.min_free_gb``; 0 schaltet den Guard ab.
         usage: Messfunktion; in Tests ersetzbar.
         what: Was gerade ansteht — erscheint in der Fehlermeldung.
 
@@ -202,7 +202,7 @@ def require_free_space(
         return space
     raise DiskSpaceError(
         f"{what} abgebrochen: unter {space.path} sind nur {space.free_gb:.1f} GiB frei, "
-        f"gefordert sind {space.min_free_gb:.1f} GiB (update.min_free_gb). "
+        f"gefordert sind {space.min_free_gb:.1f} GiB (disk.min_free_gb). "
         "Der Lauf ist resumierbar — nach dem Aufraeumen setzt der naechste Lauf fort.",
         path=space.path,
         free_bytes=space.free_bytes,
@@ -219,7 +219,7 @@ class DiskGuard:
 
     Beispiel::
 
-        guard = DiskGuard(dump_dir, min_free_gb=config.update.min_free_gb)
+        guard = DiskGuard(dump_dir, min_free_gb=config.disk.min_free_gb)
         guard.check()  # vor dem Lauf (Invariante §8.8)
         for download in prefetcher:
             ...

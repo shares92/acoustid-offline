@@ -212,7 +212,7 @@ async def _lookup(request: Request) -> Response:
 async def _submit(request: Request) -> Response:
     """Ein Submit von der Leitung bis zur fertigen Antwort.
 
-    Der Modus wird **vor** dem Parsen geprueft: ist ``submit.mode`` gleich
+    Der Modus wird **vor** dem Parsen geprueft: ist ``acoustid.submit.mode`` gleich
     ``off``, soll die Anfrage nicht erst hundert Fingerprints dekodieren, um
     dann abgelehnt zu werden. Das Antwortformat steht vorher fest, damit auch
     diese Absage im gewuenschten Format herausgeht.

@@ -18,12 +18,12 @@ Signals gerade geschlafen hat: er sieht beim Aufwachen die neue Nummer.
 zur Anfragezeit aus der Konfiguration liest:
 
 ============================  =============================================
-``submit.mode``               sofort — inklusive Neubau des
-``submit.upstream_app_key``   Upstream-Weiterleiters (er entsteht sonst nur
+``acoustid.submit.mode``               sofort — inklusive Neubau des
+``acoustid.submit.upstream_app_key``   Upstream-Weiterleiters (er entsteht sonst nur
                               beim Start und waere im Modus-Wechsel
                               ``local`` -> ``local+upstream`` gar nicht da)
 ``mb.keep_submitted_mbid``    sofort (wird je Anfrage gelesen)
-``index.query_hashes``        **nicht** — eine Aenderung verlangt einen
+``acoustid.index.query_hashes``        **nicht** — eine Aenderung verlangt einen
                               Index-Neuaufbau (§6); der laufende Wert
                               bleibt, damit Suche und Bestand
                               zusammenpassen
@@ -184,7 +184,7 @@ class ConfigReloader:
                 "config_path": str(self.config_path),
                 "reload_generation": generation,
                 "reload_generation_previous": previous,
-                "submit_mode": self.service.config.submit.mode.value,
+                "submit_mode": self.service.config.acoustid.submit.mode.value,
             },
         )
         return True
@@ -215,26 +215,37 @@ class ConfigReloader:
         config = self._keep_startup_values(config, running)
 
         upstream_changed = (
-            config.submit.mode is not running.submit.mode
-            or config.submit.upstream_app_key.get_secret_value()
-            != running.submit.upstream_app_key.get_secret_value()
+            config.acoustid.submit.mode is not running.acoustid.submit.mode
+            or config.acoustid.submit.upstream_app_key.get_secret_value()
+            != running.acoustid.submit.upstream_app_key.get_secret_value()
         )
         self.service.config = config
         if upstream_changed:
             self._rebuild_upstream(config)
 
     def _keep_startup_values(self, config: Config, running: Config) -> Config:
-        """Setzt die Werte zurueck, die nur ein Neustart aendern kann."""
+        """Setzt die Werte zurueck, die nur ein Neustart aendern kann.
+
+        **`model_copy(update=…)` validiert nicht** — die Schluessel muessen
+        exakt auf die Felder passen, auf denen sie angewendet werden. Seit
+        M2 liegt `index` unter `acoustid`; ein `overrides["index"]` auf der
+        obersten Ebene liefe deshalb ins Leere, ohne dass irgendetwas
+        auffiele, und der Schutz unten waere lautlos weg.
+        """
         overrides: dict[str, object] = {}
-        if config.index.query_hashes != running.index.query_hashes:
+        if config.acoustid.index.query_hashes != running.acoustid.index.query_hashes:
             _LOG.warning(
-                "index.query_hashes wirkt erst nach Index-Neuaufbau und Neustart",
+                "acoustid.index.query_hashes wirkt erst nach Index-Neuaufbau und Neustart",
                 extra={
-                    "query_hashes_running": running.index.query_hashes,
-                    "query_hashes_file": config.index.query_hashes,
+                    "query_hashes_running": running.acoustid.index.query_hashes,
+                    "query_hashes_file": config.acoustid.index.query_hashes,
                 },
             )
-            overrides["index"] = running.index
+            # Nur `index` zuruecksetzen — `acoustid.submit` aus derselben
+            # Datei soll sehr wohl wirken.
+            overrides["acoustid"] = config.acoustid.model_copy(
+                update={"index": running.acoustid.index}
+            )
         if config.mb.dsn.get_secret_value() != running.mb.dsn.get_secret_value():
             _LOG.warning(
                 "mb.dsn wirkt erst nach einem Neustart des API-Dienstes",
@@ -246,7 +257,7 @@ class ConfigReloader:
     def _rebuild_upstream(self, config: Config) -> None:
         """Baut den Upstream-Weiterleiter neu — der einzige Neubau hier.
 
-        Er ist an ``submit.mode`` und ``submit.upstream_app_key`` gebunden
+        Er ist an ``acoustid.submit.mode`` und ``acoustid.submit.upstream_app_key`` gebunden
         und existiert ausserhalb von ``local+upstream`` gar nicht
         (:meth:`acoustid_api.upstream.UpstreamForwarder.from_config`). Ohne
         Neubau bliebe ein Umschalten auf ``local+upstream`` wirkungslos.
@@ -259,5 +270,5 @@ class ConfigReloader:
             previous.close()
         _LOG.info(
             "Upstream-Weiterleiter neu gebaut",
-            extra={"submit_mode": config.submit.mode.value},
+            extra={"submit_mode": config.acoustid.submit.mode.value},
         )

@@ -3,7 +3,7 @@
 Der Endpunkt nimmt entgegen, was ein Tagging-Client ueber eine Datei weiss:
 Fingerprint, Laenge und eine Zuordnung (MusicBrainz-Recording, PUID,
 Fremd-ID oder schlicht Textmetadaten). Was daraus wird, entscheidet
-``submit.mode`` (ARCHITECTURE §6):
+``acoustid.submit.mode`` (ARCHITECTURE §6):
 
 ======================  ====================================================
 ``off``                 Der Endpunkt nimmt nichts an: Fehler 12
@@ -100,9 +100,9 @@ def check_mode(config: Config) -> None:
     erst hundert Fingerprints dekodieren, um dann abgelehnt zu werden.
 
     Raises:
-        NotAllowedError: ``submit.mode`` ist ``off`` (Fehler 12 / HTTP 400).
+        NotAllowedError: ``acoustid.submit.mode`` ist ``off`` (Fehler 12 / HTTP 400).
     """
-    if config.submit.mode is SubmitMode.OFF:
+    if config.acoustid.submit.mode is SubmitMode.OFF:
         raise NotAllowedError()
 
 
@@ -173,7 +173,7 @@ def index_pending(
     empty = 0
     for item in pending:
         handled.append(item.local_track_id)
-        query = extract_query(item.hashes, max_hashes=service.config.index.query_hashes)
+        query = extract_query(item.hashes, max_hashes=service.config.acoustid.index.query_hashes)
         if not query:
             # Nur Stille: es gibt nichts zu indexieren. Die Einreichung bleibt
             # trotzdem nicht ewig im Arbeitsvorrat liegen (wie beim Importer).

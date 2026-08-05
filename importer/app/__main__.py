@@ -130,7 +130,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--min-free-gb",
         type=int,
         metavar="N",
-        help="ueberschreibt update.min_free_gb aus der config.yaml (0 = Guard aus)",
+        help="ueberschreibt disk.min_free_gb aus der config.yaml (0 = Guard aus)",
     )
     parser.add_argument(
         "--guard-every-files",

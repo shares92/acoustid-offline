@@ -1,4 +1,4 @@
-"""Laufzeit-Konfiguration von acoustid-offline (ARCHITECTURE §6).
+"""Laufzeit-Konfiguration von musicmeta-offline (ARCHITECTURE §6).
 
 Enthaelt das vollstaendige Schema der `config.yaml` (Cache-Volume des
 Waechters, editierbar ueber die Admin-UI) sowie das verlustfreie Laden und
@@ -7,18 +7,36 @@ atomare Schreiben der Datei.
 Grundregeln (aus ARCHITECTURE §6 und den DECISIONS vom 2026-07-25):
 
 * **Leerer String = "aus".** `notify.ntfy.url`, `notify.smtp.host`,
-  `backup.dir`, `mb.dsn` und `submit.upstream_app_key` sind per Default
-  leer; die zugehoerige Funktion ist damit abgeschaltet. Die Sektionen
-  bieten dafuer `enabled`/`configured`-Properties, damit der Aufrufer die
-  Regel nicht nachbauen muss.
+  `backup.dir`, `mb.dsn`, `discogs.token`, `tadb.api_key` und
+  `acoustid.submit.upstream_app_key` sind per Default leer; die zugehoerige
+  Funktion ist damit abgeschaltet. Die Sektionen bieten dafuer
+  `enabled`/`configured`-Properties, damit der Aufrufer die Regel nicht
+  nachbauen muss.
 * **Unbekannte Schluessel werden ignoriert** (mit Warnung im Log), damit
   ein Downgrade oder eine handgeschriebene Datei aus einer neueren Version
   den Start nicht verhindert.
-* **Secrets** (`submit.upstream_app_key`, `notify.smtp.pass`, `mb.dsn`)
-  sind `SecretStr`: in `repr()`, `str()` und Log-Ausgaben maskiert, im
-  Klartext nur ueber `get_secret_value()` bzw. beim Schreiben der Datei.
+* **Secrets** (`acoustid.submit.upstream_app_key`, `notify.smtp.pass`,
+  `mb.dsn`, `discogs.token`, `tadb.api_key`) sind `SecretStr`: in `repr()`,
+  `str()` und Log-Ausgaben maskiert, im Klartext nur ueber
+  `get_secret_value()` bzw. beim Schreiben der Datei.
 * **Bootstrap-Werte** (Pfade, Ports, DB-Zugaenge) stehen bewusst NICHT
   hier, sondern in den `MMO_`-Env-Variablen (siehe `shared.env`).
+
+**Schluessel-Umbenennung in M2 (Entscheid E9).** Mit der Scope-Erweiterung
+auf vier Quellen bekam der AcoustID-Teil einen eigenen Ast: aus `submit.*`
+wurde `acoustid.submit.*`, aus `update.time` wurde `acoustid.update.time`,
+aus `index.query_hashes` wurde `acoustid.index.query_hashes`, und der
+Plattenplatz-Guard wanderte quellenneutral von `update.min_free_gb` nach
+`disk.min_free_gb` (Default 50 -> 100).
+
+Ohne Uebergang waere das die gefaehrlichste Aenderung des ganzen Umbaus
+gewesen — **stille Config-Amnesie** (Risiko R7): unbekannte Schluessel
+erzeugen hier nur eine Warnung, ein altes `submit.mode: off` waere also
+kommentarlos auf den Default `local` zurueckgefallen und die Instanz haette
+angefangen, Einreichungen anzunehmen, die der Betreiber abgeschaltet hatte.
+Deshalb liest :func:`migrate_legacy_keys` die alten Pfade fuer **eine
+Release-Runde** weiter (der neue Pfad gewinnt), und der Waechter schreibt
+die Datei beim Start einmalig auf das neue Schema um.
 """
 
 from __future__ import annotations
@@ -28,9 +46,10 @@ import os
 import re
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Final, Self
 
 import yaml
 from pydantic import (
@@ -48,15 +67,25 @@ from pydantic.fields import FieldInfo
 from shared.models import AuthMode, SubmitMode
 
 __all__ = [
+    "LEGACY_KEYS",
+    "AcoustidConfig",
+    "AcoustidUpdateConfig",
     "AuthConfig",
     "BackupConfig",
+    "CaaConfig",
+    "CaaCrawlConfig",
     "CacheConfig",
     "Config",
     "ConfigError",
     "ConfigFileError",
     "ConfigValidationError",
+    "CoversConfig",
+    "DiscogsConfig",
+    "DiscogsUpdateConfig",
+    "DiskConfig",
     "IdleConfig",
     "IndexConfig",
+    "LegacyKey",
     "MbConfig",
     "MetricsConfig",
     "NotifyConfig",
@@ -64,10 +93,12 @@ __all__ = [
     "RatelimitConfig",
     "SmtpConfig",
     "SubmitConfig",
-    "UpdateConfig",
+    "TadbConfig",
     "WakeConfig",
     "config_to_dict",
     "load_config",
+    "migrate_legacy_keys",
+    "read_legacy_keys",
     "save_config",
 ]
 
@@ -77,10 +108,11 @@ _LOG = logging.getLogger(__name__)
 # Schreiben durch die Admin-UI nicht (yaml.safe_dump kennt keine Kommentare) —
 # die Werte selbst bleiben verlustfrei.
 _FILE_HEADER = (
-    "# config.yaml — Laufzeit-Konfiguration von acoustid-offline (ARCHITECTURE §6).\n"
+    "# config.yaml — Laufzeit-Konfiguration von musicmeta-offline (ARCHITECTURE §6).\n"
     "# Von der Admin-UI geschrieben; handgeschriebene Kommentare gehen dabei verloren.\n"
     "# Unbekannte Schluessel werden beim Laden mit einer Warnung ignoriert.\n"
-    "# Leerer Wert bedeutet 'aus' (ntfy, smtp, backup.dir, mb.dsn, upstream_app_key).\n"
+    "# Leerer Wert bedeutet 'aus' (ntfy, smtp, backup.dir, mb.dsn, discogs.token,\n"
+    "# tadb.api_key, acoustid.submit.upstream_app_key).\n"
 )
 
 # Dateirechte der geschriebenen config.yaml: sie enthaelt Secrets im Klartext
@@ -130,7 +162,7 @@ def _validate_url(value: str) -> str:
     return value
 
 
-#: Uhrzeit als `HH:MM` in lokaler Zeit (`update.time`, `backup.time`).
+#: Uhrzeit als `HH:MM` in lokaler Zeit (`acoustid.update.time`, `backup.time`).
 TimeOfDay = Annotated[str, BeforeValidator(_coerce_hhmm), AfterValidator(_validate_hhmm)]
 
 #: Ganzzahl >= 1 — fuer Zeitfenster, Groessen und Limits, bei denen 0 keinen
@@ -173,7 +205,7 @@ class AuthConfig(_Section):
 
 
 class SubmitConfig(_Section):
-    """`submit.*` — Verhalten von `/v2/submit` (§7)."""
+    """`acoustid.submit.*` — Verhalten von `/v2/submit` (v2 §7)."""
 
     mode: SubmitMode = SubmitMode.LOCAL
     #: Eigener Application-Key fuer api.acoustid.org; leer = keiner.
@@ -187,7 +219,8 @@ class SubmitConfig(_Section):
     def _upstream_needs_key(self) -> Self:
         if self.upstream_enabled and not self.upstream_app_key.get_secret_value():
             raise ValueError(
-                "submit.mode 'local+upstream' erfordert einen submit.upstream_app_key "
+                "acoustid.submit.mode 'local+upstream' erfordert einen "
+                "acoustid.submit.upstream_app_key "
                 "(eigener Application-Key von acoustid.org)"
             )
         return self
@@ -205,12 +238,29 @@ class IdleConfig(_Section):
     timeout_min: PositiveInt = 15
 
 
-class UpdateConfig(_Section):
-    """`update.*` — taeglicher Delta-Import (§8.8)."""
+class AcoustidUpdateConfig(_Section):
+    """`acoustid.update.*` — taeglicher Delta-Import (§8.8).
+
+    Der Plattenplatz-Guard sass bis M2 daneben (`update.min_free_gb`). Er
+    gehoert nicht hierher: gemessen wird ein Dateisystem, nicht eine
+    Quelle — und ab M3 schreiben Discogs-Dumps und CAA-Cover auf dieselben
+    Mounts. Er steht jetzt in :class:`DiskConfig` (K6/E11).
+    """
 
     time: TimeOfDay = "04:00"
-    #: Plattenplatz-Guard; 0 = kein Mindestbestand gefordert.
-    min_free_gb: NonNegativeInt = 50
+
+
+class DiskConfig(_Section):
+    """`disk.*` — Plattenplatz-Guard vor jedem Import-/Crawl-Segment (E11).
+
+    Ein Grenzwert, aber geprueft gegen **jeden** tatsaechlichen
+    Schreib-/Staging-Pfad: die Mounts aus v2 §3 sind mehrere
+    Dateisysteme, und ein freies `/import` sagt nichts ueber `/data/db`.
+    """
+
+    #: Default 50 -> 100 GB (v2 §16): die Bestaende wachsen von einem
+    #: AcoustID-Spiegel auf vier Quellen.
+    min_free_gb: NonNegativeInt = 100
 
 
 class CacheConfig(_Section):
@@ -288,6 +338,10 @@ class BackupConfig(_Section):
 
     dir: str = ""
     time: TimeOfDay = "04:45"
+    #: Cover mitsichern (v2 §6.12). Default aus, weil die Bilder aus den
+    #: Quellen rekonstruierbar sind — anders als `local_submission`, die es
+    #: nirgends sonst gibt. Ein Voll-Spiegel waere sonst 0,5-1,5 TB Backup.
+    include_covers: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -321,7 +375,7 @@ class MbConfig(_Section):
 
 
 class IndexConfig(_Section):
-    """`index.*` — Projekt-Ergaenzung (DECISIONS 2026-07-25).
+    """`acoustid.index.*` — Projekt-Ergaenzung (DECISIONS 2026-07-25).
 
     `query_hashes` bestimmt, wie viele Query-Hashes je Fingerprint in den
     acoustid-index gehen (RAM-abhaengig). Eine Aenderung erfordert einen
@@ -331,24 +385,238 @@ class IndexConfig(_Section):
     query_hashes: PositiveInt = 120
 
 
+class AcoustidConfig(_Section):
+    """`acoustid.*` — alles, was nur den Fingerprint-Spiegel betrifft.
+
+    Der eigene Ast ist die Folge der Scope-Erweiterung: neben AcoustID
+    stehen ab M3 `discogs.*`, `caa.*` und `tadb.*` mit denselben
+    Fragestellungen (wann aktualisieren, welcher Zugang, welche Drossel).
+    Ein Top-Level-`submit`/`update` waere dort nicht mehr eindeutig.
+    """
+
+    submit: SubmitConfig = Field(default_factory=SubmitConfig)
+    update: AcoustidUpdateConfig = Field(default_factory=AcoustidUpdateConfig)
+    index: IndexConfig = Field(default_factory=IndexConfig)
+
+
+# --- Quellen der Scope-Erweiterung (Platzhalter, v2 §7) --------------------
+#
+# Die Schluessel stehen ab M2 im Schema, damit `config.yaml`, Admin-UI und
+# `.env.example` vollstaendig sind und ein Betreiber seine Zugaenge schon
+# hinterlegen kann. Die auswertende Fachlogik kommt in M3-M6; bis dahin
+# sind es reine Traegerwerte — alle so vorbelegt, dass die Quelle **aus**
+# ist (v2 §2 „Repo-Defaults sind konservativ").
+
+
+class DiscogsUpdateConfig(_Section):
+    """`discogs.update.*` — taeglicher Check auf einen neuen Monats-Dump."""
+
+    check_time: TimeOfDay = "05:00"
+
+
+class DiscogsConfig(_Section):
+    """`discogs.*` — Dump-Spiegel + Bilder-API (M3/M4)."""
+
+    update: DiscogsUpdateConfig = Field(default_factory=DiscogsUpdateConfig)
+    #: Token der Discogs-API; leer = Discogs-Bildquelle aus.
+    token: SecretStr = SecretStr("")
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.token.get_secret_value())
+
+
+class TadbConfig(_Section):
+    """`tadb.*` — TheAudioDB-Proxy-Cache (M6); leerer Key = Quelle aus."""
+
+    api_key: SecretStr = SecretStr("")
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.api_key.get_secret_value())
+
+
+class CaaCrawlConfig(_Section):
+    """`caa.crawl.*` — Voll-Spiegel-Crawler des Cover Art Archive (M5).
+
+    Default **aus**: ein Erst-Crawl laeuft Wochen und haelt das Array in
+    dieser Zeit wach (v2 §4). Das ist eine Betreiber-Entscheidung, keine
+    Repo-Vorgabe.
+    """
+
+    enabled: bool = False
+    #: Drossel; gilt auch fuer Lazy-Abrufe derselben Queue (v2 §10.8).
+    rate_per_s: PositiveInt = 2
+
+
+class CaaConfig(_Section):
+    """`caa.*` — Cover Art Archive."""
+
+    crawl: CaaCrawlConfig = Field(default_factory=CaaCrawlConfig)
+
+
+class CoversConfig(_Section):
+    """`covers.*` — quellenuebergreifende Cover-Politik (M4)."""
+
+    #: Wiederholung, wenn keine der drei Quellen ein Cover hatte.
+    negative_retry_days: PositiveInt = 30
+
+
 class Config(_Section):
     """Vollstaendige Laufzeit-Konfiguration (ARCHITECTURE §6).
 
     `Config()` liefert exakt die dort dokumentierten Defaults.
+
+    Alte Schluesselpfade (`submit.*`, `update.*`, `index.*`) werden beim
+    Validieren still auf das neue Schema gehoben — siehe
+    :func:`migrate_legacy_keys`. Die *Meldung* darueber macht
+    :func:`load_config`, damit sie genau einmal je Datei erscheint und
+    nicht bei jedem `model_validate`.
     """
 
     auth: AuthConfig = Field(default_factory=AuthConfig)
-    submit: SubmitConfig = Field(default_factory=SubmitConfig)
+    acoustid: AcoustidConfig = Field(default_factory=AcoustidConfig)
+    discogs: DiscogsConfig = Field(default_factory=DiscogsConfig)
+    caa: CaaConfig = Field(default_factory=CaaConfig)
+    covers: CoversConfig = Field(default_factory=CoversConfig)
+    tadb: TadbConfig = Field(default_factory=TadbConfig)
     wake: WakeConfig = Field(default_factory=WakeConfig)
     idle: IdleConfig = Field(default_factory=IdleConfig)
-    update: UpdateConfig = Field(default_factory=UpdateConfig)
+    disk: DiskConfig = Field(default_factory=DiskConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)
     ratelimit: RatelimitConfig = Field(default_factory=RatelimitConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     backup: BackupConfig = Field(default_factory=BackupConfig)
     mb: MbConfig = Field(default_factory=MbConfig)
-    index: IndexConfig = Field(default_factory=IndexConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_keys(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        migrated, _ = migrate_legacy_keys(data)
+        return migrated
+
+
+# --- Schluessel-Umbenennung M2 (E9) ----------------------------------------
+#
+# **Warum eine eigene Umschreibe-Schicht und nicht `AliasChoices`.** Ein
+# pydantic-Alias loest immer innerhalb *einer* Mapping-Ebene auf: er kann
+# einem Feld mehrere Namen geben, aber keinen Wert eine Ebene tiefer holen.
+# Alle vier Umbenennungen aus E9 sind jedoch genau das — Sektionswechsel bei
+# gleichbleibendem Blattnamen (`submit.mode` -> `acoustid.submit.mode`,
+# `update.min_free_gb` -> `disk.min_free_gb`). `update` zerfaellt dabei
+# sogar auf zwei Ziele. Die Zuordnung steht deshalb hier als Tabelle: sie
+# ist vollstaendig lesbar, testbar und faellt in einer Release-Runde
+# ersatzlos weg, ohne dass am Schema selbst etwas zurueckzubauen waere.
+
+
+#: Alter Blattpfad -> neuer Blattpfad (v2 §16-Tabelle, E9/K6/K7/E16).
+LEGACY_KEYS: Final[Mapping[str, str]] = {
+    "submit.mode": "acoustid.submit.mode",
+    "submit.upstream_app_key": "acoustid.submit.upstream_app_key",
+    "update.time": "acoustid.update.time",
+    "update.min_free_gb": "disk.min_free_gb",
+    "index.query_hashes": "acoustid.index.query_hashes",
+}
+
+#: Sektionen, die nach der Umschrift leer zurueckbleiben duerfen und dann
+#: verschwinden — sonst meldete `_collect_unknown_keys` sie als unbekannt.
+_LEGACY_SECTIONS: Final = ("submit", "update", "index")
+
+
+@dataclass(frozen=True, slots=True)
+class LegacyKey:
+    """Ein in der Datei gefundener Alt-Schluessel."""
+
+    #: Punktnotation, wie er in der Datei steht (z. B. `acoustid.submit.mode`).
+    old: str
+    #: Punktnotation des neuen Pfades (z. B. `acoustid.submit.mode`).
+    new: str
+    #: `True`, wenn der neue Pfad ebenfalls gesetzt war — dann gewinnt der
+    #: neue und der alte Wert wurde verworfen.
+    superseded: bool
+
+
+def _deep_copy_mapping(data: Mapping[Any, Any]) -> dict[str, Any]:
+    """Verschachtelte Mappings als eigene dicts; der Aufrufer behaelt seins."""
+    return {
+        str(key): _deep_copy_mapping(value) if isinstance(value, Mapping) else value
+        for key, value in data.items()
+    }
+
+
+def _pop_path(data: dict[str, Any], path: str) -> tuple[Any, bool]:
+    """Entfernt `path` aus `data` und liefert `(wert, war_vorhanden)`."""
+    head, _, rest = path.partition(".")
+    if head not in data:
+        return None, False
+    if not rest:
+        return data.pop(head), True
+    branch = data[head]
+    if not isinstance(branch, dict):
+        # z. B. `submit: "local"` — kein Mapping, also kein Blattpfad.
+        # Der Wert bleibt stehen und wird als unbekannt bzw. ungueltig
+        # gemeldet; stilles Wegwerfen waere hier das Schlimmste.
+        return None, False
+    return _pop_path(branch, rest)
+
+
+def _has_path(data: Mapping[str, Any], path: str) -> bool:
+    head, _, rest = path.partition(".")
+    if head not in data:
+        return False
+    if not rest:
+        return True
+    branch = data[head]
+    return isinstance(branch, Mapping) and _has_path(branch, rest)
+
+
+def _set_path(data: dict[str, Any], path: str, value: Any) -> None:
+    head, _, rest = path.partition(".")
+    if not rest:
+        data[head] = value
+        return
+    branch = data.get(head)
+    if not isinstance(branch, dict):
+        branch = {}
+        data[head] = branch
+    _set_path(branch, rest, value)
+
+
+def migrate_legacy_keys(data: Mapping[Any, Any]) -> tuple[dict[str, Any], list[LegacyKey]]:
+    """Hebt Alt-Schluessel auf das M2-Schema (E9).
+
+    Rein und ohne Log-Ausgabe: dieselbe Funktion laeuft im Validator von
+    :class:`Config` (bei jedem `model_validate`) und in
+    :func:`load_config` (genau einmal je Datei, dort mit Meldung).
+
+    Der **neue Pfad gewinnt**. Stuenden beide in der Datei, waere jede
+    andere Regel eine Falle: wer den neuen Schluessel eintraegt und den
+    alten stehen laesst, meint den neuen.
+
+    Returns:
+        Die umgeschriebene Kopie und die Liste der gefundenen Alt-Pfade.
+    """
+    result = _deep_copy_mapping(data)
+    found: list[LegacyKey] = []
+
+    for old_path, new_path in LEGACY_KEYS.items():
+        value, present = _pop_path(result, old_path)
+        if not present:
+            continue
+        superseded = _has_path(result, new_path)
+        if not superseded:
+            _set_path(result, new_path, value)
+        found.append(LegacyKey(old=old_path, new=new_path, superseded=superseded))
+
+    for section in _LEGACY_SECTIONS:
+        branch = result.get(section)
+        if isinstance(branch, dict) and not branch:
+            del result[section]
+
+    return result, found
 
 
 # --- Fehler ----------------------------------------------------------------
@@ -455,6 +723,29 @@ def config_to_dict(config: Config, *, reveal_secrets: bool = False) -> dict[str,
 # --- Laden & Schreiben -----------------------------------------------------
 
 
+def read_legacy_keys(path: str | os.PathLike[str]) -> list[LegacyKey]:
+    """Alte Schluesselpfade, die in dieser Datei noch stehen (E9).
+
+    Grundlage des einmaligen Umschreibers beim Waechter-Start
+    (:mod:`acoustid_watchdog.config_store`): der muss wissen, ob die Datei
+    ueberhaupt umzuschreiben ist — sonst schriebe jeder Start die
+    Konfiguration neu und nutzte die Kommentare des Betreibers ab.
+
+    Eine unlesbare oder kaputte Datei liefert eine leere Liste; die
+    Fehlermeldung dazu gehoert :func:`load_config`, das gleich danach
+    laeuft.
+    """
+    try:
+        raw_text = Path(path).read_text(encoding="utf-8")
+        data = yaml.safe_load(raw_text)
+    except OSError, yaml.YAMLError:
+        return []
+    if not isinstance(data, Mapping):
+        return []
+    _, found = migrate_legacy_keys(data)
+    return found
+
+
 def load_config(
     path: str | os.PathLike[str],
     *,
@@ -464,7 +755,8 @@ def load_config(
 
     Fehlt die Datei, entsteht eine vollstaendige Default-Config; mit
     `create_if_missing=True` wird sie zusaetzlich angelegt. Unbekannte
-    Schluessel werden mit Warnung ignoriert.
+    Schluessel werden mit Warnung ignoriert, alte Schluesselpfade aus der
+    Zeit vor M2 mit Warnung **uebernommen** (E9).
 
     Raises:
         ConfigFileError: Datei unlesbar oder kein YAML-Mapping.
@@ -497,6 +789,32 @@ def load_config(
         raise ConfigFileError(
             f"{config_path}: erwartet wird ein YAML-Mapping, gefunden {type(data).__name__}"
         )
+
+    # Erst die Umschrift, dann die Unbekannt-Meldung: sonst waeren die
+    # Alt-Pfade genau die „unbekannten Schluessel", vor denen gewarnt wird —
+    # und die Warnung sagte das Gegenteil dessen, was passiert.
+    data, legacy = migrate_legacy_keys(data)
+    for entry in legacy:
+        if entry.superseded:
+            _LOG.warning(
+                "Veralteter Konfigurationsschluessel wird ignoriert, "
+                "der neue Schluessel ist gesetzt",
+                extra={
+                    "config_path": str(config_path),
+                    "config_key": entry.old,
+                    "config_key_replacement": entry.new,
+                },
+            )
+        else:
+            _LOG.warning(
+                "Veralteter Konfigurationsschluessel wird noch gelesen — "
+                "der Waechter schreibt die Datei beim naechsten Start um",
+                extra={
+                    "config_path": str(config_path),
+                    "config_key": entry.old,
+                    "config_key_replacement": entry.new,
+                },
+            )
 
     for unknown in _collect_unknown_keys(data, Config):
         _LOG.warning(

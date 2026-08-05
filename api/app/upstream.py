@@ -339,7 +339,7 @@ class UpstreamForwarder:
     ) -> None:
         """
         Args:
-            app_key: Eigener Application-Key (``submit.upstream_app_key``).
+            app_key: Eigener Application-Key (``acoustid.submit.upstream_app_key``).
             url: Zieladresse; **muss** ``https://`` sein. In Tests zeigt sie
                 auf einen ``httpx.MockTransport``.
             client: Vorhandener ``httpx.Client``. Wird dann **nicht** von
@@ -356,7 +356,7 @@ class UpstreamForwarder:
         secret = app_key.get_secret_value() if isinstance(app_key, SecretStr) else app_key
         if not secret:
             raise ValueError(
-                "submit.upstream_app_key fehlt — ohne eigenen Application-Key "
+                "acoustid.submit.upstream_app_key fehlt — ohne eigenen Application-Key "
                 "nimmt api.acoustid.org nichts an"
             )
         if not url.lower().startswith("https://"):
@@ -384,9 +384,9 @@ class UpstreamForwarder:
             ``None`` in den Modi ``off`` und ``local`` — dann gibt es nichts
             weiterzuleiten und auch keinen HTTP-Pool.
         """
-        if not config.submit.upstream_enabled:
+        if not config.acoustid.submit.upstream_enabled:
             return None
-        return cls(config.submit.upstream_app_key, **kwargs)
+        return cls(config.acoustid.submit.upstream_app_key, **kwargs)
 
     # --- Lebenszyklus ------------------------------------------------------
 
@@ -780,12 +780,12 @@ def _forwarder_of(service: ApiService) -> UpstreamForwarder | None:
     Dienst muss einen Weiterleiter haben (im Modus ``off``/``local`` legt er
     keinen an).
     """
-    if not service.config.submit.upstream_enabled:
+    if not service.config.acoustid.submit.upstream_enabled:
         return None
     forwarder = getattr(service, "upstream", None)
     if forwarder is None:
         _LOG.warning(
-            "submit.mode ist 'local+upstream', aber es gibt keinen Weiterleiter — "
+            "acoustid.submit.mode ist 'local+upstream', aber es gibt keinen Weiterleiter — "
             "Einreichungen bleiben in der Warteschlange"
         )
     return forwarder

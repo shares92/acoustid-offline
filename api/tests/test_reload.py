@@ -86,12 +86,12 @@ def test_new_generation_triggers_a_reload(config_path: Path, signal: ReloadSigna
     reloader.prime()
 
     changed = Config()
-    changed.submit.mode = SubmitMode.OFF
+    changed.acoustid.submit.mode = SubmitMode.OFF
     _write(config_path, changed, signal, "config_saved")
 
     assert reloader.check() is True
     assert reloader.reloads == 1
-    assert reloader.service.config.submit.mode is SubmitMode.OFF
+    assert reloader.service.config.acoustid.submit.mode is SubmitMode.OFF
     # Zweiter Blick auf dieselbe Generation laedt nicht noch einmal.
     assert reloader.check() is False
 
@@ -106,7 +106,7 @@ def test_restarted_counter_is_treated_as_a_change(config_path: Path, signal: Rel
 
     signal.path.unlink()
     changed = Config()
-    changed.submit.mode = SubmitMode.OFF
+    changed.acoustid.submit.mode = SubmitMode.OFF
     _write(config_path, changed, signal, "neu")
 
     assert reloader.check() is True
@@ -148,12 +148,12 @@ def test_submit_mode_and_upstream_are_applied(config_path: Path, signal: ReloadS
     assert reloader.service.upstream is None
 
     changed = Config()
-    changed.submit.upstream_app_key = "eigener-app-key"  # type: ignore[assignment]
-    changed.submit.mode = SubmitMode.LOCAL_UPSTREAM
+    changed.acoustid.submit.upstream_app_key = "eigener-app-key"  # type: ignore[assignment]
+    changed.acoustid.submit.mode = SubmitMode.LOCAL_UPSTREAM
     _write(config_path, changed, signal, "config_saved")
 
     assert reloader.check() is True
-    assert reloader.service.config.submit.mode is SubmitMode.LOCAL_UPSTREAM
+    assert reloader.service.config.acoustid.submit.mode is SubmitMode.LOCAL_UPSTREAM
     assert reloader.service.upstream is not None
     reloader.service.upstream.close()
 
@@ -162,8 +162,8 @@ def test_switching_upstream_off_drops_the_forwarder(
     config_path: Path, signal: ReloadSignal
 ) -> None:
     running = Config()
-    running.submit.upstream_app_key = "eigener-app-key"  # type: ignore[assignment]
-    running.submit.mode = SubmitMode.LOCAL_UPSTREAM
+    running.acoustid.submit.upstream_app_key = "eigener-app-key"  # type: ignore[assignment]
+    running.acoustid.submit.mode = SubmitMode.LOCAL_UPSTREAM
     save_config(running, config_path)
     reloader = _reloader(config_path, running, with_upstream=True)
     reloader.prime()
@@ -186,11 +186,11 @@ def test_query_hashes_change_is_refused(config_path: Path, signal: ReloadSignal)
     reloader.prime()
 
     changed = Config()
-    changed.index.query_hashes = 80
+    changed.acoustid.index.query_hashes = 80
     _write(config_path, changed, signal, "config_saved")
 
     assert reloader.check() is True
-    assert reloader.service.config.index.query_hashes == 120
+    assert reloader.service.config.acoustid.index.query_hashes == 120
 
 
 def test_mb_dsn_change_is_refused(config_path: Path, signal: ReloadSignal) -> None:

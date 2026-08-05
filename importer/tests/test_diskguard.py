@@ -127,7 +127,7 @@ def test_too_little_space_names_the_numbers_and_the_config_key(tmp_path: Path) -
     message = str(caught.value)
     assert "3.5 GiB frei" in message
     assert "50.0 GiB" in message
-    assert "update.min_free_gb" in message
+    assert "disk.min_free_gb" in message
     assert "resumierbar" in message
     assert caught.value.min_free_bytes == 50 * BYTES_PER_GB
     # Ein Guard-Abbruch ist ein Importer-Fehler wie jeder andere und kann

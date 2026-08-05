@@ -40,7 +40,7 @@ class AuthMode(StrEnum):
 
 
 class SubmitMode(StrEnum):
-    """Werte von `submit.mode` (ARCHITECTURE §6).
+    """Werte von `acoustid.submit.mode` (ARCHITECTURE §6).
 
     `off`            — `/v2/submit` nimmt nichts an.
     `local`          — Einreichungen landen nur im eigenen Bestand.

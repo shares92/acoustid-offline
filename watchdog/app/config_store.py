@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Self
 
 from acoustid_watchdog.reload import ReloadMarker, ReloadSignal
-from shared.config import Config, load_config, save_config
+from shared.config import Config, LegacyKey, load_config, read_legacy_keys, save_config
 
 __all__ = ["ConfigStore"]
 
@@ -80,7 +80,10 @@ class ConfigStore:
             return self._config
 
     def _load(self) -> Config:
+        legacy = read_legacy_keys(self.path)
         config = load_config(self.path, create_if_missing=True)
+        if legacy:
+            self._rewrite_legacy_file(config, legacy)
         _LOG.info(
             "Laufzeit-Konfiguration geladen",
             extra={
@@ -88,12 +91,44 @@ class ConfigStore:
                 # Nur Modi und Schalter, nie Werte mit Secret-Charakter
                 # (ARCHITECTURE §6).
                 "auth_mode": config.auth.mode.value,
-                "submit_mode": config.submit.mode.value,
+                "submit_mode": config.acoustid.submit.mode.value,
                 "cache_enabled": config.cache.enabled,
                 "mb_configured": config.mb.configured,
             },
         )
         return config
+
+    def _rewrite_legacy_file(self, config: Config, legacy: list[LegacyKey]) -> None:
+        """Einmaliger Umschreiber auf das M2-Schema (E9).
+
+        Das Uebergangslesen allein genuegt nicht: es haelt eine Datei am
+        Leben, die bei jedem Start warnt und deren Schluessel nicht mehr zu
+        dem passen, was die Admin-UI anzeigt. Schlimmer noch, sie wuerde
+        beim naechsten Speichern **stillschweigend** in die neue Form
+        kippen — dann waere unklar, ob der Betreiber die Werte gesehen hat.
+        Also einmal, sichtbar und beim Start.
+
+        Der Waechter ist dafuer die richtige Stelle: er ist der einzige
+        Schreiber der Datei (Modul-Docstring). Ein Fehlschlag ist bewusst
+        **kein** Startabbruch — das Uebergangslesen traegt weiter, und ein
+        schreibgeschuetztes `/config` darf die Instanz nicht lahmlegen.
+        """
+        try:
+            save_config(config, self.path)
+        except OSError as exc:
+            _LOG.warning(
+                "Konfiguration konnte nicht auf das neue Schema umgeschrieben werden — "
+                "die alten Schluessel werden weiter gelesen",
+                extra={"config_path": str(self.path), "error": str(exc)},
+            )
+            return
+        _LOG.info(
+            "Konfiguration auf das neue Schluesselschema umgeschrieben",
+            extra={
+                "config_path": str(self.path),
+                "config_keys_migrated": [entry.old for entry in legacy],
+            },
+        )
 
     def save(self, config: Config, *, reason: str = "config_saved") -> ReloadMarker:
         """Schreibt die Konfiguration und signalisiert den Reload.

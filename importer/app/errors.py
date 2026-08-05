@@ -91,7 +91,7 @@ class IndexFeedError(ImporterError):
 
 
 class DiskSpaceError(ImporterError):
-    """Der freie Plattenplatz unterschreitet ``update.min_free_gb`` (§8.8).
+    """Der freie Plattenplatz unterschreitet ``disk.min_free_gb`` (§8.8).
 
     Kein Fehler im Sinne von „kaputt", sondern der **kontrollierte Abbruch**:
     der Lauf hoert zwischen zwei Tagesdateien auf, ``import_state`` steht auf

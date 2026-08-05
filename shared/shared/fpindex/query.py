@@ -37,7 +37,7 @@ Wert), der Index kennt nur u32 und quittiert negative Zahlen mit HTTP 400
 ``IntegerOverflow``. Das C-Original rechnet auf ``int32`` und liefert
 entsprechend negative Zahlen — dieselben Bitmuster.
 
-``max_hashes`` kommt immer vom Aufrufer (Config ``index.query_hashes``,
+``max_hashes`` kommt immer vom Aufrufer (Config ``acoustid.index.query_hashes``,
 Default 120) — hier steht bewusst kein Default, damit Indexieren und Suchen
 nicht versehentlich mit verschiedenen Werten laufen. Im C-Original steht
 dafuer die feste Konstante ``ACOUSTID_QUERY_LENGTH`` (120), und zwar an
@@ -79,7 +79,7 @@ def extract_query(hashes: Iterable[int], *, max_hashes: int) -> list[int]:
             bzw. den JSONL-Deltas) ist der Normalfall und wird vorzeichenlos
             interpretiert.
         max_hashes: Obergrenze der zurueckgegebenen Hashes — der Wert aus
-            ``index.query_hashes``. Eine Aenderung erfordert einen
+            ``acoustid.index.query_hashes``. Eine Aenderung erfordert einen
             Index-Neuaufbau.
 
     Returns:
