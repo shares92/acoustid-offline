@@ -24,6 +24,7 @@ import pytest
 from watchdog_stubs import FakeSupervisor
 
 from acoustid_watchdog.jobs import (
+    INDEX_BUSY_FILENAME,
     JobCycle,
     JobManager,
     JobOutcome,
@@ -452,6 +453,70 @@ def test_a_stack_that_never_becomes_ready_fails_the_run(
     # Zwei Meldungen: der Weckvorgang meldet den Startfehler, der Zyklus
     # den gescheiterten Lauf.
     assert NotifyEvent.IMPORT_FAILED in {item.event for item in notifications}
+
+
+# --- Zurueckgestellte Submits (Betreiber-Entscheid 2026-08-05) --------------
+
+
+def test_the_import_holds_the_index_busy_marker(service: WatchdogService) -> None:
+    """Waehrend des Delta-Imports wird die Indexierung zurueckgestellt.
+
+    Sonst erhoehte ein Submit die Index-Version, und der Index-Feed des
+    Importers braeche an seinem ``expected_version``-Guard ab — der Lauf
+    endete als Fehler und kostete einen Tag Datenstand.
+    """
+    marker = service.settings.data_dir / INDEX_BUSY_FILENAME
+    seen: list[bool] = []
+
+    class WatchingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            seen.append(marker.exists())
+            return await super().run(command, report=report)
+
+    cycle, _runner = _cycle(service, WatchingRunner())
+    asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert seen[0] is True  # waehrend des Imports
+    assert marker.exists() is False  # danach weg
+
+
+def test_the_marker_is_removed_even_when_the_job_explodes(service: WatchdogService) -> None:
+    """Bliebe sie liegen, waeren eigene Einreichungen fuer immer unauffindbar."""
+    marker = service.settings.data_dir / INDEX_BUSY_FILENAME
+
+    class ExplodingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            raise RuntimeError("Runner kaputt")
+
+    cycle, _runner = _cycle(service, ExplodingRunner())
+    with pytest.raises(RuntimeError):
+        asyncio.run(cycle.run(RunKind.ACOUSTID_DELTA))
+
+    assert marker.exists() is False
+
+
+def test_only_the_import_sets_the_marker(service: WatchdogService, tmp_path: Path) -> None:
+    """Ein Backup schreibt nicht in den Suchindex — es stoert dort niemanden."""
+    _configure(service, backup=BackupConfig(dir=str(tmp_path / "backup")))
+    marker = service.settings.data_dir / INDEX_BUSY_FILENAME
+    seen: list[bool] = []
+
+    class WatchingRunner(FakeRunner):
+        async def run(self, command, *, report: Path) -> JobOutcome:
+            seen.append(marker.exists())
+            return await super().run(command, report=report)
+
+    cycle, _runner = _cycle(service, WatchingRunner())
+    asyncio.run(cycle.run(RunKind.BACKUP))
+
+    assert seen == [False]
+
+
+def test_both_sides_use_the_same_marker_name() -> None:
+    """Der Waechter setzt sie, der API-Dienst liest sie — ohne Paketabhaengigkeit."""
+    from acoustid_api.submit import INDEX_BUSY_FILENAME as API_SIDE
+
+    assert INDEX_BUSY_FILENAME == API_SIDE
 
 
 # --- Der Warteschlangenlauf danach ------------------------------------------

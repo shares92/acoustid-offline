@@ -36,6 +36,7 @@ nicht wartegebunden. Die HTTP-Schicht schiebt die Arbeit in den Threadpool
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import TracebackType
 from typing import Final, Self
 
@@ -48,9 +49,19 @@ from shared.env import EnvSettings
 from shared.fpindex import FpIndexClient
 from shared.mb import MbClient
 
-__all__ = ["DEFAULT_POOL_MAX_SIZE", "DEFAULT_POOL_MIN_SIZE", "ApiService"]
+__all__ = [
+    "DEFAULT_DATA_DIR",
+    "DEFAULT_POOL_MAX_SIZE",
+    "DEFAULT_POOL_MIN_SIZE",
+    "ApiService",
+]
 
 _LOG = logging.getLogger(__name__)
+
+#: Datenverzeichnis, wenn keines mitgegeben wird — derselbe Vorgabewert wie
+#: in :mod:`shared.env` (``MMO_DATA_DIR``). Er steht hier noch einmal, damit
+#: ein von Hand gebauter Dienst (Tests) nicht die ganze Umgebung braucht.
+DEFAULT_DATA_DIR: Final = Path("/config")
 
 #: Verbindungen, die immer bereitstehen.
 DEFAULT_POOL_MIN_SIZE: Final = 1
@@ -71,10 +82,18 @@ class ApiService:
         config: Config,
         mb: MbClient | None = None,
         upstream: UpstreamForwarder | None = None,
+        *,
+        data_dir: Path = DEFAULT_DATA_DIR,
     ) -> None:
         self.pool = pool
         self.index = index
         self.config = config
+        #: Der ``/config``-Mount (``MMO_DATA_DIR``). Der Dienst schreibt
+        #: dort nichts — er **liest** eine Marke: waehrend eines
+        #: Delta-Imports wird die Indexierung eigener Einreichungen
+        #: zurueckgestellt (M2.5, :data:`acoustid_api.submit.
+        #: INDEX_BUSY_FILENAME`).
+        self.data_dir = data_dir
         #: MusicBrainz-Spiegel; ``None`` heisst „nicht konfiguriert".
         self.mb = mb
         #: Upstream-Weiterleitung; ``None`` ausserhalb von ``local+upstream``.
@@ -115,7 +134,13 @@ class ApiService:
             kwargs={"autocommit": True},
             open=False,
         )
-        return cls(pool, FpIndexClient.from_env(settings), config, MbClient.from_config(config))
+        return cls(
+            pool,
+            FpIndexClient.from_env(settings),
+            config,
+            MbClient.from_config(config),
+            data_dir=settings.data_dir,
+        )
 
     def open(self, *, timeout: float = 30.0) -> None:
         """Oeffnet die Pools und prueft den MusicBrainz-Spiegel.

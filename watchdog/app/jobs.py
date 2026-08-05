@@ -47,7 +47,8 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -64,6 +65,7 @@ from acoustid_watchdog.runs import (
     finish_run,
     start_run,
 )
+from acoustid_watchdog.store import utc_now
 from acoustid_watchdog.wake import StackNotReadyError
 
 if TYPE_CHECKING:  # nur fuer die Typannotation — sonst waere es ein Importzyklus
@@ -71,6 +73,7 @@ if TYPE_CHECKING:  # nur fuer die Typannotation — sonst waere es ein Importzyk
 
 __all__ = [
     "EVENT_SOURCE",
+    "INDEX_BUSY_FILENAME",
     "JOB_WAKE_TIMEOUT_S",
     "REPORT_DIRNAME",
     "SIGTERM_GRACE_S",
@@ -109,6 +112,18 @@ SIGTERM_GRACE_S: Final = 900.0
 #: Uebergabe zwischen Subprozess und Waechter (und beim Debuggen der
 #: letzte Stand).
 REPORT_DIRNAME: Final = "jobs"
+
+#: Marke im Datenverzeichnis, mit der der Waechter einen laufenden
+#: Delta-Import anzeigt (Betreiber-Entscheid 2026-08-05). Der API-Dienst
+#: liest sie und **stellt die Indexierung eigener Einreichungen zurueck**:
+#: sonst erhoehte ein Submit die Index-Version, und der Index-Feed des
+#: Importers braeche an seinem ``expected_version``-Guard ab — der Lauf
+#: endete als Fehler und kostete einen Tag Datenstand.
+#:
+#: Der Name steht auch in :data:`acoustid_api.submit.INDEX_BUSY_FILENAME`;
+#: ein Test haelt beide aneinander. Bewusst kein Import: der Waechter
+#: haengt nicht vom API-Paket ab (er brauchte sonst psycopg).
+INDEX_BUSY_FILENAME: Final = "index-feed.busy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -447,7 +462,45 @@ class JobCycle:
             )
         except NotImplementedError as error:
             return JobOutcome(returncode=-1, start_error=str(error))
-        return await self._runner.run(command, report=report)
+        if kind is not RunKind.ACOUSTID_DELTA:
+            return await self._runner.run(command, report=report)
+        # Nur der Delta-Import schreibt in den Suchindex und braucht die
+        # Marke (Betreiber-Entscheid 2026-08-05). Ein Backup oder ein
+        # Warteschlangenlauf stoert dort niemanden.
+        with self._index_busy():
+            return await self._runner.run(command, report=report)
+
+    @contextmanager
+    def _index_busy(self) -> Iterator[None]:
+        """Setzt die Marke fuer die Dauer des Laufs — und raeumt sie **immer** weg.
+
+        Bliebe sie liegen, wuerde die Instanz eigene Einreichungen nie
+        wieder indexieren: sie waeren gespeichert, aber unauffindbar. Das
+        ``finally`` ist deshalb der eigentliche Punkt dieser Funktion; ein
+        Schreibfehler beim Setzen wird dagegen nur geloggt, denn er kostet
+        hoechstens einen Import (der naechste Zyklus wiederholt ihn).
+        """
+        marker = self._service.settings.data_dir / INDEX_BUSY_FILENAME
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(utc_now(), encoding="utf-8")
+        except OSError:
+            _LOG.warning(
+                "Marke fuer den laufenden Import nicht schreibbar — eine gleichzeitige "
+                "Einreichung kann den Index-Feed abbrechen lassen",
+                extra={"marker_path": str(marker)},
+            )
+        try:
+            yield
+        finally:
+            try:
+                marker.unlink(missing_ok=True)
+            except OSError:
+                _LOG.exception(
+                    "Marke fuer den laufenden Import liess sich nicht entfernen — "
+                    "eigene Einreichungen bleiben unindexiert",
+                    extra={"marker_path": str(marker)},
+                )
 
     async def _queue_send(self, reason: str) -> CycleResult:
         """Der Warteschlangenlauf nach dem Delta-Import (§8.9).

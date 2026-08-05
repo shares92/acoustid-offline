@@ -12,8 +12,10 @@ je nach Sammelreihenfolge im falschen Paket landen.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -191,8 +193,15 @@ class StubService:
         config: Config | None = None,
         index: StubIndex | None = None,
         upstream: Any = None,
+        data_dir: Path | None = None,
     ) -> None:
         self.matcher = matcher or StubMatcher()
+        #: Der ``/config``-Mount. Gelesen wird dort genau eine Marke: der
+        #: Waechter zeigt damit einen laufenden Delta-Import an, und die
+        #: Indexierung eigener Einreichungen wird solange zurueckgestellt
+        #: (M2.5, :data:`acoustid_api.submit.INDEX_BUSY_FILENAME`). Ohne
+        #: Angabe ein Pfad, unter dem es sie garantiert nicht gibt.
+        self.data_dir = data_dir or Path(tempfile.gettempdir()) / "musicmeta-stub-config"
         self.connection = connection or StubConnection()
         self.pool = StubPool(self.connection)
         self.config = config or Config()

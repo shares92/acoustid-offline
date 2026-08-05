@@ -278,25 +278,35 @@ def test_a_broken_time_skips_the_slot_instead_of_stopping(db: Database) -> None:
 
 
 def test_the_loop_survives_a_failing_check(db: Database, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Eine Hintergrundschleife darf an nichts sterben — sonst liefe nie wieder etwas."""
+    """Eine Hintergrundschleife darf an nichts sterben — sonst liefe nie wieder etwas.
+
+    Gewartet wird auf den **zweiten** Aufruf und nicht auf eine Uhr: eine
+    Zeitschranke waere auf einer ausgelasteten Maschine ein Flake, und
+    geprueft werden soll ja gerade, dass es ueberhaupt weitergeht.
+    """
     manager = FakeManager()
     scheduler = _scheduler(db, manager)
     scheduler.interval_s = 0.01
     calls = 0
+    second = asyncio.Event()
 
     async def explode() -> Any:
         nonlocal calls
         calls += 1
+        if calls >= 2:
+            second.set()
         raise RuntimeError("kaputt")
 
     monkeypatch.setattr(scheduler, "check", explode)
 
     async def scenario() -> None:
         task = asyncio.create_task(scheduler.run())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        try:
+            await asyncio.wait_for(second.wait(), timeout=10)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
     asyncio.run(scenario())
     assert calls >= 2  # nach dem ersten Fehler lief sie weiter

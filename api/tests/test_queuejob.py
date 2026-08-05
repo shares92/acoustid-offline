@@ -29,12 +29,18 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
-def test_without_upstream_the_job_succeeds(env: Path) -> None:
+@pytest.mark.integration
+def test_without_upstream_the_job_still_catches_up(
+    env: Path, db: psycopg.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Modus ``local`` ist eine Betreiber-Entscheidung, kein Fehler.
 
-    Der Zyklus darf deswegen nicht rot in der Historie stehen — und die
-    Datenbank wird gar nicht erst angefasst.
+    Der Lauf steht deswegen nicht rot in der Historie — und der
+    **Nachlauf** passiert trotzdem: waehrend des Delta-Imports
+    zurueckgestellte Einreichungen (Betreiber-Entscheid 2026-08-05) waeren
+    sonst gespeichert, aber im Index unauffindbar.
     """
+    monkeypatch.setenv("MMO_DB_NAME", db.info.dbname)
     report_path = env / "jobs" / "queue-send.json"
 
     code = main(["--report", str(report_path)])
@@ -45,13 +51,19 @@ def test_without_upstream_the_job_succeeds(env: Path) -> None:
     assert document["result"] == "disabled"
     assert document["exit_code"] == 0
     assert document["attempted"] == 0
-    assert document["gave_up_track_ids"] == []
+    assert document["indexed"] == 0  # es lag nichts an
 
 
+@pytest.mark.integration
 def test_the_report_lands_on_stdout_by_default(
-    env: Path, capsys: pytest.CaptureFixture[str]
+    env: Path,
+    db: psycopg.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Log auf stderr, Report auf stdout — die beiden Stroeme bleiben getrennt."""
+    monkeypatch.setenv("MMO_DB_NAME", db.info.dbname)
+
     assert main([]) == EXIT_OK
 
     document = json.loads(capsys.readouterr().out)
@@ -63,11 +75,6 @@ def test_an_unreachable_database_is_reported_not_raised(
 ) -> None:
     """Auch ein gescheiterter Lauf hinterlaesst einen Report."""
     monkeypatch.setenv("MMO_DB_PORT", "1")  # dort lauscht nichts
-    config = env / "config.yaml"
-    config.write_text(
-        "acoustid:\n  submit:\n    mode: local+upstream\n    upstream_app_key: schluessel\n",
-        encoding="utf-8",
-    )
     report_path = env / "queue.json"
 
     code = main(["--report", str(report_path)])
@@ -76,6 +83,21 @@ def test_an_unreachable_database_is_reported_not_raised(
     document = json.loads(report_path.read_text(encoding="utf-8"))
     assert document["result"] == "failed"
     assert document["error"]["message"]
+
+
+def test_a_broken_environment_is_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ohne Datenbank-Passwort ist der Job nicht startbar (Exit-Code 2)."""
+    monkeypatch.setenv("MMO_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("MMO_DB_PASSWORD", raising=False)
+    monkeypatch.setenv("MMO_DB_PASSWORD_FILE", str(tmp_path / "gibt-es-nicht"))
+    report_path = tmp_path / "queue.json"
+
+    assert main(["--report", str(report_path)]) == 2
+
+    document = json.loads(report_path.read_text(encoding="utf-8"))
+    assert document["result"] == "usage_error"
 
 
 # --- Die aufgegebenen Gruppen (§8.9) ----------------------------------------

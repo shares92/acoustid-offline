@@ -136,20 +136,27 @@ def test_the_loop_survives_a_failing_rotation(
     rotator = LogRotator(_logfile(tmp_path, 2000), max_bytes=1000)
     rotator.interval_s = 0.01
     calls = 0
+    second = asyncio.Event()
 
     def explode() -> bool:
         nonlocal calls
         calls += 1
+        if calls >= 2:
+            second.set()
         raise RuntimeError("kaputt")
 
     monkeypatch.setattr(rotator, "rotate", explode)
 
     async def scenario() -> None:
+        # Gewartet wird auf den zweiten Aufruf, nicht auf eine Uhr: eine
+        # Zeitschranke waere auf einer ausgelasteten Maschine ein Flake.
         task = asyncio.create_task(rotator.run())
-        await asyncio.sleep(0.05)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        try:
+            await asyncio.wait_for(second.wait(), timeout=10)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
     asyncio.run(scenario())
     assert calls >= 2

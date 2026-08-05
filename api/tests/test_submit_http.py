@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -24,7 +25,7 @@ from upstream_mock import APP_KEY, MockUpstream, make_forwarder
 
 from acoustid_api.main import MAX_BODY_BYTES, create_app
 from acoustid_api.store import LOCAL_DOC_ID_BASE
-from acoustid_api.submit import MAX_INDEX_BATCH
+from acoustid_api.submit import INDEX_BUSY_FILENAME, MAX_INDEX_BATCH, index_deferred
 from shared.config import Config
 from shared.fingerprint import encode_fingerprint
 from shared.fpindex import FpIndexTransportError, extract_query
@@ -388,6 +389,61 @@ def test_a_stored_submission_reaches_the_reserved_doc_id_range(
     assert index.doc_ids == [LOCAL_DOC_ID_BASE + 1]
     assert index.batches[0][0].hashes == extract_query(VECTOR, max_hashes=120)
     assert db.status_by_track == {1: {"indexed"}}
+
+
+# --- Zurueckstellung waehrend des Delta-Imports (M2.5) ----------------------
+
+
+def test_during_a_delta_import_the_indexing_is_deferred(
+    db: FakeDb, index: StubIndex, tmp_path: Path
+) -> None:
+    """Betreiber-Entscheid 2026-08-05: annehmen, speichern — nur nicht indexieren.
+
+    Waehrend eines Delta-Imports sichert der Index-Feed jeden Batch mit
+    ``expected_version`` ab (§5.3). Wuerde eine Einreichung dazwischen
+    indexiert, erhoehte sie die Version und der Import braeche ab — ein
+    ganzer Tag Datenstand fuer eine Einreichung, die eine Minute spaeter
+    genauso sichtbar wird.
+    """
+    (tmp_path / INDEX_BUSY_FILENAME).write_text("2026-08-05T04:00:00.000Z", encoding="utf-8")
+    service = StubService(connection=StubConnection(handler=db), index=index, data_dir=tmp_path)
+
+    with TestClient(create_app(service)) as client:  # type: ignore[arg-type]
+        payload = submit(client)
+
+    # Die Antwort ist unveraendert — sie war ohnehin immer `pending`.
+    assert payload["submissions"][0]["status"] == "pending"
+    assert payload["status"] == "ok"
+    # Gespeichert, aber nicht indexiert.
+    assert db.status_by_track == {1: {"new"}}
+    assert index.doc_ids == []
+
+
+def test_after_the_import_the_backlog_is_caught_up(
+    db: FakeDb, index: StubIndex, tmp_path: Path
+) -> None:
+    """Die Marke faellt weg — und der naechste Submit traegt alles nach."""
+    marker = tmp_path / INDEX_BUSY_FILENAME
+    marker.write_text("laeuft", encoding="utf-8")
+    service = StubService(connection=StubConnection(handler=db), index=index, data_dir=tmp_path)
+
+    with TestClient(create_app(service)) as client:  # type: ignore[arg-type]
+        submit(client)
+        assert index.doc_ids == []
+        marker.unlink()
+        submit(client, **{"mbid.0": "b9a5c2a8-6a63-4bd0-a7e2-6b8b1c2d3e4f"})
+
+    assert db.status_by_track == {1: {"indexed"}, 2: {"indexed"}}
+    assert len(index.doc_ids) == 2
+
+
+def test_the_marker_lives_next_to_the_configuration(tmp_path: Path) -> None:
+    """Auf dem ``/config``-Mount — denselben Weg nimmt die Reload-Marke."""
+    service = StubService(data_dir=tmp_path)
+    assert index_deferred(service) is False  # type: ignore[arg-type]
+
+    (tmp_path / INDEX_BUSY_FILENAME).touch()
+    assert index_deferred(service) is True  # type: ignore[arg-type]
 
 
 def test_the_index_is_written_before_the_status_changes(

@@ -65,11 +65,13 @@ if TYPE_CHECKING:  # pragma: no cover - nur fuer die Typpruefung
     from acoustid_api.service import ApiService
 
 __all__ = [
+    "INDEX_BUSY_FILENAME",
     "MAX_INDEX_BATCH",
     "SUBMISSION_PENDING",
     "SUBMISSION_STORED_EVENT",
     "check_mode",
     "handle_submit",
+    "index_deferred",
     "index_pending",
 ]
 
@@ -91,6 +93,23 @@ MAX_INDEX_BATCH: Final = 200
 #: braucht ihn ab Phase 17, um seinen Lookup-Cache zu verwerfen (Invariante
 #: §8.6) — hier wird er nur **geloggt**, nicht ausgewertet.
 SUBMISSION_STORED_EVENT: Final = "local_submission_stored"
+
+#: Marke im Datenverzeichnis, mit der der Waechter einen laufenden
+#: Delta-Import anzeigt (M2.5, Betreiber-Entscheid 2026-08-05). Sie liegt
+#: neben der ``config.yaml`` auf dem ``/config``-Mount — demselben Weg, den
+#: schon die Reload-Marke nimmt (:mod:`acoustid_watchdog.reload`).
+#:
+#: **Warum ueberhaupt.** Der Index-Feed des Importers sichert jeden Batch
+#: mit ``expected_version`` ab (§5.3, Idempotenz gegen einen zweiten
+#: Schreiber). Eine Einreichung, die waehrenddessen indexiert wird, erhoeht
+#: die Version — und der laufende Import bricht ab. Der Betreiber-Entscheid
+#: stellt deshalb die **Indexierung** zurueck: die Einreichung wird
+#: angenommen und gespeichert (Status ``new``), nur eben spaeter sichtbar.
+#: Die Antwort bleibt ``pending``, also unveraendert (docs/api-submit.md).
+#:
+#: Der Name steht auch in :mod:`acoustid_watchdog.jobs`; ein Test haelt
+#: beide aneinander (der Waechter haengt bewusst nicht vom API-Paket ab).
+INDEX_BUSY_FILENAME: Final = "index-feed.busy"
 
 
 def check_mode(config: Config) -> None:
@@ -144,6 +163,16 @@ def handle_submit(
     return {"submissions": _response(params, stored)}
 
 
+def index_deferred(service: ApiService) -> bool:
+    """Laeuft gerade ein Delta-Import? (Marke :data:`INDEX_BUSY_FILENAME`.)
+
+    Der Betreiber-Entscheid vom 2026-08-05 in einer Funktion: waehrend des
+    Update-Laufs wird **nicht** indexiert. Einreichungen werden weiterhin
+    angenommen und gespeichert; die Antwort ist ohnehin ``pending``.
+    """
+    return (service.data_dir / INDEX_BUSY_FILENAME).exists()
+
+
 def index_pending(
     connection: psycopg.Connection, service: ApiService, *, limit: int = MAX_INDEX_BATCH
 ) -> int:
@@ -160,10 +189,25 @@ def index_pending(
     stattdessen aus dem Inhalt — dieselbe Dokument-ID mit denselben Hashes zu
     schicken, ist folgenlos.
 
+    **Waehrend eines Delta-Imports wird zurueckgestellt** (M2.5,
+    Betreiber-Entscheid 2026-08-05, :func:`index_deferred`): jede
+    Indexierung erhoehte die Version, und der Index-Feed des Importers
+    braeche an seinem ``expected_version``-Guard ab — der Lauf endete als
+    Fehler und kostete einen Tag Datenstand. Die Einreichung bleibt
+    ``new``; nachgetragen wird sie direkt nach dem Lauf
+    (:mod:`acoustid_api.queuejob`) oder beim naechsten Submit.
+
     Returns:
         Zahl der abgearbeiteten Einreichungen (0, wenn der Index nicht
-        mitspielte oder nichts offen war).
+        mitspielte, nichts offen war oder gerade importiert wird).
     """
+    if index_deferred(service):
+        _LOG.info(
+            "Indexierung zurueckgestellt — es laeuft ein Delta-Import",
+            extra={"marker": INDEX_BUSY_FILENAME},
+        )
+        return 0
+
     pending = load_pending_submissions(connection, limit=limit)
     if not pending:
         return 0

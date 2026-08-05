@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from acoustid_api.service import ApiService
+from acoustid_api.submit import index_pending
 from acoustid_api.upstream import (
     MAX_FORWARD_ATTEMPTS,
     ForwardReport,
@@ -154,6 +155,8 @@ def _document(
         "gave_up_track_ids": [],
         "forward_attempts": 0,
         "forward_error": None,
+        # Nachgetragene Einreichungen (Betreiber-Entscheid 2026-08-05).
+        "indexed": 0,
         "error": None if error is None else {"type": type(error).__name__, "message": str(error)},
     }
     document.update(details or {})
@@ -207,26 +210,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return EXIT_USAGE
 
-    if not service.config.acoustid.submit.upstream_enabled:
-        # Kein Fehler: der Modus ist eine Betreiber-Entscheidung, und der
-        # Zyklus soll deswegen nicht als gescheitert in der Historie stehen.
-        _LOG.info(
-            "Upstream-Weiterleitung ist abgeschaltet — nichts zu tun",
-            extra={"submit_mode": service.config.acoustid.submit.mode.value},
-        )
-        service.close()
-        _emit(_document(result="disabled", exit_code=EXIT_OK, started_at=started_at), args.report)
-        return EXIT_OK
-
+    upstream = service.config.acoustid.submit.upstream_enabled
     limit = {"limit": args.limit} if args.limit else {}
     try:
         with service, service.pool.connection() as connection:
+            # **Zuerst der Nachlauf** (Betreiber-Entscheid 2026-08-05):
+            # waehrend des Delta-Imports hat der API-Dienst die Indexierung
+            # eigener Einreichungen zurueckgestellt
+            # (:data:`acoustid_api.submit.INDEX_BUSY_FILENAME`). Die Marke
+            # ist jetzt weg, also werden sie hier nachgetragen — und zwar
+            # **unabhaengig vom Submit-Modus**: sie waeren sonst
+            # gespeichert, aber im Index unauffindbar.
+            indexed = index_pending(connection, service)
+            if not upstream:
+                # Kein Fehler: der Modus ist eine Betreiber-Entscheidung,
+                # und der Zyklus soll deswegen nicht als gescheitert in der
+                # Historie stehen.
+                _LOG.info(
+                    "Upstream-Weiterleitung ist abgeschaltet — nur der Nachlauf lief",
+                    extra={
+                        "submit_mode": service.config.acoustid.submit.mode.value,
+                        "indexed": indexed,
+                    },
+                )
+                _emit(
+                    _document(
+                        result="disabled",
+                        exit_code=EXIT_OK,
+                        started_at=started_at,
+                        details={"indexed": indexed},
+                    ),
+                    args.report,
+                )
+                return EXIT_OK
             report = (
                 retry_forward(connection, service, **limit)
                 if args.retry
                 else drain_queue(connection, service, **limit)
             )
-            details = _gave_up_details(connection)
+            details = _gave_up_details(connection) | {"indexed": indexed}
     except Exception as error:
         _LOG.exception("Warteschlangenlauf gescheitert")
         _emit(
