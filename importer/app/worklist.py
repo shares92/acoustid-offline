@@ -74,6 +74,12 @@ class ImportPlan:
     files: tuple[DeltaFile, ...]
     #: Gefundene Luecken; leer ist der Gutfall.
     gaps: tuple[Gap, ...] = ()
+    #: **Noch nie** wurde eine Tagesdatei fertig eingespielt — diese Liste
+    #: baut die Historie ab ``first_day`` von Null auf. Das ist der
+    #: Erst-Import und kein taeglicher Lauf; wer sie unbegrenzt abarbeitet,
+    #: zieht die ganzen 414 GB (§5.1). Der Job-Rumpf macht daraus eine
+    #: Sperre (:class:`~acoustid_importer.errors.ColdStartError`).
+    cold_start: bool = False
 
     @property
     def days(self) -> tuple[date, ...]:
@@ -162,7 +168,9 @@ def plan_from_state(
 
     Returns:
         :class:`ImportPlan` mit den offenen Dateien (chronologisch, je Tag
-        nach Import-Regel 1) und den Luecken der Vergangenheit.
+        nach Import-Regel 1), den Luecken der Vergangenheit und der Auskunft,
+        ob hier ueberhaupt schon einmal etwas importiert wurde
+        (:attr:`ImportPlan.cold_start`).
 
     Raises:
         ValueError: ``imported`` enthaelt einen unbekannten Schluessel.
@@ -180,6 +188,7 @@ def plan_from_state(
     return ImportPlan(
         pending_files(last_done, today=today, first_day=first_day),
         tuple(gaps),
+        cold_start=all(day is None for day in last_done.values()),
     )
 
 

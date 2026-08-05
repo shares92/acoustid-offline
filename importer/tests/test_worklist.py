@@ -194,6 +194,29 @@ def test_duplicates_and_order_in_the_state_do_not_matter() -> None:
     assert plan.files == ()
 
 
+# --- Kaltstart -------------------------------------------------------------
+
+
+def test_an_empty_state_is_a_cold_start() -> None:
+    """Noch nie etwas importiert — der Plan baut die Historie von Null auf."""
+    plan = plan_from_state({}, today=DAY_3)
+    assert plan.cold_start is True
+    assert plan.files  # und zwar ab dem ersten Tag der Historie
+    assert plan.days[0] == FIRST_DAY
+
+
+def test_one_finished_day_ends_the_cold_start() -> None:
+    """Ein einziger fertiger Tag genuegt: ab hier wird fortgesetzt (§8.4)."""
+    plan = plan_from_state({Stream.TRACK: [DAY_1]}, today=DAY_3)
+    assert plan.cold_start is False
+
+
+def test_a_cold_start_without_work_is_still_a_cold_start() -> None:
+    """Vor dem Beginn der Historie gibt es nichts zu tun — und keine Sperre."""
+    plan = plan_from_state({}, today=FIRST_DAY)
+    assert (plan.cold_start, plan.files) == (True, ())
+
+
 def test_raise_on_gaps_reports_every_gap() -> None:
     gaps = tuple(Gap(DeltaFile(DAY_1 + timedelta(days=offset), Stream.META)) for offset in range(7))
     plan = ImportPlan((), gaps)

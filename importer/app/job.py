@@ -11,6 +11,12 @@ Maschine lesen kann (:mod:`acoustid_importer.report`).
     Alle Migrationen anwenden, die offenen Tage laden und einspielen, neue
     Fingerprints in den Index geben. Kein Bulk-Modus.
 
+    **Er faengt nicht bei Null an** (:class:`~acoustid_importer.errors.
+    ColdStartError`): auf leerer ``import_state`` waere seine Arbeitsliste
+    die ganze Historie, und dieser Lauf laeuft unbeaufsichtigt zum Termin
+    des Waechters. Ohne Grenze bricht er deshalb sofort ab und verweist auf
+    den Bootstrap; mit ``end_date``/``max_days``/``max_files`` laeuft er.
+
 ``bootstrap`` — der Erst-Import (DECISIONS „Voll-Replay aller Tagesdeltas")
     Derselbe Weg, aber in der Reihenfolge aus Import-Regel 6:
 
@@ -63,6 +69,7 @@ from acoustid_importer.diskguard import (
 from acoustid_importer.download import DeltaDownloader
 from acoustid_importer.errors import (
     BulkModeError,
+    ColdStartError,
     DbImportError,
     DiskSpaceError,
     DownloadError,
@@ -170,6 +177,19 @@ class RunOptions:
     def gzip_check(self) -> bool:
         """gzip-Pruefung aktiv? Per Vorgabe im Bootstrap aus."""
         return (not self.bootstrap) if self.verify_gzip is None else self.verify_gzip
+
+    @property
+    def bounded(self) -> bool:
+        """Hat der Lauf eine ausdrueckliche Obergrenze bekommen?
+
+        ``--end-date``, ``--max-days`` und ``--max-files`` sind die drei
+        Wege, einem Lauf zu sagen, wie weit er gehen soll. Ob eine Grenze
+        gesetzt ist, entscheidet ueber die Kaltstart-Sperre
+        (:class:`~acoustid_importer.errors.ColdStartError`): eine Grenze ist
+        die Ansage „so viel und nicht mehr" — ohne sie zieht ein
+        ``update``-Lauf auf leerer Buchfuehrung die ganze Historie.
+        """
+        return self.end_date is not None or self.max_days is not None or self.max_files is not None
 
     def effective_today(self, *, now: date | None = None) -> date:
         """Der Tag, gegen den die Arbeitsliste rechnet.
@@ -327,9 +347,28 @@ def _execute(
 
 
 def _plan(conn: psycopg.Connection, opts: RunOptions, state: _State) -> tuple[DeltaFile, ...]:
-    """Arbeitsliste aus ``import_state``, begrenzt durch die Optionen."""
+    """Arbeitsliste aus ``import_state``, begrenzt durch die Optionen.
+
+    Raises:
+        ColdStartError: Unbegrenzter ``update``-Lauf auf leerer
+            Buchfuehrung — das ist der Erst-Import, nicht der taegliche Lauf.
+        GapError: Fehlende Tagesdatei in der Vergangenheit (Import-Regel 5).
+    """
     plan = state_mod.plan(conn, today=opts.effective_today(), first_day=opts.first_day)
     state.gaps = plan.gaps
+    # Kaltstart-Sperre: ein unbegrenzter `update`-Lauf auf leerer
+    # Buchfuehrung ist kein taeglicher Lauf, sondern der Erst-Import — und
+    # den faehrt `--mode bootstrap`. Luecken kann es hier nicht geben (sie
+    # setzen einen Fortschrittsstand voraus), deshalb steht die Pruefung vor
+    # der Lueckenpruefung.
+    if plan.cold_start and plan.files and not opts.bootstrap and not opts.bounded:
+        raise ColdStartError(
+            "Es wurde noch nie eine Tagesdatei eingespielt: der Lauf muesste die "
+            f"Historie ab {plan.days[0].isoformat()} von Null aufbauen "
+            f"({len(plan.days)} Tage, {len(plan.files)} Dateien). Der Erst-Import "
+            "laeuft mit --mode bootstrap; ein begrenzter Lauf (--end-date, "
+            "--max-days, --max-files) geht auch so."
+        )
     if plan.gaps:
         for gap in plan.gaps[:10]:
             _LOG.error("Fehlende Tagesdatei in der Vergangenheit", extra={"gap": str(gap)})
@@ -489,7 +528,10 @@ def _classify(error: BaseException) -> RunResult:
             return RunResult.IMPORT_FAILED
         case IndexFeedError() | FpIndexError():
             return RunResult.INDEX_FEED_FAILED
-        case EnvError() | ConfigError():
+        case ColdStartError() | EnvError() | ConfigError():
+            # Kein Defekt, sondern ein Aufruf, der nicht zum Zustand passt —
+            # und wie bei einer falschen Umgebung hilft nur eine Entscheidung
+            # des Betreibers, keine Wiederholung.
             return RunResult.USAGE_ERROR
         case ImporterError():
             return RunResult.FAILED

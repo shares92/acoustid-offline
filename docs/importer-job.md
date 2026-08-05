@@ -62,6 +62,21 @@ Warnung gelesen (ARCHITECTURE §6, E9).
 | `update` (Default) | täglicher Lauf | alle Migrationen vorab; kein Bulk-Modus; gzip-Prüfung an |
 | `bootstrap` | Erst-Import (Voll-Replay ab 2011-08-19) | Migrationsgruppe `core` vorher, `indexes` **nach** dem Massenimport; Bulk-Modus an; gzip-Prüfung aus |
 
+> **Der tägliche Lauf fängt nicht bei Null an (Kaltstart-Sperre).** Ist
+> `import_state` leer, wäre die Arbeitsliste eines `update`-Laufs die ganze
+> Historie — 38.178 Dateien, 414 GB (§5.1). Ein solcher Lauf bricht deshalb
+> sofort ab, **bevor** die Quelle auch nur gefragt wird: `usage_error`
+> (Exit-Code 2) mit dem Hinweis auf `--mode bootstrap`. Der Grund ist der
+> Wächter: er startet den Delta-Import unbeaufsichtigt zum Termin aus
+> `acoustid.update.time`, und auf einer frischen Instanz begänne dort sonst
+> ein wochenlanger Voll-Replay im langsamen Weg — ungefragt und gegenüber
+> der Quelle unhöflich (§12 Punkt 9, Fair-Use).
+>
+> Eine **Grenze** hebt die Sperre auf: `--end-date`, `--max-days` oder
+> `--max-files` sagen ausdrücklich, wie viel geholt werden soll. Der
+> Probelauf (`--mode bootstrap --end-date …`) ist davon ohnehin nicht
+> betroffen.
+
 Ablauf im Bootstrap (Import-Regel 6, ARCHITECTURE §5.2):
 
 1. Plattenplatz prüfen (§8.8) — **vor** allem anderen,
@@ -112,7 +127,7 @@ neuere Upsert-Stände überschreiben.
 |---:|---|---|---|
 | 0 | `ok` | Alles eingespielt (auch: nichts zu tun) | — |
 | 1 | `failed` | Unerwarteter Fehler | Log ansehen; Wiederholung meist zwecklos |
-| 2 | `usage_error` | Aufruf, `MMO_`-Umgebung oder `config.yaml` fehlerhaft | Konfiguration korrigieren |
+| 2 | `usage_error` | Aufruf, `MMO_`-Umgebung oder `config.yaml` fehlerhaft — **oder** ein unbegrenzter `update`-Lauf ohne jeden Bestand (Kaltstart-Sperre, s. o.) | Konfiguration korrigieren bzw. Erst-Import mit `--mode bootstrap` fahren |
 | 3 | `disk_guard` | Freier Platz unter `disk.min_free_gb` (§8.8) | Platz schaffen, Lauf wiederholen; Benachrichtigung |
 | 4 | `download_failed` | Tagesdatei kam nicht sauber vom Server | Nächster Zyklus wiederholt automatisch (§8.4) |
 | 5 | `gaps` | Fehlende Tagesdatei in der Vergangenheit (Regel 5) | **Nicht** automatisch reparieren — Betreiber entscheidet |

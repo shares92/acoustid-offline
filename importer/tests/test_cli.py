@@ -162,6 +162,29 @@ def test_the_guard_can_be_switched_off_explicitly(
     assert seen[0].min_free_gb == 0
 
 
+@pytest.mark.parametrize(
+    ("argv", "bounded"),
+    [
+        ([], False),
+        (["--end-date", "2026-07-22"], True),
+        (["--max-days", "1"], True),
+        (["--max-files", "7"], True),
+    ],
+)
+def test_only_a_limit_makes_a_run_bounded(
+    argv: list[str], bounded: bool, fake_run: Callable[..., list[RunOptions]]
+) -> None:
+    """Die drei Grenzen — und nur sie — heben die Kaltstart-Sperre auf.
+
+    Ohne Grenze weigert sich ein `update`-Lauf, die Historie von Null
+    aufzubauen (`ColdStartError`); mit Grenze ist gesagt, wie viel geholt
+    werden soll.
+    """
+    seen = fake_run()
+    cli.main(argv)
+    assert seen[0].bounded is bounded
+
+
 def test_gaps_are_never_skipped_from_the_command_line() -> None:
     """Import-Regel 5: ein Nachholen alter Tage verfaelscht neuere Staende."""
     assert not RunOptions().allow_gaps

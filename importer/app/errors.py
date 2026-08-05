@@ -3,9 +3,11 @@
 Alle Fehler stammen von :class:`ImporterError` ab, damit ein Job-Rumpf den
 Importer pauschal absichern kann. Darunter trennen sich drei Welten:
 
-* **Arbeitsliste** (:class:`GapError`) — die Lueckenpruefung nach
-  Import-Regel 5 hat einen fehlenden Kalendertag gefunden. Eine *leere*
-  Datei ist keine Luecke, eine *fehlende* schon.
+* **Arbeitsliste** (:class:`GapError`, :class:`ColdStartError`) — die
+  Lueckenpruefung nach Import-Regel 5 hat einen fehlenden Kalendertag
+  gefunden (eine *leere* Datei ist keine Luecke, eine *fehlende* schon),
+  oder ein unbegrenzter ``update``-Lauf sollte die ganze Historie von Null
+  aufbauen — das ist der Erst-Import und gehoert in den Bootstrap.
 * **Download** (:class:`DownloadError`) — die Tagesdatei kam nicht sauber
   vom Server: kein Netz, Fehlerstatus, falsche Groesse, kaputtes gzip.
   :class:`DeltaNotFoundError` ist der Sonderfall „Datei existiert upstream
@@ -34,6 +36,7 @@ from pathlib import Path
 
 __all__ = [
     "BulkModeError",
+    "ColdStartError",
     "DbImportError",
     "DeltaNotFoundError",
     "DiskSpaceError",
@@ -57,6 +60,25 @@ class GapError(ImporterError):
         super().__init__(message)
         #: Die gefundenen :class:`~acoustid_importer.worklist.Gap`-Objekte.
         self.gaps = gaps
+
+
+class ColdStartError(ImporterError):
+    """Ein unbegrenzter ``update``-Lauf soll die Historie von Null aufbauen.
+
+    Der taegliche Lauf setzt fort, wo der letzte aufgehoert hat (§8.4). Ist
+    ``import_state`` dagegen **leer**, ist seine Arbeitsliste die gesamte
+    Historie ab 2011-08-19 — 38.178 Dateien, 414 GB (§5.1). Genau dafuer
+    gibt es ``--mode bootstrap``: Bulk-Modus, Sekundaerindizes danach,
+    Prefetch (Import-Regel 6). Der Waechter stoesst den Delta-Import
+    unbegrenzt und unbeaufsichtigt an; ohne diese Sperre begaenne auf einer
+    frischen Instanz zum ersten Termin ein wochenlanger Voll-Replay im
+    langsamen Weg — gegenueber der Quelle (Fair-Use, §12 Punkt 9) wie
+    gegenueber dem Betreiber ein Vorgang, den niemand angeordnet hat.
+
+    **Ein begrenzter Lauf ist erlaubt** (``--end-date``, ``--max-days``,
+    ``--max-files``): die Grenze ist die ausdrueckliche Ansage, wie viel
+    geholt werden soll.
+    """
 
 
 class DownloadError(ImporterError):

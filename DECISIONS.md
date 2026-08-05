@@ -5,6 +5,37 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-05: Der tägliche Delta-Lauf baut keine Historie von Null auf
+
+Entscheidung: Ein `update`-Lauf **ohne ausdrückliche Grenze** bricht sofort
+ab, wenn `import_state` leer ist — `usage_error` (Exit 2) mit dem Verweis
+auf `--mode bootstrap`, und zwar **bevor** die Quelle überhaupt gefragt
+wird (`ColdStartError`, docs/importer-job.md). Eine Grenze hebt die Sperre
+auf: `--end-date`, `--max-days` oder `--max-files` sind die Ansage, wie
+viel geholt werden soll. Der Erst-Import bleibt damit eine bewusste
+Betreiber-Handlung.
+Begründung: Die Arbeitsliste des Importers kommt aus `import_state`; ist
+sie leer, ist sie die ganze Historie ab 2011-08-19 (38.178 Dateien,
+414 GB, §5.1) — im Update-Weg, also ohne Bulk-Modus und ohne die
+Index-Reihenfolge aus Import-Regel 6. Der Wächter startet diesen Job seit
+M2.5 unbeaufsichtigt zum Termin aus `acoustid.update.time` (Default 04:00,
+immer aktiv): auf einer frischen Instanz begänne dort ein wochenlanger
+Voll-Replay im langsamen Weg, gegenüber AcoustID OÜ unhöflich (§12
+Punkt 9, Fair-Use) und vom Betreiber nie angeordnet.
+Alternativen: **Kaltstart automatisch als Bootstrap fahren** — verworfen,
+das ist eine Grundsatzentscheidung über Tage Laufzeit und ~450 GB Bestand,
+die kein Automat um 04:00 treffen darf. **Nur warnen und trotzdem laufen**
+— verworfen, die Warnung stünde im Log einer Instanz, die schon zieht.
+**Grenze über eine Tageszahl** (z. B. „höchstens 31 Tage neu") — verworfen,
+eine willkürliche Zahl, die einen ehrlichen Nachlauf nach längerem
+Stillstand mit dem Erst-Import verwechselt (dort ist `import_state` nicht
+leer, hier schon).
+Anlass: Der E2E-Zyklus-Test (Retry-Pfad) lief genau hinein — er hielt sich
+für „ohne Netz", der Compose-Container hat aber eine Route nach draußen,
+und der zweite Delta-Lauf lud echte Tagesdateien, statt zu enden. Der Test
+klemmt die Quelle jetzt zusätzlich ab (`/etc/hosts` → 127.0.0.1) und prüft,
+dass das Dump-Verzeichnis leer bleibt.
+
 ## 2026-08-05: Fälligkeit kennt keinen Ausgang — ein Abbruch verbraucht seinen Termin
 
 Entscheidung: Für die Frage „ist dieser Termin fällig?" zählt

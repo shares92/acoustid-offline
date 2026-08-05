@@ -88,6 +88,9 @@ class _Source(ThreadingHTTPServer):
 
     daemon_threads = True
     root: Path
+    #: Zahl der beantworteten Anfragen. Damit ist „die Quelle wurde nicht
+    #: einmal gefragt" pruefbar — die Aussage der Kaltstart-Sperre.
+    requests = 0
 
     def handle_error(self, request: object, client_address: object) -> None:
         return
@@ -102,6 +105,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # Name kommt aus der stdlib
         """Liefert `index.json` eines Monats oder eine Tagesdatei aus."""
+        self.server.requests += 1
         parts = self.path.strip("/").split("/")
         name = parts[-1]
         if name == "index.json":
@@ -520,6 +524,44 @@ def test_an_empty_day_is_imported_like_any_other(
 
 
 # --- Fehlerwege -------------------------------------------------------------
+
+
+def test_an_unbounded_update_run_refuses_to_build_the_history_from_scratch(
+    db: psycopg.Connection,
+    env_settings: EnvSettings,
+    source: _Source,
+    tmp_path: Path,
+) -> None:
+    """Kaltstart-Sperre: der taegliche Lauf faengt nicht bei Null an.
+
+    Auf leerer ``import_state`` ist die Arbeitsliste eines ``update``-Laufs
+    die **ganze** Historie (§5.1: 38.178 Dateien, 414 GB). Der Waechter
+    stoesst diesen Lauf unbeaufsichtigt zum Termin an — ohne Sperre begaenne
+    auf einer frischen Instanz ein wochenlanger Voll-Replay im langsamen Weg,
+    gegen die Quelle (Fair-Use) und ohne dass jemand das angeordnet haette.
+    Der Erst-Import ist ``--mode bootstrap``.
+
+    Dass ein **begrenzter** Lauf denselben Kaltstart machen darf, zeigt
+    ``test_an_update_run_uses_the_migrated_schema_and_no_bulk_mode``: er
+    laeuft auf derselben leeren Buchfuehrung, aber mit ``end_date``.
+    """
+    dump_dir = tmp_path / "dumps"
+
+    report = run(
+        options(source, mode=JobMode.UPDATE, end_date=None),
+        settings=settings_for(db, env_settings, dump_dir),
+        config=Config(),
+    )
+
+    assert report.result is RunResult.USAGE_ERROR
+    assert report.exit_code is ExitCode.USAGE
+    assert report.error is not None
+    assert report.error.type == "ColdStartError"
+    assert "--mode bootstrap" in report.error.message
+    # Und zwar, **bevor** irgendetwas geholt wurde.
+    assert source.requests == 0
+    assert report.files.planned == 0
+    assert not dump_dir.exists() or list(dump_dir.iterdir()) == []
 
 
 def test_a_gap_in_the_history_stops_the_run_with_its_own_exit_code(
