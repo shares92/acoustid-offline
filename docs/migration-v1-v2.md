@@ -106,30 +106,38 @@ Das v1-Volume hängt auf `/var/lib/postgresql`; die Daten liegen darin unter
 `18/docker` — so legt es das offizielle `postgres:18`-Image an (LEARNINGS
 „Postgres-18-Image ändert das Volume-Layout"). Ziel ist `/data/db/18`.
 
+> **Die Variablennamen sind je Abschnitt eigene** (`DB_V1`/`DB_V2`,
+> `INDEX_V1`/… ) und werden nicht wiederverwendet. Grund: der
+> Rollback in §9 greift auf die Postgres-Pfade zurück — mit einem
+> allgemeinen `$SRC`/`$DEST` stünde dort längst der Index- oder
+> Config-Pfad drin, und der Rückweg schöbe die Datenbank ins Leere.
+
 ```
-SRC="$(docker volume inspect acoustid-offline_db-data --format '{{ .Mountpoint }}')"
-DEST=/mnt/user/musicmeta/db
+DB_V1="$(docker volume inspect acoustid-offline_db-data --format '{{ .Mountpoint }}')"
+DB_V2=/mnt/user/musicmeta/db
 
 # 1. Prüfen, dass die Annahme stimmt:
-ls "$SRC"                    # erwartet: 18
-cat "$SRC/18/docker/PG_VERSION"   # erwartet: 18
+ls "$DB_V1"                          # erwartet: 18
+cat "$DB_V1/18/docker/PG_VERSION"    # erwartet: 18
 
 # 2. Umziehen (gleiches Dateisystem = mv; sonst rsync -a --info=progress2)
-mkdir -p "$DEST"
-mv "$SRC/18/docker" "$DEST/18"
+mkdir -p "$DB_V2"
+mv "$DB_V1/18/docker" "$DB_V2/18"
 
 # 3. Eigentümer setzen: das neue Image fährt Postgres unter UID/GID 999.
-chown -R 999:999 "$DEST/18"
-chmod 0700 "$DEST/18"
+chown -R 999:999 "$DB_V2/18"
+chmod 0700 "$DB_V2/18"
 ```
 
 **Prüfkommandos danach** (alle drei müssen stimmen):
 
 ```
-test -f "$DEST/18/PG_VERSION" && cat "$DEST/18/PG_VERSION"     # 18
-ls "$DEST/18/base" >/dev/null && echo "base vorhanden"
-stat -c '%u:%g %a' "$DEST/18"                                  # 999:999 700
+test -f "$DB_V2/18/PG_VERSION" && cat "$DB_V2/18/PG_VERSION"   # 18
+ls "$DB_V2/18/base" >/dev/null && echo "base vorhanden"
+stat -c '%u:%g %a' "$DB_V2/18"                                 # 999:999 700
 ```
+
+**Notieren Sie sich beide Pfade** — der Rollback in §9 braucht sie.
 
 > **Kein `pg_upgrade`.** Die Major-Version bleibt dieselbe; nur der Pfad
 > ändert sich. Ein Bestand einer *anderen* Major lässt sich so **nicht**
@@ -141,12 +149,12 @@ stat -c '%u:%g %a' "$DEST/18"                                  # 999:999 700
 ## 5. Suchindex umziehen
 
 ```
-SRC="$(docker volume inspect acoustid-offline_index-data --format '{{ .Mountpoint }}')"
-DEST=/mnt/user/appdata/musicmeta/index
+INDEX_V1="$(docker volume inspect acoustid-offline_index-data --format '{{ .Mountpoint }}')"
+INDEX_V2=/mnt/user/appdata/musicmeta/index
 
-mkdir -p "$DEST"
-mv "$SRC"/* "$DEST"/
-chown -R 6081:6081 "$DEST"
+mkdir -p "$INDEX_V2"
+mv "$INDEX_V1"/* "$INDEX_V2"/
+chown -R 6081:6081 "$INDEX_V2"
 ```
 
 Die UID 6081 ist unverändert die des Upstream-Images — deshalb passt ein
@@ -160,11 +168,11 @@ v1-Index-Verzeichnis ohne weiteres Zutun.
 ## 6. Wächter-Daten umziehen
 
 ```
-SRC="$(docker volume inspect acoustid-offline_watchdog-data --format '{{ .Mountpoint }}')"
-DEST=/mnt/user/appdata/musicmeta/config
+CONFIG_V1="$(docker volume inspect acoustid-offline_watchdog-data --format '{{ .Mountpoint }}')"
+CONFIG_V2=/mnt/user/appdata/musicmeta/config
 
-mkdir -p "$DEST"
-cp -a "$SRC"/. "$DEST"/
+mkdir -p "$CONFIG_V2"
+cp -a "$CONFIG_V1"/. "$CONFIG_V2"/
 ```
 
 Enthalten sind `config.yaml`, `watchdog.sqlite3` (API-Keys, Admin-Login,
@@ -174,9 +182,14 @@ darf verworfen werden — er füllt sich von selbst; alles andere nicht.
 **Nach dem Umzug prüfen:**
 
 ```
-ls "$DEST"                     # config.yaml, watchdog.sqlite3, …
-sqlite3 "$DEST/watchdog.sqlite3" 'select count(*) from api_key;'
+ls "$CONFIG_V2"                     # config.yaml, watchdog.sqlite3, …
+sqlite3 "$CONFIG_V2/watchdog.sqlite3" 'select count(*) from api_key;'
 ```
+
+Die Dateirechte zieht der Entrypoint beim ersten Start nach: `/config`
+bekommt das setgid-Bit und die Gruppe `musicmeta`, `config.yaml` und
+`db-password` werden 0640 — nur so kann der (seit v2 unprivilegierte)
+API-Dienst sie lesen.
 
 ---
 
@@ -187,10 +200,14 @@ v1 hatte das Passwort in der `.env`; v2 erzeugt es beim ersten Start selbst
 deshalb das alte Passwort mitnehmen, statt ein neues erzeugen zu lassen:
 
 ```
-DEST=/mnt/user/appdata/musicmeta/config
-printf '%s' "$AOFF_DB_PASSWORD_AUS_DER_ALTEN_ENV" > "$DEST/db-password"
-chmod 0600 "$DEST/db-password"
+CONFIG_V2=/mnt/user/appdata/musicmeta/config
+printf '%s' "$AOFF_DB_PASSWORD_AUS_DER_ALTEN_ENV" > "$CONFIG_V2/db-password"
+chmod 0640 "$CONFIG_V2/db-password"
 ```
+
+Alternativ genügt es, `AOFF_DB_PASSWORD` beim ersten Start in der `.env`
+stehen zu lassen — der Entrypoint schreibt die Datei dann selbst (und
+danach kann der Wert aus der `.env` wieder verschwinden).
 
 Alternative, wenn das alte Passwort nicht mehr vorliegt: Datei **nicht**
 anlegen, den Container starten (der Entrypoint erzeugt eines) und die Rolle
@@ -236,13 +253,36 @@ neu anlegt, sieht von außen genauso gesund aus.
 ## 9. Zurück (Rollback)
 
 Solange die v1-Volumes nicht gelöscht sind, ist der Weg zurück ein
-Zurückschieben:
+Zurückschieben. Der folgende Block ist **in sich geschlossen** und läuft
+auch in einer frischen Shell — er leitet die Pfade selbst wieder her:
 
 ```
-docker compose down                      # NICHT -v
-mv "$DEST/18" "$SRC/18/docker"
+# 1. v2 anhalten (NICHT -v; es gibt ohnehin keine benannten Volumes)
+docker compose down
+
+# 2. Pfade erneut bestimmen — dieselben wie in §4
+DB_V1="$(docker volume inspect acoustid-offline_db-data --format '{{ .Mountpoint }}')"
+DB_V2=/mnt/user/musicmeta/db
+
+# 3. Datenbestand zurückschieben
+test -f "$DB_V2/18/PG_VERSION" || { echo "kein v2-Bestand unter $DB_V2/18"; exit 1; }
+mkdir -p "$DB_V1/18"
+mv "$DB_V2/18" "$DB_V1/18/docker"
+chown -R 999:999 "$DB_V1/18/docker"   # v1-Image fährt Postgres ebenfalls als 999
+
+# 4. Suchindex zurück (falls schon umgezogen)
+INDEX_V1="$(docker volume inspect acoustid-offline_index-data --format '{{ .Mountpoint }}')"
+INDEX_V2=/mnt/user/appdata/musicmeta/index
+mv "$INDEX_V2"/* "$INDEX_V1"/ 2>/dev/null || true
+
+# 5. v1-Stand auschecken — die beiden Compose-Dateien von v1 gibt es im
+#    aktuellen Stand nicht mehr (ein Image, eine Datei).
+git checkout <letzter-v1-commit-oder-tag>    # z.B. der Commit vor M1b
 docker compose -f docker-compose.yml -f docker-compose.watchdog.yml up -d
 ```
+
+Die Wächter-Daten (§6) wurden **kopiert**, nicht verschoben — das v1-Volume
+ist also unverändert und braucht keinen Rückweg.
 
 Deshalb wird oben **verschoben und nicht kopiert-und-gelöscht**: bis zum
 ersten erfolgreichen Start von v2 existiert der Bestand genau einmal, danach

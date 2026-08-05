@@ -175,9 +175,12 @@ realistische Zeitangabe fürs README (Phase 29) und die
   interne Healthcheck der API prüft `/<name>/_health` des Suchindex, und
   den legt erst der Importer an. Der Container-Healthcheck (`GET /status`)
   ist davon unberührt und wird sofort grün.
-- **Der Container heißt jetzt `musicmeta-offline`**, und `supervisorctl`
-  zeigt die vier Prozesse: `docker compose exec app supervisorctl -c
-  /etc/supervisor/supervisord.conf status`.
+- **Der Container heißt `musicmeta-offline-app-1`** (Projektname + Dienst;
+  einen festen Namen vergibt die Compose-Datei bewusst nicht, sonst könnte
+  eine zweite Zusammenstellung auf demselben Host ihn ersetzen).
+  Angesprochen wird er über den Dienstnamen: `docker compose exec app
+  supervisorctl -c /etc/supervisor/supervisord.conf status` zeigt die vier
+  Prozesse.
 - **Exit-Code 3 (Plattenplatz-Guard):** gemessen wird das
   Dump-Verzeichnis; Reserve ist `update.min_free_gb` (Default 50 GiB,
   `--min-free-gb` überschreibt). Platz schaffen und denselben Befehl

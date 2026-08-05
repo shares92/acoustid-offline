@@ -35,11 +35,13 @@ Ohne ``--compose`` bzw. ``ACOUSTID_COMPOSE_TESTS=1`` wird der Test mit
 Begruendung abgewaehlt; in der CI laeuft er nie (conftest.py im
 Wurzelverzeichnis).
 
-**Achtung, er greift in die lokale Docker-Umgebung ein:** Der Containername
-steht in der Compose-Datei fest. Wer lokal eine echte Instanz betreibt,
-sollte den Test nicht laufen lassen — er entfernt am Ende alles, was so
-heisst. Die Daten liegen dagegen in einem Wegwerf-Verzeichnis unter
-``tmp_path``: Bind-Mounts (E13) kann ``down -v`` nicht anfassen.
+**Er kann keine echte Instanz anfassen.** Der Lauf bekommt einen eigenen,
+zufaelligen Compose-Projektnamen (``-p musicmeta-e2e-<suffix>``); die
+Produktions-Compose traegt bewusst keinen festen ``container_name`` mehr,
+also gehoert jeder erzeugte Container zu genau diesem Projekt. Vor dem
+Aufbau wird **fail-closed** geprueft, dass unter diesem Namen noch nichts
+existiert — sonst bricht der Test ab, statt fremde Container zu ersetzen.
+Die Daten liegen in einem Wegwerf-Verzeichnis unter ``tmp_path``.
 
 **Apple Silicon:** Das Image ist amd64-only (E3); colima mit
 ``--vz-rosetta`` starten (LEARNINGS).
@@ -51,6 +53,7 @@ import json
 import os
 import subprocess
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -74,7 +77,13 @@ INDEX_NAME = "e2e"
 #: Idle-Stopp nicht angefasst.
 SLEEPING_PROGRAMS = ("db", "api")
 
-_COMPOSE = ["-f", "docker-compose.yml"]
+#: Eigener Compose-Projektname je Lauf. Er ist die **einzige** Klammer um
+#: die erzeugten Ressourcen — deshalb zufaellig und nicht geraten: zwei
+#: gleichzeitige Laeufe kaemen sich sonst ins Gehege, und ein fester Name
+#: koennte eine echte Installation treffen.
+PROJECT = f"musicmeta-e2e-{uuid.uuid4().hex[:8]}"
+
+_COMPOSE = ["-p", PROJECT, "-f", "docker-compose.yml"]
 _SUPERVISORCTL = ["supervisorctl", "-c", "/etc/supervisor/supervisord.conf"]
 
 #: Migrationen und Suchindex anlegen — im Container, weil dort die
@@ -166,6 +175,23 @@ def _require_docker() -> None:
         pytest.skip("docker compose ist nicht verfuegbar")
 
 
+def _require_own_project_is_empty(data_dir: Path) -> None:
+    """Fail-closed: unter unserem Projektnamen darf noch nichts existieren.
+
+    Der Test raeumt am Ende alles ab, was zu :data:`PROJECT` gehoert. Faende
+    er dort etwas vor, das er nicht selbst angelegt hat, wuerde er es beim
+    Aufbau ersetzen und beim Abbau entfernen — deshalb hier lieber
+    abbrechen. Bei einem zufaelligen Namen ist das der unmoegliche Fall;
+    genau deswegen ist die Pruefung billig und die Aussage eindeutig.
+    """
+    existing = _compose(data_dir, "ps", "--all", "--quiet", check=False).strip()
+    if existing:
+        raise AssertionError(
+            f"Compose-Projekt {PROJECT!r} ist nicht leer — Abbruch, "
+            f"statt fremde Container anzufassen:\n{existing}"
+        )
+
+
 def _wait(description: str, check, *, timeout_s: float, interval_s: float = 2.0):
     """Wartet, bis ``check()`` etwas Wahres liefert — sonst schlaegt der Test fehl."""
     deadline = time.monotonic() + timeout_s
@@ -207,6 +233,7 @@ def data_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def sleeping_stack(data_dir: Path) -> Iterator[Path]:
     """Eingerichteter Container mit **gestoppter** Datenbank und API."""
     _require_docker()
+    _require_own_project_is_empty(data_dir)
     try:
         # 1. Der ganze Container auf einmal. `--wait` wartet auf den
         #    Healthcheck (`GET /status`) — der beweist zugleich, dass der
@@ -234,7 +261,10 @@ def sleeping_stack(data_dir: Path) -> Iterator[Path]:
         yield data_dir
     finally:
         _compose(data_dir, "logs", "--tail", "80", check=False)
-        _compose(data_dir, "down", check=False)
+        # `down` ohne `-v`: es gibt keine benannten Volumes (E13, alles
+        # Bind-Mounts), und der Aufruf gilt ausschliesslich fuer unser
+        # eigenes Projekt.
+        _compose(data_dir, "down", "--remove-orphans", check=False)
 
 
 # --- Der Nachweis -----------------------------------------------------------
