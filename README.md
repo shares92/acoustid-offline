@@ -91,7 +91,7 @@ Grundsatzentscheidungen in [DECISIONS.md](DECISIONS.md).
 | `/index` | **Cache** | Suchindex (~70 GB einplanen) |
 | `/data/db` | Array | PostgreSQL |
 | `/import` | Array | Dump-Downloads |
-| `/backup` | Array | Sicherungen (ab der Backup-Phase) |
+| `/backup` | Array | Sicherungen ([docs/backup-restore.md](docs/backup-restore.md)) |
 
 Das Docker-Image selbst gehört ebenfalls auf den Cache — sonst hält der
 laufende Container das Array wach.
@@ -164,6 +164,35 @@ Der Importer läuft als Prozess im Container (`docker compose exec app
 Report-Format stehen in [docs/importer-job.md](docs/importer-job.md). Für
 den Probelauf auf der Unraid-Referenzhardware gibt es eine eigene Anleitung:
 [docs/probelauf-unraid.md](docs/probelauf-unraid.md).
+
+## Täglicher Betrieb: Zeitplan, Meldungen, Sicherung
+
+Im Normalbetrieb ist nichts zu tun — die Instanz weckt sich zum Termin
+selbst, arbeitet und legt sich wieder schlafen. Eingestellt wird das in der
+`config.yaml` auf dem `/config`-Mount (ARCHITECTURE §6):
+
+| Schlüssel | Default | Bedeutung |
+|---|---|---|
+| `acoustid.update.time` | `04:00` | Täglicher Delta-Import (lokale Zeit) |
+| `backup.time` / `backup.dir` | `04:45` / leer | Sicherung; **leeres Ziel heißt „aus"** |
+| `notify.ntfy.url` | leer | Push-/Webhook-Ziel; leer = aus |
+| `notify.smtp.*` | leer | Mailversand; leerer Host = aus |
+| `metrics.enabled` | `false` | `GET /metrics` im Prometheus-Format |
+| `disk.min_free_gb` | `100` | Reserve, geprüft gegen **jeden** Schreibpfad |
+
+Ein verpasster Termin wird am selben Tag nachgeholt; ein fehlgeschlagener
+Lauf wird beim nächsten Zyklus wiederholt (der Stand bleibt resumierbar).
+Was der letzte Lauf gemacht hat, steht in `GET /status` unter
+`last_update_run`.
+
+Gemeldet wird nur, was Aufmerksamkeit braucht: fehlgeschlagener Import,
+knapper Plattenplatz, Stack-Start-Fehler, endgültig aufgegebene
+Upstream-Einreichungen und ein Versions-Drift der Datenbank.
+
+Was gesichert wird — und wie man es zurückspielt — steht in
+[docs/backup-restore.md](docs/backup-restore.md). Kurz: die eigenen
+Einreichungen, der Wächter-Zustand und die Konfiguration. Alles andere
+kommt aus den Quellen zurück.
 
 ## Lizenz
 

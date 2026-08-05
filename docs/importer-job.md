@@ -4,8 +4,8 @@ Der Importer ist ein **One-Shot-Job**: Er läuft, spielt die offenen
 Tagesdeltas ein, gibt neue Fingerprints an den Suchindex, schreibt ein
 maschinenlesbares Ergebnis und beendet sich mit einem definierten Exit-Code.
 Er startet und stoppt nie Prozesse und kennt keinen Zeitplan — das macht
-der Wächter (ab M2.5), der genau die hier beschriebene Schnittstelle liest
-und daraus `update_run` füllt.
+der Wächter (seit M2.5), der genau die hier beschriebene Schnittstelle
+liest und daraus `update_run` füllt.
 
 Technische Grundlagen: ARCHITECTURE §5.1 (Datenquelle), §5.2 (Schema und
 Import-Regeln), §5.3 (Index-Feed), §8.3/§8.4 (Transaktion und Resume), §8.8
@@ -18,8 +18,9 @@ Import-Regeln), §5.3 (Index-Feed), §8.3/§8.4 (Transaktion und Resume), §8.8
 Seit dem Ein-Container-Umbau (M1b) ist der Importer **kein eigenes Image**
 mehr: er steckt im selben Image wie alles andere und läuft als Prozess
 darin. Über supervisord läuft er bewusst **nicht** (Entscheid E10:
-`[program:*]` kann keine Per-Lauf-Argumente übergeben) — ab M2.5 startet
-ihn der Wächter als Subprozess, bis dahin wird er von Hand aufgerufen:
+`[program:*]` kann keine Per-Lauf-Argumente übergeben) — seit M2.5 startet
+ihn der Wächter als Subprozess zum Termin aus `acoustid.update.time`
+(§6). Von Hand geht es weiterhin:
 
 ```bash
 # Im laufenden Container. Der Stack muss wach sein: Datenbank und
@@ -235,12 +236,13 @@ einem AcoustID-Spiegel auf vier Quellen, E11).
 Unterschreitet der freie Platz die Reserve, endet der Lauf zwischen zwei
 Tagesdateien mit Code 3. Der Stand bleibt vollständig resumierbar.
 
-Gemessen wird bislang nur das Dump-Verzeichnis. Auf dem
-Referenz-Deployment (Unraid) liegt die Postgres im selben Array-Pool, der
-Guard trifft also denselben Bestand. Die Ausweitung auf **jeden**
-Schreib-/Staging-Pfad — `/data/db`, `/import`, ab M4 `/data/covers` — ist
-mit M2.5 vorgesehen (E11); die Mounts aus ARCHITECTURE §3 sind mehrere
-Dateisysteme, und ein freies `/import` sagt nichts über `/data/db`.
+Dieser Job misst nur das Dump-Verzeichnis — er sieht als Prozess auch
+nicht mehr. Die Ausweitung auf **jeden** Schreib-/Staging-Pfad kam mit
+M2.5 (E11) und sitzt beim Wächter: er prüft vor jedem Lauf `/import`,
+`/data/db`, `/config` und `backup.dir` (je Dateisystem einmal,
+`watchdog/app/diskspace.py`) und bricht ab, **bevor** er die Prozesse
+weckt. Die Mounts aus ARCHITECTURE §3 sind mehrere Dateisysteme, und ein
+freies `/import` sagt nichts über `/data/db`.
 
 ---
 

@@ -5,6 +5,100 @@ Entscheidungslog. Neue Einträge oben anfügen. Format:
 
 ---
 
+## 2026-08-05: Submits während des Update-Laufs werden zurückgestellt
+
+Entscheidung (Betreiber): Trifft ein `/v2/submit` ein, während der
+Delta-Import läuft, wird er **angenommen und gespeichert** (Status `new`) —
+aber **nicht indexiert**. Nachgetragen wird direkt nach dem Lauf. Die
+Antwort bleibt unverändert `pending`; nach außen ändert sich nichts.
+Umgesetzt über eine Marke auf dem `/config`-Mount (`index-feed.busy`,
+derselbe Weg wie die Reload-Marke): der Wächter hält sie für die Dauer des
+`acoustid-delta`-Jobs, `acoustid_api.submit.index_pending` liest sie. Den
+Nachlauf macht der `queue-send`-Job, und zwar unabhängig vom Submit-Modus.
+Begründung: Der Index-Feed des Importers sichert jeden Batch mit
+`expected_version` ab (§5.3). Eine Indexierung dazwischen erhöht die
+Version, der laufende Import bricht ab — ein ganzer Tag Datenstand für eine
+Einreichung, die eine Minute später genauso sichtbar wird. Der Guard ist
+zugleich der einzige Schutz gegen einen unbemerkten zweiten Schreiber.
+Alternativen: **Feed ohne Guard** — verworfen, der Idempotenz-Schutz
+entfiele ersatzlos, und ein zweiter Schreiber bliebe unbemerkt.
+**Abbruch + Retry des Laufs** — verworfen, jede nächtliche Kollision
+kostete einen Tag Datenstand.
+
+## 2026-08-05: M2.5-Entscheide — Job-Arten, Zyklus, Notify, Backup, Metrics
+
+Entscheidung (Phase M2.5; Details in den Quelldateien und im
+PROGRESS-Ergebniseintrag):
+(a) **`update` → `acoustid-delta`** (Schemaschritt 2 der Wächter-SQLite;
+SQLite kann keinen CHECK ändern, die Tabelle wird neu gebaut und der
+Bestand kopiert). Solange es eine Quelle gab, war „Update" eindeutig;
+neben `discogs-dump`, `caa-crawl` und `nachzuegler` (M3–M5) wäre es keine
+Auskunft mehr. Das `/status`-Feld `last_update_run` behält seinen Namen
+(E16, additiv) — nur der Wert von `kind` darin nennt jetzt die Quelle. Alle
+sechs Arten stehen sofort im CHECK, auch die noch ungebauten: ein späterer
+Schritt müsste die Tabelle sonst erneut neu bauen.
+`nachzuegler` steht **ohne Umlaut** in der Datenbank (der Wert landet im
+CHECK, in Log-Feldern und als Prometheus-Label); den Umlaut trägt der
+Anzeigename.
+(b) **Fälligkeit heißt „seit dem heutigen Termin lief noch keiner"** — ein
+30-Sekunden-Takt trifft eine Minute nie sicher, und die Historie überlebt
+einen Neustart. Verpasste Termine werden am selben Tag nachgeholt (ein
+verspäteter Abgleich ist besser als keiner); ein fehlgeschlagener Lauf wird
+**nicht** sofort wiederholt, sondern beim nächsten Termin (§8.4) — die
+häufigsten Ursachen sind am selben Tag dieselben, und ein Retry im
+Minutentakt hielte nur das Array wach.
+(c) **Schlafen legen mit zwei Bedingungen:** der Zyklus muss den Stack
+selbst geweckt haben (sonst gehört er dem Betreiber), und während des Laufs
+darf keine `/v2/`-Anfrage gekommen sein (sonst übernimmt der Idle-Stopp,
+der die Uhr dafür hat).
+(d) **Job-Ausgaben werden geerbt, nicht gepiped:** geerbt landen sie im
+Wächter-Log und damit in `docker logs` (E16); eine Pipe müsste der Wächter
+nebenher leerlesen, sonst blockierte der Job nach wenigen MB Logausgabe.
+Die Fehlerauskunft kommt aus dem Report — der entsteht in jedem Fall.
+(e) **Beim Herunterfahren wird der Job losgelassen, nicht abgebrochen:** der
+Wächter läuft unter `stopasgroup=true`, sein SIGTERM erreicht den
+Subprozess ohnehin. Ein zweites Signal bedeutet im Importer „sofort
+beenden" und tauschte den geordneten Exit-Code 8 gegen eine
+zurückgerollte Transaktion.
+(f) **Warteschlangenlauf und Backup als eigene Jobs** (`api/app/queuejob.py`,
+`importer/app/backup.py`): beide brauchen eine Postgres-Verbindung, und der
+Wächter hält keine (§8.2, E10). Der Warteschlangenlauf ist ein **eigener**
+Lauf in der Historie — ein gescheiterter Upstream-Versand färbt keinen
+erfolgreichen Datenabgleich rot. Er trägt die aufgegebenen Gruppen in
+seinen Report, weil das Ereignis `upstream_forward_gave_up` im API-Prozess
+entsteht und der Wächter es sonst nie sähe.
+(g) **Backup: ein Verzeichnis je Lauf, keine Rotation.** COPY-Text für
+`local_submission` (round-trip-sicher inklusive `integer[]`), SQLite-Online-
+Backup-API für den Zustand (eine Dateikopie wäre im WAL-Modus nicht
+konsistent), Manifest mit Spaltenliste und Sequenzständen (ohne sie vergäbe
+eine wiederhergestellte Instanz Doc-IDs doppelt). **Der Lookup-Cache gehört
+nicht ins Backup.** Aufbewahrung bleibt beim Betreiber: eine automatische
+Rotation könnte im Fehlerfall die letzte gute Sicherung mitnehmen
+(docs/backup-restore.md).
+(h) **`/metrics` ist per Default aus und antwortet abgeschaltet mit 404**
+(nicht 403 — Haltung der `DENIED_PATHS`). Er weckt nie: der Prozess-Zustand
+kommt aus der Momentaufnahme, die der Poller ohnehin alle 15 s erhebt — ein
+Scraper im selben Takt darf keine Last auf dem supervisord-Socket erzeugen.
+Kein `prometheus_client`: das Textformat sind ein paar Zeilen, und das Paket
+brächte eine eigene Registry samt Prozess-Metriken mit. Die Cache-Quote wird
+bewusst nicht vorberechnet (Sache der Abfragesprache).
+(i) **Plattenplatz-Guard im Wächter, dedupliziert je Dateisystem** (E11):
+gemessen werden `/import`, `/data/db`, `/config` und — falls eingerichtet —
+`backup.dir`; drei Mounts auf einem Pool geben eine Auskunft, nicht drei.
+Der Index-Mount fehlt bewusst (kein `MMO_`-Wert, der Wächter kennt ihn
+nicht). Die GiB-Lesart steht im Wächter noch einmal statt als Import aus
+dem Importer-Paket — der Wächter hängt nicht von ihm ab (er bräuchte sonst
+psycopg); ein Test hält beide Konstanten aneinander.
+(j) **Log-Rotation per copytruncate:** `tee` hält den Deskriptor offen, nach
+einem `rename` bliebe die neue Datei für immer leer. Grenzen wie in
+`supervisord.conf` (10 MB, drei Generationen).
+(k) **Trigger-API in-process, keine HTTP-Route.** `/admin/jobs` kommt mit M8
+und bringt seine Auth mit; eine ungeschützte Trigger-Route wäre ein Weg,
+das Array von außen wachzuhalten.
+Begründung: M2.5-Aufgabenblock in PROGRESS, Entscheide E10/E11/E14/E16, die
+v1-Hinweise zu SIGTERM-Frist und Aufrufpunkten.
+Alternativen: je Punkt oben genannt und verworfen.
+
 ## 2026-08-05: M2-Entscheide — Umbenennung, Übergangslesen, Release-Weg
 
 Entscheidung (Phase M2, Merge `1fc9f7f`; zwei sequenzielle Wellen —

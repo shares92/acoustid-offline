@@ -20,9 +20,13 @@ Stand: 2026-08-05 (v2-Stand nach M0/M1a/M1b/M2; DB-Spaltenschema aus Phase 0).
 > (DDL)** — v2 §8 bestätigt das Schema `acoustid`; Discogs/Covers kommen
 > mit M3–M5 als **neue** Abschnitte daneben, nie als Edit an §5.2.
 >
-> Noch **nicht gebaut** und deshalb hier als Plan zu lesen: Scheduler,
-> Notifications, Backup und Metrics (M2.5) sowie alles zu Discogs,
-> Covern, CAA und TheAudioDB (M3–M7) und die Admin-UI (M8).
+> **Vermerk 2026-08-05 (M2.5):** Scheduler, Notifications, Backup und
+> Metrics sind gebaut. Damit weckt sich die Instanz erstmals **selbst**
+> (§3, §8); die betroffenen Abschnitte tragen einen
+> „Umsetzung (M2.5)"-Absatz.
+>
+> Noch **nicht gebaut** und deshalb hier als Plan zu lesen: alles zu
+> Discogs, Covern, CAA und TheAudioDB (M3–M7) und die Admin-UI (M8).
 
 ---
 
@@ -84,7 +88,7 @@ spricht mit `supervisord` über dessen Unix-Socket (`/run/supervisor.sock`,
 
 **Jobs stehen bewusst nicht in der supervisord-Konfiguration** (E10):
 Importer, Crawler und Backup brauchen Per-Lauf-Argumente, die
-`[program:*]` nicht übergeben kann — sie laufen ab M2.5 als direkte
+`[program:*]` nicht übergeben kann — sie laufen seit M2.5 als direkte
 Subprozesse des Wächters (Argumente, Returncode und Report ohne Umweg).
 
 **Volumes** — die Aufteilung entscheidet, ob das Array je schläft:
@@ -95,7 +99,7 @@ Subprozesse des Wächters (Argumente, Returncode und Report ohne Umweg).
 | `/index` | **Cache** | acoustid-index (~70 GB einplanen; Kaltstart auf Spindeln = Timeout) |
 | `/data/db` | Array | PostgreSQL (`/data/db/<major>`, E14) |
 | `/import` | Array | Dump-Downloads und Staging |
-| `/backup` | Array | Sicherungen (Job ab M2.5) |
+| `/backup` | Array | Sicherungen (`backup.dir`; Restore: docs/backup-restore.md) |
 
 In v2 ist `/data` das **Array** — Wächter-Daten gehören nach `/config`
 (Risiko R1 der M0-Analyse). Das Docker-Image selbst gehört ebenfalls auf
@@ -114,8 +118,8 @@ herunterfahren. Der Wächter beantwortet `/status` und die Admin-UI
 ausschließlich aus `/config`. Eine eingehende API-Anfrage lässt ihn die
 Prozesse der Reihe nach starten — sequenzieller Start mit Readiness-Gates,
 die Datenbank hart über `pg_isready`; die Anfrage wird währenddessen
-gehalten (§7). Dass auch ein **fälliger Job** weckt, kommt mit dem
-Scheduler in M2.5.
+gehalten (§7). **Seit M2.5 weckt auch ein fälliger Job** — das ist der
+einzige Weg, auf dem die Instanz von selbst aufwacht.
 
 **Datenflüsse:**
 - Client → Wächter (Rate-Limit → Auth → Lookup-Cache) → API-Prozess →
@@ -123,7 +127,31 @@ Scheduler in M2.5.
   (Metadaten, read-only).
 - Scheduler (Wächter) → weckt die Prozesse → startet den Importer-Job als
   Subprozess → Deltas einspielen → Lookup-Cache invalidieren → wieder
-  schlafen legen (M2.5).
+  schlafen legen.
+
+**Umsetzung (M2.5).** Der Zeitplan liegt in
+`watchdog/app/scheduler.py` (zwei Termine aus §6: `acoustid.update.time`
+und — nur mit eingerichtetem `backup.dir` — `backup.time`), der Ablauf
+eines Laufs in `watchdog/app/jobs.py`:
+
+1. Lauf in `update_run` anlegen (blockiert den Idle-Stopp, §8.5),
+2. Plattenplatz je Schreibpfad prüfen (§8.8, E11),
+3. wecken — mit eigener, großzügiger Frist: dort wartet ein Job, keine
+   Anfrage,
+4. Job als Subprozess starten, Returncode und `--report` auswerten,
+5. nach einem erfolgreichen Delta-Import den Lookup-Cache invalidieren
+   (§8.6) und die Upstream-Warteschlange abarbeiten (§8.9) — als
+   **eigener** Lauf, damit ein gescheiterter Versand keinen erfolgreichen
+   Datenabgleich rot färbt,
+6. schlafen legen, **wenn** der Zyklus den Stack selbst geweckt hat und
+   während des Laufs keine `/v2/`-Anfrage kam (sonst übernimmt der
+   Idle-Stopp).
+
+Fällig heißt „seit dem heutigen Termin lief noch keiner": ein
+30-Sekunden-Takt trifft eine Minute nie sicher, und die Historie überlebt
+einen Neustart. Verpasste Termine werden am selben Tag nachgeholt.
+Genau **ein** Job läuft gleichzeitig; derselbe Weg trägt die interne
+Trigger-API für manuelle Läufe (Grundlage von `/admin/jobs`, M8).
 - Admin-UI läuft vollständig im Wächter; Aktionen, die die Datenbank
   brauchen, zeigen den Schlafzustand und bieten einen Weck-Button.
 
@@ -546,7 +574,7 @@ Details: [docs/research/phase1-mb-schema.md](docs/research/phase1-mb-schema.md).
 |---|---|
 | `api_key` | Key (Hash), Label, aktiv, erstellt, zuletzt benutzt |
 | `admin_user` | Login, Passwort-Hash (argon2) |
-| `update_run` | Historie der Import-/Backup-Läufe: Start, Ende, eingespielte Dateien, Zeilen, Ergebnis, Fehlermeldung |
+| `update_run` | Historie der Job-Läufe: Art, Start, Ende, eingespielte Dateien, Zeilen, Ergebnis, Fehlermeldung. Seit M2.5 kennt `kind` die sechs Arten aus E10 (`acoustid-delta`, `discogs-dump`, `caa-crawl`, `nachzuegler`, `backup`, `queue-send`); aus `update` wurde `acoustid-delta` |
 | `event_log` | Ereignisse (Start/Stopp, Wecken, Fehler, Notifications) mit Level und Zeitstempel, ringpuffer-artig begrenzt |
 | Lookup-Cache | **Eigene SQLite-Datei** `lookup-cache.sqlite3` neben der Zustandsdatenbank (Phase 17, nicht in dieser Datenbank — Massenschreibvorgänge); Schlüssel = SHA-256 über Pfad und alle Anfrageparameter außer `client`/`clientversion`, Wert = die rohe Antwort (Status, Kopfzeilen ohne `date`/`content-length`, Rumpf); Verdrängung nach LRU bis 90 % von `cache.max_size_mb`; invalidiert nach Delta-Import und nach lokaler Submission |
 
@@ -601,7 +629,7 @@ Risiko R7 der M0-Analyse. Dieselbe Regel gilt für den Env-Prefix
 | `acoustid.submit.upstream_app_key` | leer | Application-Key für api.acoustid.org (Secret) |
 | `acoustid.update.time` | `04:00` | Täglicher Delta-Import (lokale Zeit) |
 | `acoustid.index.query_hashes` | `120` | Query-Hashes je Fingerprint im Suchindex; RAM-abhängig pro Host einstellbar (z. B. 80 bei wenig RAM). Änderung erfordert Index-Neuaufbau; Empfehlungstabelle entsteht aus dem Probelauf |
-| `disk.min_free_gb` | `100` | Mindest-Plattenreserve vor jedem Import-/Crawl-Segment (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab). **Ein** Grenzwert, aber zu prüfen gegen **jeden** Schreib-/Staging-Pfad: die Mounts aus §3 sind mehrere Dateisysteme, und ein freies `/import` sagt nichts über `/data/db` (E11). Gemessen wird bislang nur das Dump-Verzeichnis; die Ausweitung kommt mit M2.5 |
+| `disk.min_free_gb` | `100` | Mindest-Plattenreserve vor jedem Import-/Crawl-Segment (gelesen als GiB — strengere Lesart; `0` schaltet den Guard ab). **Ein** Grenzwert, aber geprüft gegen **jeden** Schreib-/Staging-Pfad: die Mounts aus §3 sind mehrere Dateisysteme, und ein freies `/import` sagt nichts über `/data/db` (E11). Seit M2.5 prüft der Wächter vor jedem Job `/import`, `/data/db`, `/config` und `backup.dir` (je Dateisystem einmal); der Importer misst zusätzlich laufend sein Dump-Verzeichnis |
 | `wake.hold_timeout_s` | `90` | Max. Haltezeit einer Anfrage beim Wecken |
 | `idle.timeout_min` | `15` | Auto-Stopp nach Inaktivität |
 | `cache.enabled` | `true` | Lookup-Cache an/aus |
@@ -630,6 +658,30 @@ Trägerwerte — alle so vorbelegt, dass die Quelle **aus** ist (v2 §2
 | `caa.crawl.enabled` | `false` | Voll-Spiegel-Crawler des Cover Art Archive (M5). Default aus: ein Erst-Crawl läuft Wochen und hält das Array so lange wach — das ist eine Betreiber-Entscheidung, keine Repo-Vorgabe |
 | `caa.crawl.rate_per_s` | `2` | Crawler-Drossel; gilt auch für Lazy-Abrufe derselben Queue |
 | `covers.negative_retry_days` | `30` | Wiederholung, wenn keine der drei Quellen ein Cover hatte (M4) |
+
+**Umsetzung (M2.5).** `notify.*`, `backup.*` und `metrics.enabled` werden
+seit M2.5 wirklich ausgewertet:
+
+- **`notify.*`** (`watchdog/app/notify.py`): zwei Kanäle, beide per Default
+  aus. `notify.ntfy.url` ist ein `POST` mit dem Meldungstext als Rumpf und
+  Titel/Dringlichkeit in Kopfzeilen — das ntfy-Protokoll, und für einen
+  beliebigen Webhook bleibt es ein POST mit lesbarem Text. `notify.smtp.*`
+  nutzt STARTTLS (implizites TLS auf Port 465), Anmeldung nur mit
+  gesetztem Benutzer. Fünf Anlässe: Import fehlgeschlagen, Plattenplatz
+  knapp, Stack-Start-Fehler, `upstream_forward_gave_up`, Versions-Drift
+  (E14) — dazu eine Testnachricht je Kanal. Ein Zustellfehler ist eine
+  Warnung im Ereignis-Log und bricht nie einen Lauf ab.
+- **`backup.*`** (`importer/app/backup.py`, K9): `backup.time` löst einen
+  Job aus, der `local_submission`, die Wächter-SQLite und die
+  `config.yaml` nach `backup.dir` sichert — **ohne** den Lookup-Cache.
+  `backup.include_covers` steht im Schema, hat aber bis M4 keine Wirkung.
+  Wiederherstellung: [docs/backup-restore.md](docs/backup-restore.md).
+- **`metrics.enabled`**: siehe `GET /metrics` in §7.
+
+Die Termine werden bei **jeder** Fälligkeitsprüfung frisch gelesen, die
+Benachrichtigungskanäle bei jedem Versand — eine Änderung über die
+Admin-UI wirkt ohne Neustart (dasselbe Muster wie im Proxy und im
+Idle-Stopp).
 
 **Secrets** (`acoustid.submit.upstream_app_key`, `notify.smtp.pass`,
 `mb.dsn`, `discogs.token`, `tadb.api_key`) sind `SecretStr`: in `repr()`,
@@ -733,7 +785,13 @@ durchreichen (Zweckbindung); hart ≤ 3 req/s drosseln; kein
   MusicBrainz (§8.7); erreichbar nur containerintern (der Dienst hat
   keinen veröffentlichten Port, und der Proxy reicht nur `/v2/*`
   weiter — der Pfad wird zusätzlich abgewiesen).
-- **`GET /metrics`** — Prometheus-Format, nur wenn `metrics.enabled`.
+- **`GET /metrics`** — Prometheus-Format, nur wenn `metrics.enabled`
+  (Umsetzung M2.5, `watchdog/app/metrics.py`): Lookups, Cache-Quote,
+  Weckvorgänge, Prozess-Zustand, Läufe und Laufdauern je Art. Wie
+  `/status` **offen und weckfrei** — der Prozess-Zustand kommt aus der
+  Momentaufnahme des Zustandsabgleichs, nicht aus einer eigenen Abfrage
+  an supervisord. Abgeschaltet antwortet der Pfad mit **404**, nicht 403:
+  der Wächter gibt nicht preis, dass es den Endpunkt gibt.
 - **`/admin/...`** — Admin-UI (server-rendered), Passwort-geschützt.
 
 ### Umsetzungsstand
@@ -753,6 +811,12 @@ Phase 13 stehen `POST /v2/lookup/batch` (`api/app/batch.py`) und
 `new` ⇒ `"pending"`, ab `indexed` ⇒ `"imported"` mit `result.id` =
 lokale AcoustID). **Der API-Block (Phasen 9–13) ist damit
 vollständig.**
+
+Seit M2.5 kommt `GET /metrics` dazu (`watchdog/app/metrics.py`, nur bei
+`metrics.enabled`), und der API-Dienst bekommt einen zweiten Job an die
+Seite: `python -m acoustid_api.queuejob` arbeitet die Upstream-Warte-
+schlange als eigener Prozess ab (E10 — der Wächter darf sie anstoßen,
+aber nicht selbst ausführen: er hält keine Verbindung zum Array).
 
 ### Lookup-Cache (Phase 17)
 Der Wächter beantwortet ein wiederholtes `GET`/`POST /v2/lookup` aus seiner
@@ -845,19 +909,37 @@ Format-Schicht.
    erreichbar, liefert Lookup AcoustID-UUIDs + MBIDs ohne Metadaten
    (kein Fehler); Ereignis wird geloggt.
 8. **Plattenplatz-Guard.** Vor jedem Import-/Crawl-Segment: freier Platz ≥
-   `disk.min_free_gb`, sonst Abbruch + Notification. Zu prüfen ist
-   **jeder** Schreib-/Staging-Pfad, nicht nur einer (E11) — gebaut ist
-   bisher die Prüfung des Dump-Verzeichnisses, die Ausweitung kommt mit
-   M2.5.
+   `disk.min_free_gb`, sonst Abbruch + Notification. Geprüft wird
+   **jeder** Schreib-/Staging-Pfad, nicht nur einer (E11): der Wächter
+   misst vor jedem Job `/import`, `/data/db`, `/config` und `backup.dir`
+   (je Dateisystem einmal, `watchdog/app/diskspace.py`), der Importer
+   zusätzlich laufend sein Dump-Verzeichnis. Eine Unterschreitung bricht
+   den Lauf ab, **bevor** die Prozesse geweckt werden — er steht dann als
+   `aborted` in der Historie.
 9. **Upstream-Queue.** Fehlgeschlagene Upstream-Submits bleiben in
    `local_submission` (`forward_failed`) und werden beim nächsten
    Update-Lauf erneut versucht; nach 7 Fehlversuchen Notification und
-   manueller Retry über die Admin-UI.
+   manueller Retry über die Admin-UI. Seit M2.5 läuft dafür direkt nach
+   dem Delta-Import der Job `queue-send` (`api/app/queuejob.py`) — als
+   eigener Eintrag in der Historie, im selben wachen Fenster.
 10. **Secrets nie im Repo.** Alle Zugänge über `.env`/`config.yaml`;
     `.env.example` dokumentiert alles.
 11. **Ein Release = ein Image = ein Tag.** Seit dem Ein-Container-Umbau
     gibt es genau ein Artefakt; `release.yml` baut es aus einem
     SemVer-Tag und schiebt es nach GHCR.
+12. **Submits während des Update-Laufs werden zurückgestellt** (Entscheid
+    2026-08-05, M2.5). Sie werden angenommen und gespeichert (Status
+    `new`), aber erst **nach** dem Lauf indexiert: eine Indexierung
+    dazwischen erhöhte die Index-Version, und der Feed des Importers
+    bräche an seinem `expected_version`-Guard ab — ein ganzer Tag
+    Datenstand für eine Einreichung, die eine Minute später genauso
+    sichtbar wird. Die Antwort bleibt `pending`, also unverändert.
+    Umgesetzt über eine Marke auf `/config` (`index-feed.busy`);
+    nachgetragen wird im `queue-send`-Job, unabhängig vom Submit-Modus.
+13. **Genau ein Job gleichzeitig.** Zwei Importer nebeneinander kämen sich
+    in `import_state` ins Gehege, zwei Sicherungen schrieben in dasselbe
+    Verzeichnis. Der Job-Manager des Wächters lehnt den zweiten ab; der
+    nächste Takt des Zeitplans fragt wieder.
 
 ## 9. Admin-UI (Referenz: docs/DESIGN_HANDOFF.md)
 
@@ -907,6 +989,7 @@ musicmeta-offline/
 │   ├── HANDOFF.md                # Gesamtspezifikation v2 (Quelle dieser Datei)
 │   ├── DESIGN_HANDOFF.md         # UI-Spezifikation (noch v1; v2 kommt zu M8)
 │   ├── migration-v1-v2.md        # Volume-Migration aus dem v1-Stack
+│   ├── backup-restore.md         # Was gesichert wird und wie man es zurückspielt (K9)
 │   └── ...                       # api-lookup/api-submit, importer-job, probelauf-unraid,
 │                                 #   design/, research/, archive/
 ├── tests/                        # paketübergreifende Tests, Fixtures, pg_acoustid
